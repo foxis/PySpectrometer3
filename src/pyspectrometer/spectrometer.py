@@ -136,7 +136,8 @@ class Spectrometer:
         self._last_frame: Optional[np.ndarray] = None
         self._frozen_spectrum: bool = False
         self._frozen_intensity: Optional[np.ndarray] = None  # Stored frozen spectrum
-        
+        self._autolevel_overlay: Optional[np.ndarray] = None  # Non-blocking autolevel display
+
         # Auto-gain/exposure state
         self._auto_gain_enabled: bool = False
         self._auto_exposure_enabled: bool = False
@@ -722,46 +723,36 @@ class Spectrometer:
         print(f"Extraction Method: {new_method}")
     
     def _on_auto_detect_angle(self) -> None:
-        """Handle auto-detect rotation angle and Y center."""
+        """Handle auto-detect rotation angle and Y center (non-blocking overlay)."""
+        if self._autolevel_overlay is not None:
+            self._autolevel_overlay = None
+            self._display.set_autolevel_overlay(None)
+            self._display.set_autolevel_click_dismiss(None)
+            print("[AutoLevel] Overlay dismissed")
+            return
+
         if self._last_frame is None:
             print("[AutoLevel] No frame available for angle detection")
             return
-        
+
         print("[AutoLevel] Detecting spectrum rotation angle and position...")
-        print(f"[AutoLevel] Frame shape: {self._last_frame.shape}, dtype: {self._last_frame.dtype}")
-        
-        old_angle = self._extractor.rotation_angle
-        old_y = self._extractor.spectrum_y_center
-        
-        print("[AutoLevel] Calling detect_angle...")
         angle, y_center, vis_image = self._extractor.detect_angle(self._last_frame, visualize=True)
-        print("[AutoLevel] detect_angle returned")
-        
-        if vis_image is not None:
-            print(f"[AutoLevel] vis_image shape={vis_image.shape}, dtype={vis_image.dtype}")
-            print("[AutoLevel] Calling cv2.imshow...")
-            cv2.imshow("Angle Detection", vis_image)
-            print("[AutoLevel] cv2.imshow done, entering waitKey loop...")
-            for i in range(20):
-                key = cv2.waitKey(50)
-                if key != -1:
-                    print(f"[AutoLevel] Key {key} pressed, exiting wait loop at iter {i}")
-                    break
-            else:
-                print("[AutoLevel] Wait loop completed (1s timeout)")
-            print("[AutoLevel] Destroying window...")
-            try:
-                cv2.destroyWindow("Angle Detection")
-                print("[AutoLevel] Window destroyed")
-            except cv2.error as e:
-                print(f"[AutoLevel] destroyWindow error: {e}")
-        
-        print("[AutoLevel] Applying results...")
+
         self._extractor.set_rotation_angle(angle)
         self._extractor.set_spectrum_y_center(y_center)
-        
-        print(f"[AutoLevel] Rotation: {old_angle:.2f}° -> {angle:.2f}°")
-        print(f"[AutoLevel] Y Center: {old_y} -> {y_center}")
+        print(f"[AutoLevel] Rotation: {angle:.2f}°  Y Center: {y_center}")
+
+        if vis_image is not None:
+            self._autolevel_overlay = vis_image
+            self._display.set_autolevel_overlay(vis_image)
+            self._display.set_autolevel_click_dismiss(self._clear_autolevel_overlay)
+            print("[AutoLevel] Click or press 'a' to close overlay")
+
+    def _clear_autolevel_overlay(self) -> None:
+        """Clear autolevel overlay (called on click or key)."""
+        self._autolevel_overlay = None
+        self._display.set_autolevel_overlay(None)
+        self._display.set_autolevel_click_dismiss(None)
     
     def _on_perp_width_up(self) -> None:
         """Handle perpendicular width increase."""

@@ -363,8 +363,10 @@ class SpectrumExtractor:
         # Compute gradient magnitude
         magnitude = np.sqrt(grad_x**2 + grad_y**2)
         
-        # Threshold to keep only strong gradients
-        mag_thresh = np.percentile(magnitude, 90)
+        # Threshold: split at midpoint between min and max (avoids noise sensitivity)
+        mag_min = float(magnitude.min())
+        mag_max = float(magnitude.max())
+        mag_thresh = (mag_min + mag_max) / 2.0 if mag_max > mag_min else mag_max
         strong_mask = magnitude > mag_thresh
         
         # Get coordinates of strong gradient points
@@ -450,49 +452,90 @@ class SpectrumExtractor:
         vis_image = None
         if visualize:
             print("[AutoLevel] Building visualization...")
-            # Show the ROTATED frame so user can see the corrected result
+            # Left panel: thresholded gradient (strong_mask as grayscale BGR)
+            thresh_display = (strong_mask.astype(np.uint8) * 255)
+            thresh_bgr = cv2.cvtColor(thresh_display, cv2.COLOR_GRAY2BGR)
+            cv2.putText(thresh_bgr, "Thresholded", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+            # Find contours and fit ellipses (on original frame coords, before rotation)
+            thresh_u8 = strong_mask.astype(np.uint8) * 255
+            contours, _ = cv2.findContours(thresh_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            ellipses: list[tuple] = []
+            min_pts = 5
+            min_axis = 5
+            for cnt in contours:
+                if len(cnt) >= min_pts:
+                    try:
+                        el = cv2.fitEllipse(cnt)
+                        if el[1][0] >= min_axis and el[1][1] >= min_axis:
+                            ellipses.append(el)
+                    except cv2.error:
+                        pass
+
+            # Right panel: rotated frame with ellipses + crop box
             rotated_frame = cv2.warpAffine(
                 frame, rotation_matrix, (width, height),
                 flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
             )
-            print(f"[AutoLevel] rotated_frame shape={rotated_frame.shape}, dtype={rotated_frame.dtype}")
-            vis_image = rotated_frame.copy()
-            # cv2.imshow expects uint8; uint16 shows as black. Convert if needed.
-            if vis_image.dtype == np.uint16:
-                max_val = max(vis_image.max(), 1)
-                vis_image = (vis_image.astype(np.float32) * 255 / max_val).astype(np.uint8)
-                if vis_image.ndim == 2:
-                    vis_image = cv2.cvtColor(vis_image, cv2.COLOR_GRAY2BGR)
-                print(f"[AutoLevel] vis_image converted to uint8, shape={vis_image.shape}")
-            
-            # Draw horizontal line at optimal Y center (cyan)
-            cv2.line(vis_image, (0, optimal_y_center), (width, optimal_y_center), (255, 255, 0), 2)
-            
-            # Draw sampling region bounds (yellow)
+            vis_orig = rotated_frame.copy()
+            if vis_orig.dtype == np.uint16:
+                max_val = max(vis_orig.max(), 1)
+                vis_orig = (vis_orig.astype(np.float32) * 255 / max_val).astype(np.uint8)
+            if vis_orig.ndim == 2:
+                vis_orig = cv2.cvtColor(vis_orig, cv2.COLOR_GRAY2BGR)
+
+            # Transform ellipses to rotated frame coords (rotate each center)
+            cos_a = np.cos(np.radians(detected_angle))
+            sin_a = np.sin(np.radians(detected_angle))
+            cx_rot, cy_rot = width / 2, height / 2
+            for el in ellipses:
+                cx_el, cy_el = el[0]
+                dx, dy = cx_el - cx_rot, cy_el - cy_rot
+                x_new = cx_rot + dx * cos_a + dy * sin_a
+                y_new = cy_rot - dx * sin_a + dy * cos_a
+                el_rot = ((x_new, y_new), el[1], el[2] - detected_angle)
+                try:
+                    cv2.ellipse(vis_orig, el_rot, (0, 255, 0), 1)
+                except cv2.error:
+                    pass
+
+            # Draw crop box (rectangle around spectrum region)
             half_perp = self.perpendicular_width // 2
-            y_top = max(0, optimal_y_center - half_perp)
-            y_bottom = min(height - 1, optimal_y_center + half_perp)
-            cv2.line(vis_image, (0, y_top), (width, y_top), (0, 255, 255), 1)
-            cv2.line(vis_image, (0, y_bottom), (width, y_bottom), (0, 255, 255), 1)
-            
+            half_crop = self.crop_height // 2
+            y_top = max(0, optimal_y_center - half_crop)
+            y_bottom = min(height - 1, optimal_y_center + half_crop)
+            cv2.rectangle(vis_orig, (0, y_top), (width, y_bottom), (0, 255, 255), 2)
+            cv2.line(vis_orig, (0, optimal_y_center), (width, optimal_y_center), (255, 255, 0), 2)
+
             cv2.putText(
-                vis_image,
-                f"Angle: {detected_angle:.2f} deg",
-                (10, 30),
+                vis_orig,
+                "Original + ellipses + crop",
+                (10, 25),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
+                0.7,
                 (0, 255, 255),
                 2,
             )
             cv2.putText(
-                vis_image,
-                f"Y Center: {optimal_y_center}",
-                (10, 60),
+                vis_orig,
+                f"Angle: {detected_angle:.2f} deg  Y: {optimal_y_center}",
+                (10, 55),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
+                0.7,
                 (0, 255, 255),
                 2,
             )
+            cv2.putText(
+                vis_orig,
+                "Click or press key to close",
+                (10, height - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (200, 200, 200),
+                2,
+            )
+
+            vis_image = np.hstack([thresh_bgr, vis_orig])
             print("[AutoLevel] Visualization complete, returning")
         
         return detected_angle, optimal_y_center, vis_image

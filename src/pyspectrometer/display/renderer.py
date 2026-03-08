@@ -103,7 +103,10 @@ class DisplayManager:
         
         # Mode overlay (intensity array, color)
         self._mode_overlay: Optional[tuple[np.ndarray, tuple[int, int, int]]] = None
-        
+        # Autolevel non-blocking overlay
+        self._autolevel_overlay: Optional[np.ndarray] = None
+        self._on_autolevel_click: Optional[Callable[[], None]] = None
+
         self._font = cv2.FONT_HERSHEY_SIMPLEX
         self._windows_created = False
         
@@ -167,13 +170,21 @@ class DisplayManager:
     
     def set_preview_mode(self, mode: str) -> None:
         """Set preview display mode.
-        
+
         Args:
             mode: One of "window", "full", "none"
         """
         if mode in ("window", "full", "none"):
             self._preview_mode = mode
-    
+
+    def set_autolevel_overlay(self, img: Optional[np.ndarray]) -> None:
+        """Set autolevel overlay image (None to clear). Non-blocking."""
+        self._autolevel_overlay = img
+
+    def set_autolevel_click_dismiss(self, callback: Optional[Callable[[], None]]) -> None:
+        """Set callback for click-to-dismiss on autolevel overlay."""
+        self._on_autolevel_click = callback
+
     def _handle_mouse(self, event: int, x: int, y: int, flags: int, param) -> None:
         """Handle mouse events on the spectrum window."""
         control_bar_height = self.config.display.message_height
@@ -193,9 +204,11 @@ class DisplayManager:
         
         elif event == cv2.EVENT_LBUTTONDOWN:
             self._mouse_down = True
-            
+
             if y < control_bar_height:
                 self._control_bar.handle_click(x, y)
+            elif self._on_autolevel_click is not None:
+                self._on_autolevel_click()
             elif self._slider_panel.handle_mouse_down(x, y):
                 pass  # Slider handled it
             else:
@@ -333,7 +346,16 @@ class DisplayManager:
                 # Default to windowed - no lines, just clean preview
                 self._draw_status_overlay(cropped, status_text)
                 spectrum_vertical = np.vstack((messages, cropped, graph))
-        
+
+        # Non-blocking autolevel overlay (replaces content below control bar)
+        if self._autolevel_overlay is not None:
+            content_height = preview_height + graph_height
+            img = self._autolevel_overlay
+            if img.shape[1] != width or img.shape[0] != content_height:
+                img = cv2.resize(img, (width, content_height))
+            self._draw_status_bar(img, status_text + "  [Click or 'a' to close]")
+            spectrum_vertical = np.vstack((messages, img))
+
         # Show the composed image
         cv2.imshow(self.config.spectrograph_title, spectrum_vertical)
         
