@@ -831,9 +831,6 @@ class Spectrometer:
                     else:
                         self._held_intensity = np.maximum(self._held_intensity, intensity)
                     intensity = self._held_intensity
-                    self._savgol_filter.enabled = False
-                else:
-                    self._savgol_filter.enabled = True
                 
                 # Mode-specific spectrum processing (skip if frozen)
                 if self._calibration_mode is not None and not self._frozen_spectrum:
