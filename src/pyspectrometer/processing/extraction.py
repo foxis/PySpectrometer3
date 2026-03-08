@@ -211,14 +211,16 @@ class SpectrumExtractor:
         # Compute background per column
         bg = np.percentile(roi, self.background_percentile, axis=0)
         roi_bg = np.maximum(roi - bg, 0)
-        
-        # Weighted sum per column
         total = np.sum(roi_bg, axis=0)
-        total = np.maximum(total, 1e-6)  # Avoid division by zero
-        weights = roi_bg / total
-        intensity = np.sum(roi * weights, axis=0)
-        
-        # Return as float32, preserving original range
+
+        # Saturated flat-top: when all pixels ≈ max, roi_bg ≈ 0, total ≈ 0.
+        # weights would be 0 → intensity = 0. Fallback to max(roi) for those columns.
+        total_safe = np.maximum(total, 1e-6)
+        weights = roi_bg / total_safe
+        intensity_weighted = np.sum(roi * weights, axis=0)
+        intensity_fallback = np.max(roi, axis=0).astype(np.float64)
+        intensity = np.where(total > 1e-6, intensity_weighted, intensity_fallback)
+
         return intensity.astype(np.float32)
     
     def _extract_gaussian(self, gray: np.ndarray) -> np.ndarray:
