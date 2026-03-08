@@ -614,8 +614,9 @@ class DisplayManager:
         # OpenCV: positive angle = CCW rotation of image. So -angle = CW rotation.
         #
         # Forward: original -> straightened. Image is rotated CW by angle.
-        # Inverse: straightened coords -> original. Rotate points CW by angle.
-        # Clockwise rotation: x' = x*cos(θ)+y*sin(θ), y' = -x*sin(θ)+y*cos(θ)
+        # Inverse: straightened coords -> original. Rotate points CCW by angle.
+        # (CW placed box below spectrum; CCW centers it.)
+        # Counter-clockwise: x' = x*cos(θ)-y*sin(θ), y' = x*sin(θ)+y*cos(θ)
         center = (original_width / 2, original_height / 2)
         angle_rad = np.radians(rotation_angle)
         cos_a = np.cos(angle_rad)
@@ -625,9 +626,9 @@ class DisplayManager:
         for x, y in corners_rotated:
             x_c = x - center[0]
             y_c = y - center[1]
-            # Clockwise rotation (inverse of extraction's CW image rotation)
-            x_r = x_c * cos_a + y_c * sin_a
-            y_r = -x_c * sin_a + y_c * cos_a
+            # Counter-clockwise rotation
+            x_r = x_c * cos_a - y_c * sin_a
+            y_r = x_c * sin_a + y_c * cos_a
             x_orig = x_r + center[0]
             y_orig = y_r + center[1]
             corners_original.append([x_orig, y_orig])
@@ -651,8 +652,8 @@ class DisplayManager:
         for x, y in center_line_rot:
             x_c = x - center[0]
             y_c = y - center[1]
-            x_r = x_c * cos_a + y_c * sin_a
-            y_r = -x_c * sin_a + y_c * cos_a
+            x_r = x_c * cos_a - y_c * sin_a
+            y_r = x_c * sin_a + y_c * cos_a
             x_orig = x_r + center[0]
             y_orig = y_r + center[1]
             center_line_orig.append([int(x_orig * scale_x), int(y_orig * scale_y)])

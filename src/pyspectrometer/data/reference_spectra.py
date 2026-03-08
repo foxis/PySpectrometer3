@@ -1,7 +1,7 @@
 """Reference spectra for calibration.
 
 Contains spectral line data for common calibration sources:
-- FL: Compact Fluorescent Lamp (CFL) - Mercury + rare earth phosphors
+- FL: CIE fluorescent illuminant (from CIE_illum_FLs_1nm.csv)
 - Hg: Low-pressure Mercury lamp
 - Sun: Solar spectrum (Fraunhofer absorption lines)
 - LED: Typical white phosphor-converted LED
@@ -9,8 +9,12 @@ Contains spectral line data for common calibration sources:
 
 from dataclasses import dataclass
 from enum import Enum, auto
+from pathlib import Path
 from typing import Optional
 import numpy as np
+
+# Data directory for CIE CSV files
+_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 
 
 class ReferenceSource(Enum):
@@ -97,6 +101,51 @@ LED_LINES = [
     # Additional markers for high-CRI LEDs with red phosphor
     SpectralLine(630.0, 0.4, "Red"),    # Optional red phosphor
 ]
+
+
+def _load_cie_fluorescent_spectrum() -> Optional[tuple[np.ndarray, np.ndarray]]:
+    """Load CIE fluorescent illuminant from CIE_illum_FLs_1nm.csv.
+    
+    Uses FL1 (column 1) - CIE Standard Illuminant FL1, Daylight fluorescent.
+    
+    Returns:
+        (wavelengths, intensity) or None if file not found
+    """
+    path = _DATA_DIR / "CIE_illum_FLs_1nm.csv"
+    if not path.exists():
+        return None
+    
+    try:
+        wavelengths: list[float] = []
+        intensity: list[float] = []
+        
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split(",")
+                if len(parts) >= 2:
+                    try:
+                        wl = float(parts[0])
+                        # FL1 = column index 1 (column 0 is wavelength)
+                        inten = float(parts[1])
+                        wavelengths.append(wl)
+                        intensity.append(inten)
+                    except ValueError:
+                        continue
+        
+        if not wavelengths:
+            return None
+        
+        wl_arr = np.array(wavelengths, dtype=np.float64)
+        int_arr = np.array(intensity, dtype=np.float64)
+        # Normalize to 0-1
+        if int_arr.max() > 0:
+            int_arr = int_arr / int_arr.max()
+        return (wl_arr, int_arr)
+    except Exception:
+        return None
 
 
 def _generate_gaussian_spectrum(
@@ -201,7 +250,7 @@ REFERENCE_SPECTRA: dict[ReferenceSource, ReferenceSpectrum] = {
         name="Fluorescent (FL)",
         source=ReferenceSource.FL,
         peaks=FL_LINES,
-        description="Compact fluorescent lamp (CFL) with Hg + phosphors",
+        description="CIE fluorescent illuminant FL1 from CIE_illum_FLs_1nm.csv",
     ),
     ReferenceSource.SUN: ReferenceSpectrum(
         name="Solar (Sun)",
@@ -236,12 +285,29 @@ def get_reference_spectrum(
         return np.zeros_like(wavelengths)
     
     match source:
+        case ReferenceSource.FL:
+            # Use CIE fluorescent illuminant from CIE_illum_FLs_1nm.csv
+            cie = _load_cie_fluorescent_spectrum()
+            if cie is not None:
+                wl_ref, int_ref = cie
+                interpolated = np.interp(
+                    wavelengths,
+                    wl_ref,
+                    int_ref,
+                    left=0.0,
+                    right=0.0,
+                )
+                if interpolated.max() > 0:
+                    interpolated = interpolated / interpolated.max()
+                return interpolated
+            # Fallback to synthetic if CSV not found
+            return _generate_gaussian_spectrum(wavelengths, ref.peaks, 12.0)
         case ReferenceSource.LED:
             return _generate_led_spectrum(wavelengths)
         case ReferenceSource.SUN:
             return _generate_solar_spectrum(wavelengths)
         case _:
-            # Use Gaussian peaks for line spectra
+            # Use Gaussian peaks for line spectra (Hg)
             fwhm = 8.0 if source == ReferenceSource.HG else 12.0
             return _generate_gaussian_spectrum(wavelengths, ref.peaks, fwhm)
 
