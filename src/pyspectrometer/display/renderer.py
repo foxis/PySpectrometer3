@@ -119,7 +119,13 @@ class DisplayManager:
         
         # Track mouse button state for slider dragging
         self._mouse_down = False
-    
+
+    def set_intensity_bit_depth(self, bit_depth: int) -> None:
+        """Set actual bit depth from camera for correct Y-axis scaling.
+        Call after camera.start() when using 10-bit or 16-bit capture.
+        """
+        self._intensity_bit_depth = bit_depth
+
     def setup_windows(self) -> None:
         """Create and configure OpenCV windows.
         
