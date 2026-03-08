@@ -9,8 +9,8 @@ from .base import ExporterInterface
 
 class CSVExporter(ExporterInterface):
     """Exports spectrum data to CSV format.
-    
-    The CSV file contains two columns: Wavelength (nm) and Intensity (float32 0-1).
+
+    The CSV file contains: Pixel (index), Wavelength (nm), Intensity (float32 0-1).
     """
     
     def __init__(
@@ -64,9 +64,9 @@ class CSVExporter(ExporterInterface):
         path.parent.mkdir(parents=True, exist_ok=True)
         
         with open(path, "w") as f:
-            f.write("Wavelength,Intensity\r\n")
-            for wavelength, intensity in data.to_csv_rows():
-                f.write(f"{wavelength},{intensity}\r\n")
+            f.write("Pixel,Wavelength,Intensity\r\n")
+            for pixel_idx, (wavelength, intensity) in enumerate(data.to_csv_rows()):
+                f.write(f"{pixel_idx},{wavelength},{intensity}\r\n")
         
         return path
     

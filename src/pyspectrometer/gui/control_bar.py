@@ -78,7 +78,6 @@ MEASUREMENT_BUTTONS = [
     ButtonDef("Save", "save", shortcut="s", row=2),
     ButtonDef("Load", "load", row=2),
     ButtonDef("__spacer__", "__spacer_right__", row=2),
-    ButtonDef("Quit", "quit", shortcut="q", row=2),
 ]
 
 # Default buttons (legacy, for non-mode operation)
@@ -91,7 +90,9 @@ CALIBRATION_BUTTONS = [
     ButtonDef("FL", "source_fl", row=1),
     ButtonDef("Hg", "source_hg", row=1),
     ButtonDef("D65", "source_d65", row=1),
-    ButtonDef("LED", "source_led", row=1),
+    ButtonDef("LED1", "source_led", row=1),
+    ButtonDef("LED2", "source_led2", row=1),
+    ButtonDef("LED3", "source_led3", row=1),
     ButtonDef("FL2", "source_fl2", row=1),
     ButtonDef("FL3", "source_fl3", row=1),
     ButtonDef("FL4", "source_fl4", row=1),
@@ -115,9 +116,9 @@ CALIBRATION_BUTTONS = [
     ButtonDef("Prev", "cycle_preview", shortcut="v", row=2),
     ButtonDef("Clear", "clear_points", shortcut="x", row=2),
     ButtonDef("Save", "save_cal", shortcut="w", row=2),
+    ButtonDef("CSV", "save_spectrum", shortcut="s", row=2),
     ButtonDef("Load", "load_cal", row=2),
     ButtonDef("__spacer__", "__spacer_right__", row=2),
-    ButtonDef("Quit", "quit", shortcut="q", row=2),
 ]
 
 

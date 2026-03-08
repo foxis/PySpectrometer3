@@ -247,11 +247,12 @@ class PeakDetector(ProcessorInterface):
 
         if _SCIPY_AVAILABLE:
             # scipy find_peaks: better for sharp Hg/emission lines (1-5 px wide)
+            # prominence=0.01 to catch weaker lines (404, 577, 579 nm ~0.5 rel intensity)
             indexes = find_peak_indexes_scipy(
                 intensity,
                 threshold=threshold_normalized,
                 min_dist=self._min_distance,
-                prominence=0.02,  # low = catch weak sharp peaks; filters noise
+                prominence=0.01,
             )
         else:
             indexes = find_peak_indexes(

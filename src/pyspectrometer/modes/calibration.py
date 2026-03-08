@@ -206,6 +206,9 @@ class CalibrationMode(BaseMode):
     ) -> list[tuple[int, float]]:
         """Perform automatic calibration. Tries peak matching first, falls back to correlation.
 
+        Hg reference has 5 lines (404, 436, 546, 577, 579 nm). FL has 9. Need 4+ measured
+        peaks for reliable alignment; 3 peaks can give ambiguous mapping.
+
         Peak matching (ordered): Match detected peaks to reference peaks by order
         (leftmost measured → leftmost reference). Robust when spectrum shape differs
         slightly (e.g. different LED CCT, different fluorescent phosphor mix) but
@@ -223,11 +226,17 @@ class CalibrationMode(BaseMode):
         Returns:
             List of (pixel, wavelength) calibration points for recalibrate
         """
+        ref_peaks = get_reference_peaks(self.cal_state.current_source)
+        if len(ref_peaks) < 3:
+            print(f"[Calibration] Reference '{get_reference_name(self.cal_state.current_source)}' "
+                  f"has {len(ref_peaks)} peaks; use Hg or FL for auto-calibration")
+            return []
+
         # Try peak-based ordered matching first (robust for slightly different spectra)
         result = self._auto_calibrate_peak_ordered(peak_indices)
         if result:
             return result
-        # Fall back to correlation
+        # Fall back to correlation (only for sources with continuous spectrum)
         return self._auto_calibrate_correlation(measured_intensity)
 
     def _auto_calibrate_peak_ordered(
@@ -257,9 +266,28 @@ class CalibrationMode(BaseMode):
         n_use = min(n_ref, n_meas)
         best_points: list[tuple[int, float]] = []
         best_r2 = -1.0
+        best_dispersion_score = -1.0
+
+        # Typical spectrometer dispersion: 0.25–0.45 nm/px
+        DISPERSION_LO, DISPERSION_HI = 0.2, 0.5
+
+        def dispersion_score(pts: list[tuple[int, float]]) -> float:
+            """Prefer dispersion in typical range. Returns 1 if ideal, 0 if far off."""
+            if len(pts) < 2:
+                return 1.0
+            px_span = pts[-1][0] - pts[0][0]
+            wl_span = pts[-1][1] - pts[0][1]
+            if px_span <= 0:
+                return 0.0
+            disp = wl_span / px_span
+            if DISPERSION_LO <= disp <= DISPERSION_HI:
+                return 1.0
+            d = min(abs(disp - DISPERSION_LO), abs(disp - DISPERSION_HI))
+            return max(0.0, 1.0 - d / 0.2)
 
         # Try shifts: measured can have extra peaks (skip leading); reference can
         # have extra (e.g. Hg 5 lines, we see 4). Pick mapping with best linearity.
+        # For 3 peaks R² is always 1.0, so use dispersion as tiebreaker.
         meas_shift_max = max(0, n_meas - n_use)
         ref_offset_max = max(0, n_ref - n_use)
         for m_shift in range(meas_shift_max + 1):
@@ -269,8 +297,10 @@ class CalibrationMode(BaseMode):
                     for i in range(n_use)
                 ]
                 r2 = self._linearity_score(pts)
-                if r2 > best_r2:
+                dsc = dispersion_score(pts)
+                if r2 > best_r2 or (r2 == best_r2 and dsc > best_dispersion_score):
                     best_r2 = r2
+                    best_dispersion_score = dsc
                     best_points = pts
 
         calibration_points = best_points[:min(6, len(best_points))]
@@ -357,7 +387,7 @@ class CalibrationMode(BaseMode):
             x0,
             method="L-BFGS-B",
             bounds=bounds,
-            options={"maxiter": 200, "ftol": 1e-8},
+            options={"maxiter": 60, "ftol": 1e-6},
         )
 
         if not res.success:

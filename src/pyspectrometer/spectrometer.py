@@ -147,6 +147,10 @@ class Spectrometer:
         self._auto_gain = AutoGainController()
         self._auto_exposure = AutoExposureController()
 
+        # AutoCal debounce (touch screens can send repeat events)
+        self._last_auto_calibrate_time: float = 0.0
+        self._AUTO_CAL_DEBOUNCE_SEC: float = 1.5
+
         self._register_key_callbacks()
         self._register_button_callbacks()
     
@@ -245,6 +249,7 @@ class Spectrometer:
         display.register_button_callback("auto_calibrate", self._on_auto_calibrate)
         display.register_button_callback("reset_calibration", self._on_reset_calibration)
         display.register_button_callback("save_cal", self._on_save_calibration)
+        display.register_button_callback("save_spectrum", self._on_button_save)
         display.register_button_callback("load_cal", self._on_load_calibration)
         
         # Display and control
@@ -538,6 +543,16 @@ class Spectrometer:
             print("[CAL] No data available for calibration")
             return
 
+        # Debounce: ignore rapid repeat (touch screens)
+        now = time.monotonic()
+        if now - self._last_auto_calibrate_time < self._AUTO_CAL_DEBOUNCE_SEC:
+            return
+        self._last_auto_calibrate_time = now
+
+        if not self._frozen_spectrum:
+            print("[CAL] Freeze spectrum first (Play button), then click AutoCal")
+            return
+
         # Use raw (pre-sensitivity) measured when S is on so correlation uses ref*sens vs raw (both sensor space)
         measured = (
             self._last_intensity_pre_sensitivity
@@ -554,9 +569,9 @@ class Spectrometer:
             peak_indices=self._last_data.peaks,
         )
         
-        if len(cal_points) >= 4:
-            print(f"[CAL] Auto-calibration found {len(cal_points)} points")
-            print("[CAL] Click 'SaveCal' to save, or adjust and recalibrate")
+        if len(cal_points) >= 3:
+            print(f"[CAL] Auto-calibration found {len(cal_points)} points (4+ preferred)")
+            print("[CAL] Click 'Save' to save, or Freeze+AutoCal again to retry")
             
             # Apply calibration to see result
             pixels = [p for p, w in cal_points]
@@ -936,9 +951,15 @@ class Spectrometer:
                 )
                 
                 action = self._keyboard.poll()
-                
                 if action == Action.SAVE and self._last_data is not None:
                     self._save_snapshot(processed)
+
+                # Exit when user closes window (X button)
+                try:
+                    if cv2.getWindowProperty(self.config.spectrograph_title, cv2.WND_PROP_VISIBLE) < 1:
+                        self._running = False
+                except cv2.error:
+                    self._running = False
                     
         finally:
             self._camera.stop()
