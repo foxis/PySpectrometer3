@@ -22,6 +22,7 @@ endif
         install-waveshare-link install-waveshare-fullscreen-link \
         install-link uninstall run run-fullscreen run-waterfall run-waveshare \
         run-calibration run-measurement run-raman run-colorscience \
+        calibrate measure raman colors \
         clean help venv
 
 all: help
@@ -306,6 +307,24 @@ run-colorscience:
 	@echo "Starting PySpectrometer3 in Color Science mode..."
 	cd $(SRC_DIR) && $(PYTHON) -m $(PACKAGE) --waveshare --mode colorscience
 
+## Short aliases for modes
+
+calibrate:
+	@echo "Starting PySpectrometer3 in Calibration mode..."
+	cd $(SRC_DIR) && $(PYTHON) -m $(PACKAGE) --waveshare --mode calibration
+
+measure:
+	@echo "Starting PySpectrometer3 in Measurement mode..."
+	cd $(SRC_DIR) && $(PYTHON) -m $(PACKAGE) --waveshare --mode measurement
+
+raman:
+	@echo "Starting PySpectrometer3 in Raman mode..."
+	cd $(SRC_DIR) && $(PYTHON) -m $(PACKAGE) --waveshare --mode raman
+
+colors:
+	@echo "Starting PySpectrometer3 in Color Science mode..."
+	cd $(SRC_DIR) && $(PYTHON) -m $(PACKAGE) --waveshare --mode colorscience
+
 ## Development targets
 
 venv:
@@ -357,6 +376,10 @@ help:
 	@echo "  make run-waveshare-fullscreen  - Run fullscreen on Waveshare 3.5\""
 	@echo ""
 	@echo "Running (Modes):"
+	@echo "  make calibrate                 - Run Calibration mode (alias)"
+	@echo "  make measure                   - Run Measurement mode (alias)"
+	@echo "  make raman                     - Run Raman mode (alias)"
+	@echo "  make colors                    - Run Color Science mode (alias)"
 	@echo "  make run-calibration           - Run Calibration mode"
 	@echo "  make run-measurement           - Run Measurement mode"
 	@echo "  make run-raman                 - Run Raman mode"
