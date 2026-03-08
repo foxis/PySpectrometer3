@@ -1,0 +1,292 @@
+"""Main spectrometer application orchestrator."""
+
+import time
+from pathlib import Path
+from typing import Optional
+import numpy as np
+import cv2
+
+from .config import Config
+from .core.spectrum import SpectrumData
+from .core.calibration import Calibration
+from .capture.base import CameraInterface
+from .capture.picamera import PicameraCapture
+from .processing.pipeline import ProcessingPipeline
+from .processing.filters import SavitzkyGolayFilter
+from .processing.peak_detection import PeakDetector
+from .display.renderer import DisplayManager
+from .export.csv_exporter import CSVExporter
+from .input.keyboard import KeyboardHandler, Action
+
+
+class Spectrometer:
+    """Main spectrometer application orchestrator.
+    
+    This class wires together all components (camera, processing, display,
+    input, export) and manages the main application loop.
+    """
+    
+    def __init__(
+        self,
+        config: Optional[Config] = None,
+        camera: Optional[CameraInterface] = None,
+    ):
+        """Initialize spectrometer application.
+        
+        Args:
+            config: Application configuration (uses defaults if None)
+            camera: Camera backend (creates PicameraCapture if None)
+        """
+        self.config = config or Config()
+        
+        self._camera = camera or PicameraCapture(
+            width=self.config.camera.frame_width,
+            height=self.config.camera.frame_height,
+            gain=self.config.camera.gain,
+            fps=self.config.camera.fps,
+        )
+        
+        self._calibration = Calibration(
+            width=self.config.camera.frame_width,
+            cal_file=self.config.calibration.data_file,
+            default_pixels=self.config.calibration.default_pixels,
+            default_wavelengths=self.config.calibration.default_wavelengths,
+        )
+        
+        self._savgol_filter = SavitzkyGolayFilter(
+            window_size=self.config.processing.savgol_window,
+            poly_order=self.config.processing.savgol_poly,
+            poly_order_min=self.config.processing.savgol_poly_min,
+            poly_order_max=self.config.processing.savgol_poly_max,
+        )
+        
+        self._peak_detector = PeakDetector(
+            min_distance=self.config.processing.peak_min_distance,
+            threshold=self.config.processing.peak_threshold,
+            min_distance_min=self.config.processing.peak_min_distance_min,
+            min_distance_max=self.config.processing.peak_min_distance_max,
+            threshold_min=self.config.processing.peak_threshold_min,
+            threshold_max=self.config.processing.peak_threshold_max,
+        )
+        
+        self._pipeline = ProcessingPipeline([
+            self._savgol_filter,
+            self._peak_detector,
+        ])
+        
+        self._display = DisplayManager(self.config, self._calibration)
+        self._exporter = CSVExporter(output_dir=self.config.export.output_dir)
+        self._keyboard = KeyboardHandler()
+        
+        self._held_intensity: Optional[np.ndarray] = None
+        self._running = False
+        
+        self._register_key_callbacks()
+    
+    def _register_key_callbacks(self) -> None:
+        """Register keyboard action callbacks."""
+        self._keyboard.register(Action.QUIT, self._on_quit)
+        self._keyboard.register(Action.TOGGLE_HOLD_PEAKS, self._on_toggle_hold)
+        self._keyboard.register(Action.SAVE, self._on_save)
+        self._keyboard.register(Action.CALIBRATE, self._on_calibrate)
+        self._keyboard.register(Action.CLEAR_CLICKS, self._on_clear_clicks)
+        self._keyboard.register(Action.TOGGLE_MEASURE, self._on_toggle_measure)
+        self._keyboard.register(Action.TOGGLE_PIXEL_MODE, self._on_toggle_pixel_mode)
+        self._keyboard.register(Action.SAVGOL_UP, self._on_savgol_up)
+        self._keyboard.register(Action.SAVGOL_DOWN, self._on_savgol_down)
+        self._keyboard.register(Action.PEAK_WIDTH_UP, self._on_peak_width_up)
+        self._keyboard.register(Action.PEAK_WIDTH_DOWN, self._on_peak_width_down)
+        self._keyboard.register(Action.THRESHOLD_UP, self._on_threshold_up)
+        self._keyboard.register(Action.THRESHOLD_DOWN, self._on_threshold_down)
+        self._keyboard.register(Action.GAIN_UP, self._on_gain_up)
+        self._keyboard.register(Action.GAIN_DOWN, self._on_gain_down)
+    
+    def _on_quit(self) -> None:
+        """Handle quit action."""
+        self._running = False
+    
+    def _on_toggle_hold(self) -> None:
+        """Handle toggle hold peaks action."""
+        self._display.state.hold_peaks = not self._display.state.hold_peaks
+        if not self._display.state.hold_peaks:
+            self._held_intensity = None
+    
+    def _on_save(self) -> None:
+        """Handle save action."""
+        pass
+    
+    def _on_calibrate(self) -> None:
+        """Handle calibration action."""
+        clicks = self._display.state.click_points
+        if len(clicks) < 3:
+            print(f"Need at least 3 calibration points (have {len(clicks)})")
+            return
+        
+        print("Enter known wavelengths for observed pixels!")
+        pixel_data = []
+        wavelength_data = []
+        
+        for x, y in clicks:
+            try:
+                wavelength_str = input(f"Enter wavelength for: {x}px: ")
+                wavelength = float(wavelength_str)
+                pixel_data.append(x)
+                wavelength_data.append(wavelength)
+            except ValueError:
+                print("Only numbers are allowed!")
+                print("Calibration aborted!")
+                return
+        
+        if self._calibration.save(pixel_data, wavelength_data):
+            self._display.state.click_points.clear()
+    
+    def _on_clear_clicks(self) -> None:
+        """Handle clear clicks action."""
+        self._display.state.click_points.clear()
+    
+    def _on_toggle_measure(self) -> None:
+        """Handle toggle measure mode action."""
+        self._display.state.cursor.pixel_mode = False
+        self._display.state.cursor.measure_mode = not self._display.state.cursor.measure_mode
+    
+    def _on_toggle_pixel_mode(self) -> None:
+        """Handle toggle pixel mode action."""
+        self._display.state.cursor.measure_mode = False
+        self._display.state.cursor.pixel_mode = not self._display.state.cursor.pixel_mode
+        if not self._display.state.cursor.pixel_mode:
+            self._display.state.click_points.clear()
+    
+    def _on_savgol_up(self) -> None:
+        """Handle Savitzky-Golay order increase."""
+        self._savgol_filter.increase_poly_order()
+    
+    def _on_savgol_down(self) -> None:
+        """Handle Savitzky-Golay order decrease."""
+        self._savgol_filter.decrease_poly_order()
+    
+    def _on_peak_width_up(self) -> None:
+        """Handle peak width increase."""
+        self._peak_detector.increase_min_distance()
+    
+    def _on_peak_width_down(self) -> None:
+        """Handle peak width decrease."""
+        self._peak_detector.decrease_min_distance()
+    
+    def _on_threshold_up(self) -> None:
+        """Handle threshold increase."""
+        self._peak_detector.increase_threshold()
+    
+    def _on_threshold_down(self) -> None:
+        """Handle threshold decrease."""
+        self._peak_detector.decrease_threshold()
+    
+    def _on_gain_up(self) -> None:
+        """Handle camera gain increase."""
+        self._camera.gain = self._camera.gain + 1
+        print(f"Camera Gain: {self._camera.gain}")
+    
+    def _on_gain_down(self) -> None:
+        """Handle camera gain decrease."""
+        self._camera.gain = self._camera.gain - 1
+        print(f"Camera Gain: {self._camera.gain}")
+    
+    def run(self) -> None:
+        """Run the main spectrometer application loop."""
+        print("Starting PySpectrometer 3...")
+        print(self._keyboard.get_help_text())
+        print()
+        
+        self._calibration.load()
+        
+        self._camera.start()
+        self._display.setup_windows()
+        
+        self._running = True
+        self._last_data: Optional[SpectrumData] = None
+        
+        try:
+            while self._running:
+                frame = self._camera.capture()
+                
+                cropped, intensity = self._camera.extract_spectrum_region(
+                    frame,
+                    rows_to_average=self.config.processing.pixel_rows_to_average,
+                    crop_height=self.config.display.preview_height,
+                )
+                
+                if self._display.state.hold_peaks:
+                    if self._held_intensity is None:
+                        self._held_intensity = intensity.copy()
+                    else:
+                        self._held_intensity = np.maximum(self._held_intensity, intensity)
+                    intensity = self._held_intensity
+                    self._savgol_filter.enabled = False
+                else:
+                    self._savgol_filter.enabled = True
+                
+                data = SpectrumData(
+                    intensity=intensity,
+                    wavelengths=self._calibration.wavelengths,
+                    raw_frame=frame,
+                    cropped_frame=cropped,
+                )
+                
+                processed = self._pipeline.run(data)
+                
+                self._last_data = processed
+                
+                self._display.render(
+                    processed,
+                    camera_gain=self._camera.gain,
+                    savgol_poly=self._savgol_filter.poly_order,
+                    peak_min_dist=self._peak_detector.min_distance,
+                    peak_threshold=self._peak_detector.threshold,
+                )
+                
+                action = self._keyboard.poll()
+                
+                if action == Action.SAVE and self._last_data is not None:
+                    self._save_snapshot(processed)
+                    
+        finally:
+            self._camera.stop()
+            self._display.destroy()
+            print("PySpectrometer 3 stopped.")
+    
+    def _save_snapshot(self, data: SpectrumData) -> None:
+        """Save current spectrum snapshot."""
+        timestamp = time.strftime(self.config.export.timestamp_format)
+        time_display = time.strftime(self.config.export.time_format)
+        
+        csv_path = self._exporter.generate_filename("Spectrum")
+        self._exporter.export(data, csv_path)
+        
+        spectrum_path = Path(f"spectrum-{timestamp}.png")
+        
+        waterfall_img = self._display.get_waterfall_image()
+        if waterfall_img is not None:
+            waterfall_path = Path(f"waterfall-{timestamp}.png")
+            cv2.imwrite(str(waterfall_path), waterfall_img)
+        
+        self._display.state.save_message = f"Last Save: {time_display}"
+        print(f"Saved: {csv_path}")
+    
+    @property
+    def camera(self) -> CameraInterface:
+        """Get the camera backend."""
+        return self._camera
+    
+    @property
+    def calibration(self) -> Calibration:
+        """Get the calibration manager."""
+        return self._calibration
+    
+    @property
+    def pipeline(self) -> ProcessingPipeline:
+        """Get the processing pipeline."""
+        return self._pipeline
+    
+    @property
+    def display(self) -> DisplayManager:
+        """Get the display manager."""
+        return self._display

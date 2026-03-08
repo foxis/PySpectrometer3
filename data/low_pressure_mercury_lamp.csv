@@ -1,0 +1,19 @@
+# Low Pressure Mercury Lamp Emission Spectrum
+# Source: NIST Atomic Spectra Database - Strong Lines of Mercury (Hg I)
+# Note: Low pressure Hg lamps emit primarily at discrete wavelengths
+# Format: wavelength_nm, relative_intensity
+# The 253.7nm line dominates (>90% of UV output) in low-pressure germicidal lamps
+wavelength_nm,relative_intensity
+184.9,100
+253.7,1000
+296.7,5
+302.2,3
+312.6,6
+313.2,8
+365.0,60
+404.7,80
+407.8,8
+435.8,100
+546.1,80
+576.9,25
+579.1,25
