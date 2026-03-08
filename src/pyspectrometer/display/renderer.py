@@ -84,12 +84,12 @@ class DisplayManager:
         
         title1 = self.config.spectrograph_title
         title2 = self.config.waterfall_title
-        width = self.config.camera.frame_width
-        height = self.config.display.stack_height
+        window_width = self.config.display.window_width
+        window_height = self.config.display.window_height
         
         if self.config.display.waterfall_enabled:
             cv2.namedWindow(title2, cv2.WINDOW_GUI_NORMAL)
-            cv2.resizeWindow(title2, width, height)
+            cv2.resizeWindow(title2, window_width, window_height)
             cv2.moveWindow(title2, 200, 200)
         
         if self.config.display.fullscreen:
@@ -101,7 +101,7 @@ class DisplayManager:
             )
         else:
             cv2.namedWindow(title1, cv2.WINDOW_GUI_NORMAL)
-            cv2.resizeWindow(title1, width, height)
+            cv2.resizeWindow(title1, window_width, window_height)
             cv2.moveWindow(title1, 0, 0)
         
         cv2.setMouseCallback(title1, self._handle_mouse)
@@ -180,6 +180,18 @@ class DisplayManager:
             perp_width,
         )
         
+        # Scale canvas to fit window if sizes differ
+        window_width = self.config.display.window_width
+        window_height = self.config.display.window_height
+        canvas_height, canvas_width = spectrum_vertical.shape[:2]
+        
+        if canvas_width != window_width or canvas_height != window_height:
+            spectrum_vertical = cv2.resize(
+                spectrum_vertical,
+                (window_width, window_height),
+                interpolation=cv2.INTER_LINEAR
+            )
+        
         cv2.imshow(self.config.spectrograph_title, spectrum_vertical)
         
         if self._waterfall is not None and self.config.display.waterfall_enabled:
@@ -197,6 +209,15 @@ class DisplayManager:
             )
             
             self._render_waterfall_status(waterfall_vertical, camera_gain)
+            
+            # Scale canvas to fit window if sizes differ
+            wf_height, wf_width = waterfall_vertical.shape[:2]
+            if wf_width != window_width or wf_height != window_height:
+                waterfall_vertical = cv2.resize(
+                    waterfall_vertical,
+                    (window_width, window_height),
+                    interpolation=cv2.INTER_LINEAR
+                )
             
             cv2.imshow(self.config.waterfall_title, waterfall_vertical)
     

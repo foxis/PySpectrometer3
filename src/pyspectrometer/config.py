@@ -27,6 +27,10 @@ class DisplayConfig:
     preview_height: int = 80
     message_height: int = 80
     
+    # Window size (canvas will be scaled to fit)
+    window_width: int = 800
+    window_height: int = 480
+    
     # UI scaling for small displays
     font_scale: float = 0.4
     text_thickness: int = 1
@@ -151,6 +155,8 @@ class Config:
         self.camera.frame_width = 640
         self.camera.frame_height = 480
         
+        self.display.window_width = 640
+        self.display.window_height = 480
         self.display.graph_height = 280
         self.display.preview_height = 80
         self.display.message_height = 120
