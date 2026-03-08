@@ -9,6 +9,7 @@ import cv2
 from .config import Config
 from .core.spectrum import SpectrumData
 from .core.calibration import Calibration
+from .core.reference_spectrum import ReferenceSpectrumManager
 from .capture.base import CameraInterface
 from .capture.picamera import PicameraCapture
 from .processing.pipeline import ProcessingPipeline
@@ -104,6 +105,7 @@ class Spectrometer:
         self._display = DisplayManager(self.config, self._calibration)
         self._exporter = CSVExporter(output_dir=self.config.export.output_dir)
         self._keyboard = KeyboardHandler()
+        self._reference_manager = ReferenceSpectrumManager()
         
         self._held_intensity: Optional[np.ndarray] = None
         self._running = False
@@ -133,6 +135,7 @@ class Spectrometer:
         self._keyboard.register(Action.PERP_WIDTH_UP, self._on_perp_width_up)
         self._keyboard.register(Action.PERP_WIDTH_DOWN, self._on_perp_width_down)
         self._keyboard.register(Action.SAVE_EXTRACTION_PARAMS, self._on_save_extraction)
+        self._keyboard.register(Action.CYCLE_REFERENCE_SPECTRUM, self._on_cycle_reference)
     
     def _on_quit(self) -> None:
         """Handle quit action."""
@@ -273,6 +276,12 @@ class Spectrometer:
             perpendicular_width=self._extractor.perpendicular_width,
         )
     
+    def _on_cycle_reference(self) -> None:
+        """Handle cycling through reference spectrums."""
+        new_name = self._reference_manager.cycle_next()
+        self._display.state.reference_name = new_name
+        print(f"Reference Spectrum: {new_name}")
+    
     def run(self) -> None:
         """Run the main spectrometer application loop."""
         print("Starting PySpectrometer 3...")
@@ -324,6 +333,13 @@ class Spectrometer:
                 processed = self._pipeline.run(data)
                 
                 self._last_data = processed
+                
+                # Update reference spectrum overlay
+                ref_intensity = self._reference_manager.get_interpolated(
+                    processed.wavelengths,
+                    processed.intensity,
+                )
+                self._display.state.reference_spectrum = ref_intensity
                 
                 self._display.render(
                     processed,

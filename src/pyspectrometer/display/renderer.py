@@ -32,6 +32,8 @@ class DisplayState:
     cursor: CursorState = None
     click_points: list[tuple[int, int]] = None
     save_message: str = "No data saved"
+    reference_spectrum: Optional[np.ndarray] = None
+    reference_name: str = "None"
     
     def __post_init__(self):
         if self.cursor is None:
@@ -148,6 +150,7 @@ class DisplayManager:
         self._graticule.render_on_graph(graph, self.calibration.graticule)
         self._graticule.render_horizontal_lines(graph)
         
+        self._render_reference_spectrum(graph, data)
         self._render_spectrum(graph, data)
         self._render_peaks(graph, data)
         self._render_cursor(graph, data)
@@ -196,6 +199,26 @@ class DisplayManager:
             self._render_waterfall_status(waterfall_vertical, camera_gain)
             
             cv2.imshow(self.config.waterfall_title, waterfall_vertical)
+    
+    def _render_reference_spectrum(self, graph: np.ndarray, data: SpectrumData) -> None:
+        """Render the reference spectrum overlay line."""
+        ref_intensity = self.state.reference_spectrum
+        if ref_intensity is None:
+            return
+        
+        height = graph.shape[0]
+        ref_color = (180, 180, 180)  # Light gray for reference
+        
+        # Draw connected line for reference spectrum
+        points = []
+        for i, intensity in enumerate(ref_intensity):
+            if i < len(data.wavelengths):
+                y = height - int(min(intensity, height - 1))
+                points.append((i, max(0, y)))
+        
+        if len(points) > 1:
+            for j in range(len(points) - 1):
+                cv2.line(graph, points[j], points[j + 1], ref_color, 1, cv2.LINE_AA)
     
     def _render_spectrum(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render the spectrum intensity curve."""
@@ -515,6 +538,20 @@ class DisplayManager:
             thickness,
             cv2.LINE_AA,
         )
+        
+        # Reference spectrum indicator
+        if self.state.reference_name != "None":
+            ref_short = self.state.reference_name[:8]
+            cv2.putText(
+                image,
+                f"Ref: {ref_short}",
+                (col3_x, line_height * 4),
+                self._font,
+                font_scale,
+                (180, 180, 180),
+                thickness,
+                cv2.LINE_AA,
+            )
     
     def _render_waterfall_status(
         self,

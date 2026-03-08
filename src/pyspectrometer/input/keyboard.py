@@ -29,6 +29,7 @@ class Action(Enum):
     PERP_WIDTH_UP = auto()
     PERP_WIDTH_DOWN = auto()
     SAVE_EXTRACTION_PARAMS = auto()
+    CYCLE_REFERENCE_SPECTRUM = auto()
 
 
 @dataclass
@@ -61,6 +62,7 @@ DEFAULT_BINDINGS: list[KeyBinding] = [
     KeyBinding("]", Action.PERP_WIDTH_UP, "Increase perpendicular width"),
     KeyBinding("[", Action.PERP_WIDTH_DOWN, "Decrease perpendicular width"),
     KeyBinding("w", Action.SAVE_EXTRACTION_PARAMS, "Save extraction parameters"),
+    KeyBinding("r", Action.CYCLE_REFERENCE_SPECTRUM, "Cycle reference spectrum"),
 ]
 
 
