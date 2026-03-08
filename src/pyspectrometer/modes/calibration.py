@@ -282,26 +282,42 @@ class CalibrationMode(BaseMode):
         self,
         measured_intensity: np.ndarray,
     ) -> list[tuple[int, float]]:
-        """Optimize calibration polynomial to maximize spectrum correlation."""
+        """Optimize calibration polynomial to maximize spectrum correlation.
+
+        Constraints: visible 400-700 nm must be within measured pixel range.
+        Mostly shift and scale (prism dispersion ~linear); c2, c3 are small tweaks.
+        """
         n = len(measured_intensity)
         if n < 10:
             print("[Calibration] Need at least 10 pixels for correlation calibration")
             return []
 
         source = self.cal_state.current_source
-        # Initial guess: linear, 380-750 nm over pixel range
-        wl_min, wl_max = 380.0, 750.0
-        c1_init = (wl_max - wl_min) / max(n - 1, 1)
-        c0_init = wl_min
-        x0 = np.array([c0_init, c1_init, 0.0, 0.0])  # c0, c1, c2, c3
+        # Initial guess: linear 380-750 nm, mostly shift + scale
+        span = max(n - 1, 1)
+        c1_init = 370.0 / span
+        c0_init = 380.0
+        x0 = np.array([c0_init, c1_init, 0.0, 0.0])
+
+        # Sensible wavelength range: 400-700 nm must lie within [pixel 0, pixel n-1]
+        wl_start_lo, wl_start_hi = 360.0, 440.0
+        wl_end_lo, wl_end_hi = 660.0, 780.0
 
         def loss(x: np.ndarray) -> float:
             c0, c1, c2, c3 = x
-            wl = c0 + c1 * np.arange(n, dtype=np.float64)
-            wl += c2 * (np.arange(n, dtype=np.float64) ** 2) / (n * n)
-            wl += c3 * (np.arange(n, dtype=np.float64) ** 3) / (n * n * n)
+            p = np.arange(n, dtype=np.float64)
+            wl = c0 + c1 * p + c2 * (p * p) / (n * n) + c3 * (p * p * p) / (n * n * n)
+            wl_0 = wl[0]
+            wl_n = wl[-1]
+            # Penalty if visible 400-700 falls outside measured range
+            range_penalty = 0.0
+            if wl_0 > wl_start_hi or wl_0 < wl_start_lo:
+                range_penalty += 100.0 * min(abs(wl_0 - wl_start_lo), abs(wl_0 - wl_start_hi))
+            if wl_n < wl_end_lo or wl_n > wl_end_hi:
+                range_penalty += 100.0 * min(abs(wl_n - wl_end_lo), abs(wl_n - wl_end_hi))
+            if wl_0 >= wl_n - 50:
+                range_penalty += 1e6
             ref = get_reference_spectrum(source, wl)
-            # Apply sensitivity to source when S is on: ref_sensor = ref * sens for better match with raw measured
             if (
                 self.cal_state.sensitivity_correction_enabled
                 and self._cmos_sensitivity_wl is not None
@@ -320,16 +336,18 @@ class CalibrationMode(BaseMode):
             corr = np.corrcoef(measured_intensity, ref)[0, 1]
             if np.isnan(corr):
                 return 1e6
-            # Maximize correlation = minimize -corr
-            # Linearity penalty: penalize c2, c3 (prism should be ~linear)
-            linearity_penalty = 0.1 * (c2 ** 2 + c3 ** 2)
-            return -corr + linearity_penalty
+            # Strong linearity penalty: mostly shift + scale, not drastic curvature
+            linearity_penalty = 2.0 * (c2 ** 2 + c3 ** 2)
+            return -corr + linearity_penalty + range_penalty
 
+        # c0: wl at pixel 0; c1: nm/pixel (span ~350-400 nm over n pixels)
+        c1_min = 250.0 / span
+        c1_max = 500.0 / span
         bounds = [
-            (350.0, 450.0),   # c0
-            (0.3, 1.5),       # c1 (nm/pixel)
-            (-50.0, 50.0),    # c2
-            (-50.0, 50.0),    # c3
+            (wl_start_lo, wl_start_hi),
+            (c1_min, c1_max),
+            (-15.0, 15.0),
+            (-15.0, 15.0),
         ]
         res = minimize(
             loss,
