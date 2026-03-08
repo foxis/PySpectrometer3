@@ -229,21 +229,31 @@ class Spectrometer:
         print(f"Extraction Method: {new_method}")
     
     def _on_auto_detect_angle(self) -> None:
-        """Handle auto-detect rotation angle."""
+        """Handle auto-detect rotation angle and Y center."""
         if self._last_frame is None:
             print("No frame available for angle detection")
             return
         
-        print("Detecting spectrum rotation angle...")
-        angle, vis_image = self._extractor.detect_angle(self._last_frame, visualize=True)
+        print("Detecting spectrum rotation angle and position...")
+        angle, y_center, vis_image = self._extractor.detect_angle(self._last_frame, visualize=True)
         
         if vis_image is not None:
             cv2.imshow("Angle Detection", vis_image)
             cv2.waitKey(2000)
             cv2.destroyWindow("Angle Detection")
         
+        # Apply both angle and Y center
         self._extractor.set_rotation_angle(angle)
-        print(f"Rotation Angle: {angle:.2f}°")
+        self._extractor.set_spectrum_y_center(y_center)
+        print(f"Rotation Angle: {angle:.2f}°, Y Center: {y_center}")
+        
+        # Auto-save extraction parameters
+        self._calibration.save_extraction_params(
+            rotation_angle=self._extractor.rotation_angle,
+            spectrum_y_center=self._extractor.spectrum_y_center,
+            perpendicular_width=self._extractor.perpendicular_width,
+        )
+        print("Extraction parameters saved.")
     
     def _on_perp_width_up(self) -> None:
         """Handle perpendicular width increase."""

@@ -253,19 +253,19 @@ class SpectrumExtractor:
         
         return frame[y_start:y_end, :].copy()
     
-    def detect_angle(self, frame: np.ndarray, visualize: bool = False) -> tuple[float, Optional[np.ndarray]]:
-        """Auto-detect spectrum rotation angle using gradient orientation analysis.
+    def detect_angle(self, frame: np.ndarray, visualize: bool = False) -> tuple[float, int, Optional[np.ndarray]]:
+        """Auto-detect spectrum rotation angle and Y center using gradient analysis.
         
         Analyzes horizontal gradients (edges of vertical stripes) and uses
-        PCA to find the dominant orientation. Works well with imperfect,
-        wide vertical stripes typical in spectrometer images.
+        PCA to find the dominant orientation. Also computes the optimal
+        Y center based on the centroid of the spectrum.
         
         Args:
             frame: Input frame as BGR numpy array
             visualize: If True, return visualization image
             
         Returns:
-            Tuple of (detected_angle_degrees, visualization_image_or_None)
+            Tuple of (detected_angle_degrees, optimal_y_center, visualization_image_or_None)
         """
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         height, width = gray.shape
@@ -291,7 +291,7 @@ class SpectrumExtractor:
         y_coords, x_coords = np.where(strong_mask)
         
         if len(x_coords) < 10:
-            return 0.0, None
+            return 0.0, height // 2, None
         
         # Weight points by gradient magnitude
         weights = magnitude[strong_mask]
@@ -332,6 +332,7 @@ class SpectrumExtractor:
             angle_from_vertical += 90
         
         detected_angle = float(angle_from_vertical)
+        optimal_y_center = int(round(cy))
         
         vis_image = None
         if visualize:
@@ -344,6 +345,9 @@ class SpectrumExtractor:
             
             # Draw centroid
             cv2.circle(vis_image, (int(cx), int(cy)), 8, (255, 255, 255), 2)
+            
+            # Draw horizontal line at optimal Y center
+            cv2.line(vis_image, (0, optimal_y_center), (width, optimal_y_center), (255, 0, 255), 2)
             
             # Draw principal axis (should align with vertical stripes)
             line_len = min(width, height) // 2
@@ -373,7 +377,7 @@ class SpectrumExtractor:
             )
             cv2.putText(
                 vis_image,
-                f"Points: {len(x_coords)}",
+                f"Y Center: {optimal_y_center}",
                 (10, 60),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.8,
@@ -381,7 +385,7 @@ class SpectrumExtractor:
                 2,
             )
         
-        return detected_angle, vis_image
+        return detected_angle, optimal_y_center, vis_image
     
     def set_method(self, method: ExtractionMethod) -> None:
         """Set the extraction method."""
