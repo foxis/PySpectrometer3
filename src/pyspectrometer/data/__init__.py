@@ -6,6 +6,8 @@ from .reference_spectra import (
     get_reference_peaks,
     get_reference_name,
     get_all_reference_names,
+    spectrum_to_xyz_1931,
+    SpectralLine,
 )
 
 __all__ = [
@@ -14,4 +16,6 @@ __all__ = [
     "get_reference_peaks",
     "get_reference_name",
     "get_all_reference_names",
+    "spectrum_to_xyz_1931",
+    "SpectralLine",
 ]

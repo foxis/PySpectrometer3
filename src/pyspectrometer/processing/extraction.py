@@ -182,6 +182,7 @@ class SpectrumExtractor:
         """Extract using median along vertical slices.
         
         Preserves original bit depth (0-1023 for 10-bit, 0-255 for 8-bit).
+        Uses spectrum_y_center (absolute Y in rotated frame) - same offset as crop.
         """
         half_perp = self.perpendicular_width // 2
         y_start = max(0, self.spectrum_y_center - half_perp)
@@ -224,6 +225,7 @@ class SpectrumExtractor:
         
         Preserves original bit depth (0-1023 for 10-bit, 0-255 for 8-bit).
         Returns the fitted amplitude (not normalized).
+        Uses spectrum_y_center (absolute Y in rotated frame) - same offset as crop.
         """
         from scipy.optimize import curve_fit
         
@@ -294,7 +296,10 @@ class SpectrumExtractor:
         Handles both color (3D) and monochrome (2D) frames.
         Monochrome frames are converted to 3-channel grayscale for display.
         
-        Uses self.spectrum_y_center to determine crop position.
+        CRITICAL: spectrum_y_center is absolute Y in ROTATED frame coordinates.
+        Crop MUST use: y_start = spectrum_y_center - half_crop, y_end = spectrum_y_center + half_crop.
+        DO NOT flip signs (e.g. center - offset); spectrum_y_center is already the absolute row.
+        This crop region must match what the renderer draws as the crop box (same coords).
         """
         half_crop = self.crop_height // 2
         y_start = max(0, self.spectrum_y_center - half_crop)

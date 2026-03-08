@@ -10,7 +10,7 @@ from .base import ExporterInterface
 class CSVExporter(ExporterInterface):
     """Exports spectrum data to CSV format.
     
-    The CSV file contains two columns: Wavelength (nm) and Intensity (0-255).
+    The CSV file contains two columns: Wavelength (nm) and Intensity (float32 0-1).
     """
     
     def __init__(

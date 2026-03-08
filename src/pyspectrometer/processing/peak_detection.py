@@ -185,26 +185,27 @@ class PeakDetector(ProcessorInterface):
         """
         if not self._enabled:
             return data
-        
-        intensity = data.intensity.astype(np.int32)
-        max_val = max(intensity)
-        
-        if max_val == 0:
+
+        intensity = data.intensity.astype(np.float64)
+        max_val = float(np.max(intensity))
+
+        if max_val <= 0:
             return data.with_peaks([])
-        
-        threshold_normalized = self._threshold / max_val
-        
+
+        # Pass threshold as fraction of range (0-1). _threshold 0-100 → 0.0-1.0
+        threshold_normalized = self._threshold / 100.0
+
         indexes = find_peak_indexes(
             intensity,
             threshold=threshold_normalized,
             min_dist=self._min_distance,
         )
-        
+
         peaks = [
             Peak(
                 index=int(idx),
                 wavelength=round(data.wavelengths[idx], 1),
-                intensity=int(intensity[idx]),
+                intensity=float(intensity[idx]),
             )
             for idx in indexes
         ]

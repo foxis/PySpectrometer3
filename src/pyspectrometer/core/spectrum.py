@@ -13,12 +13,12 @@ class Peak:
     Attributes:
         index: Pixel index of the peak
         wavelength: Wavelength at the peak position (nm)
-        intensity: Intensity value at the peak
+        intensity: Intensity value at the peak (float32 0-1)
     """
-    
+
     index: int
     wavelength: float
-    intensity: int
+    intensity: float
     
     def __str__(self) -> str:
         return f"{self.wavelength:.1f}nm"
@@ -63,9 +63,9 @@ class SpectrumData:
         return float(self.wavelengths[-1])
     
     @property
-    def max_intensity(self) -> int:
-        """Maximum intensity value in the spectrum."""
-        return int(np.max(self.intensity))
+    def max_intensity(self) -> float:
+        """Maximum intensity value in the spectrum (0-1)."""
+        return float(np.max(self.intensity))
     
     def wavelength_at(self, pixel: int) -> float:
         """Get the wavelength at a specific pixel index."""
@@ -101,6 +101,6 @@ class SpectrumData:
             cropped_frame=self.cropped_frame,
         )
     
-    def to_csv_rows(self) -> list[tuple[float, int]]:
+    def to_csv_rows(self) -> list[tuple[float, float]]:
         """Convert spectrum data to CSV-compatible rows."""
         return list(zip(self.wavelengths, self.intensity))

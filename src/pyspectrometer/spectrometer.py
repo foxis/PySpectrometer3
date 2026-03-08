@@ -228,7 +228,7 @@ class Spectrometer:
         display.register_button_callback("source_fl5", lambda: self._on_select_source(ReferenceSource.FL5))
         display.register_button_callback("source_a", lambda: self._on_select_source(ReferenceSource.A))
         display.register_button_callback("source_hg", lambda: self._on_select_source(ReferenceSource.HG))
-        display.register_button_callback("source_sun", lambda: self._on_select_source(ReferenceSource.SUN))
+        display.register_button_callback("source_d65", lambda: self._on_select_source(ReferenceSource.D65))
         display.register_button_callback("source_led", lambda: self._on_select_source(ReferenceSource.LED))
         
         # Calibration actions
@@ -353,7 +353,7 @@ class Spectrometer:
         - Reduce if > 95% (saturating)
         - Increase if < 50% (too dark)
         
-        Uses config.camera.bit_depth for target max (10-bit: 1023, 8-bit: 255).
+        Intensity is float32 0-1; target 95% = 0.95.
         
         Exposure limits:
         - Continuous: max 1 second (1,000,000 us)
@@ -372,19 +372,10 @@ class Spectrometer:
         if self._frozen_spectrum:
             return
         
-        # Detect actual intensity range from data
+        # Intensity is float32 0-1 (normalized after extraction)
         current_max = float(np.max(data.intensity))
-        
-        # Use config bit depth for target scaling (not inferred from data)
-        # 10-bit: 0-1023, 8-bit: 0-255, 16-bit: 0-65535
-        bit_depth = getattr(self.config.camera, "bit_depth", 10)
-        if bit_depth >= 16:
-            max_intensity = 65535.0
-        elif bit_depth >= 10:
-            max_intensity = 1023.0
-        else:
-            max_intensity = 255.0
-        
+        max_intensity = 1.0
+
         threshold_high = max_intensity * 0.95  # Saturating, need to reduce
         threshold_target = max_intensity * 0.95  # Optimal level
         threshold_low = max_intensity * 0.50  # Too dark, need to increase
@@ -844,7 +835,6 @@ class Spectrometer:
         self._extractor._precompute_sampling_coords()
         
         self._camera.start()
-        self._display.set_intensity_bit_depth(getattr(self._camera, "bit_depth", self.config.camera.bit_depth))
         self._display.setup_windows()
         
         self._running = True
@@ -861,7 +851,12 @@ class Spectrometer:
                 
                 extraction_result = self._extractor.extract(frame)
                 cropped = extraction_result.cropped_frame
-                intensity = extraction_result.intensity
+                intensity = extraction_result.intensity.astype(np.float32)
+
+                # Normalize to float32 0-1 using capture bit depth (pipeline: extract → normalize → all downstream 0-1)
+                bit_depth = getattr(self._camera, "bit_depth", self.config.camera.bit_depth)
+                max_val = float((1 << bit_depth) - 1)
+                intensity = intensity / max_val
                 
                 # Handle calibration mode freeze - use stored frozen intensity
                 if self._calibration_mode is not None and self._frozen_spectrum:

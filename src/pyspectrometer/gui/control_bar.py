@@ -90,7 +90,7 @@ CALIBRATION_BUTTONS = [
     # Row 1: Source selection, Save/Load, then spacer, SENS, LEVEL, CALIB
     ButtonDef("FL", "source_fl", row=1),
     ButtonDef("Hg", "source_hg", row=1),
-    ButtonDef("Sun", "source_sun", row=1),
+    ButtonDef("D65", "source_d65", row=1),
     ButtonDef("LED", "source_led", row=1),
     ButtonDef("FL2", "source_fl2", row=1),
     ButtonDef("FL3", "source_fl3", row=1),

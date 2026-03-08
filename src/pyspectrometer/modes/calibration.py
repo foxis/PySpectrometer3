@@ -1,7 +1,7 @@
 """Calibration mode for wavelength calibration.
 
 Workflow:
-1. Select reference source (FL, Hg, Sun, LED)
+1. Select reference source (FL, Hg, D65, LED)
 2. Point spectrometer at light source
 3. Use auto-level and auto-shift to fit spectrum in view
 4. Freeze spectrum and click AutoCal
@@ -69,8 +69,8 @@ class CalibrationMode(BaseMode):
         ReferenceSource.FL4,
         ReferenceSource.FL5,
         ReferenceSource.A,
+        ReferenceSource.D65,
         ReferenceSource.HG,
-        ReferenceSource.SUN,
         ReferenceSource.LED,
     ]
     
@@ -108,7 +108,7 @@ class CalibrationMode(BaseMode):
             # Row 1: Source selection and calibration actions
             ButtonDefinition("FL", "source_fl", row=1),
             ButtonDefinition("Hg", "source_hg", row=1),
-            ButtonDefinition("Sun", "source_sun", row=1),
+            ButtonDefinition("D65", "source_d65", row=1),
             ButtonDefinition("LED", "source_led", row=1),
             ButtonDefinition("AutoLvl", "auto_level", is_toggle=True, row=1),
             ButtonDefinition("AutoCal", "auto_calibrate", row=1),
@@ -164,9 +164,9 @@ class CalibrationMode(BaseMode):
         
         # Color based on source
         colors = {
-            ReferenceSource.FL: (255, 200, 0),    # Cyan
+            ReferenceSource.FL: (255, 200, 0),    # Yellow
             ReferenceSource.HG: (255, 0, 255),    # Magenta
-            ReferenceSource.SUN: (0, 200, 255),   # Orange/yellow
+            ReferenceSource.D65: (100, 200, 255), # Daylight blue
             ReferenceSource.LED: (200, 200, 200), # White/gray
         }
         color = colors.get(self.cal_state.current_source, (200, 200, 200))

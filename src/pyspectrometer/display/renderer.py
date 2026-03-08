@@ -111,20 +111,12 @@ class DisplayManager:
 
         self._font = cv2.FONT_HERSHEY_SIMPLEX
         self._windows_created = False
-        # Actual bit depth from camera (overrides config when set)
-        self._intensity_bit_depth: Optional[int] = None
 
         # Preview display mode: "full", "window", "none"
         self._preview_mode = "window"
         
         # Track mouse button state for slider dragging
         self._mouse_down = False
-
-    def set_intensity_bit_depth(self, bit_depth: int) -> None:
-        """Set actual bit depth from camera for correct Y-axis scaling.
-        Call after camera.start() when using 10-bit or 16-bit capture.
-        """
-        self._intensity_bit_depth = bit_depth
 
     def setup_windows(self) -> None:
         """Create and configure OpenCV windows.
@@ -455,19 +447,20 @@ class DisplayManager:
             cv2.polylines(graph, [pts], isClosed=False, color=color, thickness=2, lineType=cv2.LINE_AA)
     
     def _render_reference_spectrum(self, graph: np.ndarray, data: SpectrumData) -> None:
-        """Render the reference spectrum overlay line."""
+        """Render the reference spectrum overlay line. Both measured and reference are 0-1."""
         ref_intensity = self.state.reference_spectrum
         if ref_intensity is None:
             return
-        
+
         height = graph.shape[0]
+        scale = float(height - 1) if height > 1 else 1.0
         ref_color = (180, 180, 180)  # Light gray for reference
-        
-        # Draw connected line for reference spectrum
+
         points = []
         for i, intensity in enumerate(ref_intensity):
             if i < len(data.wavelengths):
-                y = height - int(min(intensity, height - 1))
+                scaled = int(min(float(intensity) * scale, height - 1))
+                y = height - scaled
                 points.append((i, max(0, y)))
         
         if len(points) > 1:
@@ -477,29 +470,17 @@ class DisplayManager:
     def _render_spectrum(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render the spectrum intensity curve.
         
-        Scales intensity to fit graph height. Uses config.camera.bit_depth
-        for Y-axis range (10-bit: 0-1023, 8-bit: 0-255).
+        Intensity is float32 0-1. Scale to fit graph height.
         """
         height = graph.shape[0]
+        scale = float(height - 1) if height > 1 else 1.0
 
-        # Use camera actual bit depth if set, else config (10-bit: 0-1023, 8-bit: 0-255)
-        bit_depth = self._intensity_bit_depth if self._intensity_bit_depth is not None else getattr(self.config.camera, "bit_depth", 10)
-        if bit_depth >= 16:
-            intensity_range = 65535.0
-        elif bit_depth >= 10:
-            intensity_range = 1023.0
-        else:
-            intensity_range = 255.0
-        
-        # Scale factor to fit intensity into graph height
-        scale = (height - 1) / intensity_range if intensity_range > 0 else 1.0
-        
         for i, intensity in enumerate(data.intensity):
             rgb = wavelength_to_rgb(round(data.wavelengths[i]))
             bgr = rgb_to_bgr(rgb)
-            
-            # Scale intensity to graph height
-            scaled_intensity = int(intensity * scale)
+
+            # Scale intensity (0-1) to graph height
+            scaled_intensity = int(float(intensity) * scale)
             scaled_intensity = min(scaled_intensity, height - 1)  # Clamp to graph
             
             cv2.line(graph, (i, height), (i, height - scaled_intensity), bgr, 1)
@@ -513,11 +494,14 @@ class DisplayManager:
             )
     
     def _render_peaks(self, graph: np.ndarray, data: SpectrumData) -> None:
-        """Render peak labels on the graph."""
+        """Render peak labels on the graph. Peak intensity is float 0-1."""
+        height = graph.shape[0]
         text_offset = 12
-        
+
         for peak in data.peaks:
-            label_height = 310 - peak.intensity
+            # Map intensity 0-1 to y: y = height - intensity * (height-1)
+            scaled = int(float(peak.intensity) * (height - 1)) if height > 1 else 0
+            label_height = height - scaled
             
             cv2.rectangle(
                 graph,
@@ -680,24 +664,15 @@ class DisplayManager:
             [0, y_bottom_rot],
         ], dtype=np.float32)
         
-        # ROTATION DIRECTION MUST BE OPPOSITE TO EXTRACTION
+        # CRITICAL: rotated -> original MUST use R(+angle). DO NOT change the signs.
         #
-        # Extraction: we ROTATE THE IMAGE by -angle to straighten the spectrum.
-        #   warpAffine(frame, getRotationMatrix2D(center, -angle, 1.0))
-        #   So the SPECTRUM (tilted in original) becomes horizontal in rotated.
+        # Extraction uses warpAffine(getRotationMatrix2D(center, -angle)) = R(-angle)
+        # for orig -> rotated. Inverse rotated -> orig = R(+angle). NOT R(-angle).
         #
-        # We CROP a horizontal band in the ROTATED image (after straightening).
-        # The crop box we draw is that horizontal band, shown on the UNROTATED
-        # original frame. We need: rotated_coords -> original_coords.
-        #
-        # Forward (extraction): orig -> rotated uses R(-angle).
-        # Inverse: rotated -> orig uses R(+angle). BUT we must use R(-angle)
-        # here because we are SHOWING THE CROP REGION, not the spectrum orientation.
-        # The crop in rotated space is horizontal. On the original, that region
-        # comes from a parallelogram tilted THE SAME WAY as the spectrum (we
-        # straighten the spectrum, so the crop-backprojection follows the tilt).
-        # Using R(+angle) gives the wrong tilt. Using R(-angle) = same as
-        # extraction = correct: the box on original overlaps the spectrum.
+        # R(+angle): x' = x*cos - y*sin,  y' = x*sin + y*cos
+        # Signs: x term gets -y*sin, y term gets +x*sin. If you use +y*sin and -x*sin
+        # you get R(-angle) which is WRONG - the box tilts opposite to the spectrum.
+        # DO NOT "fix" this by flipping signs; the current signs are correct.
         center = (original_width / 2, original_height / 2)
         angle_rad = np.radians(rotation_angle)
         cos_a = np.cos(angle_rad)
@@ -707,9 +682,9 @@ class DisplayManager:
         for x, y in corners_rotated:
             x_c = x - center[0]
             y_c = y - center[1]
-            # OPPOSITE of inverse: use R(-angle) so box aligns with spectrum
-            x_r = x_c * cos_a + y_c * sin_a
-            y_r = -x_c * sin_a + y_c * cos_a
+            # Inverse R(+angle): rotated -> original
+            x_r = x_c * cos_a - y_c * sin_a
+            y_r = x_c * sin_a + y_c * cos_a
             x_orig = x_r + center[0]
             y_orig = y_r + center[1]
             corners_original.append([x_orig, y_orig])
@@ -733,9 +708,9 @@ class DisplayManager:
         for x, y in center_line_rot:
             x_c = x - center[0]
             y_c = y - center[1]
-            # Same R(-angle) as crop box (see comment above)
-            x_r = x_c * cos_a + y_c * sin_a
-            y_r = -x_c * sin_a + y_c * cos_a
+            # Same R(+angle) as crop box (inverse: rotated -> original)
+            x_r = x_c * cos_a - y_c * sin_a
+            y_r = x_c * sin_a + y_c * cos_a
             x_orig = x_r + center[0]
             y_orig = y_r + center[1]
             center_line_orig.append([int(x_orig * scale_x), int(y_orig * scale_y)])
