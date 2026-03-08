@@ -147,26 +147,26 @@ class Config:
         return config
     
     def apply_waveshare_preset(self) -> None:
-        """Apply settings optimized for Waveshare 3.5\" display (480x320)."""
-        self.camera.frame_width = 480
-        self.camera.frame_height = 360
+        """Apply settings optimized for Waveshare 3.5\" display (640x480)."""
+        self.camera.frame_width = 640
+        self.camera.frame_height = 480
         
-        self.display.graph_height = 200
-        self.display.preview_height = 50
-        self.display.message_height = 70
+        self.display.graph_height = 280
+        self.display.preview_height = 80
+        self.display.message_height = 120
         
-        self.display.font_scale = 0.3
+        self.display.font_scale = 0.4
         self.display.text_thickness = 1
-        self.display.status_col1_x = 250
-        self.display.status_col2_x = 370
+        self.display.status_col1_x = 340
+        self.display.status_col2_x = 500
         
-        self.calibration.default_pixels = (0, 240, 480)
+        self.calibration.default_pixels = (0, 320, 640)
         
-        self.processing.peak_min_distance = 30
+        self.processing.peak_min_distance = 40
     
     @classmethod
     def waveshare_35(cls) -> "Config":
-        """Create configuration for Waveshare 3.5\" display (480x320)."""
+        """Create configuration for Waveshare 3.5\" display (640x480)."""
         config = cls()
         config.apply_waveshare_preset()
         return config

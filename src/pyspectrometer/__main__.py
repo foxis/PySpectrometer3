@@ -49,7 +49,7 @@ Examples:
   pyspectrometer                    # Normal windowed mode (800x480)
   pyspectrometer --fullscreen       # Fullscreen mode
   pyspectrometer --waterfall        # With waterfall display
-  pyspectrometer --waveshare        # Waveshare 3.5" display (480x320)
+  pyspectrometer --waveshare        # Waveshare 3.5" display (640x480)
   pyspectrometer --waveshare --fullscreen  # Waveshare fullscreen
   pyspectrometer --gain 15          # Custom camera gain
 """,
@@ -70,7 +70,7 @@ Examples:
     parser.add_argument(
         "--waveshare",
         action="store_true",
-        help="Optimize for Waveshare 3.5\" touchscreen (480x320)",
+        help="Optimize for Waveshare 3.5\" touchscreen (640x480)",
     )
     
     parser.add_argument(
@@ -111,7 +111,7 @@ def main() -> int:
     args = parse_args()
     
     if args.waveshare:
-        print("Waveshare 3.5\" display mode (480x320)")
+        print("Waveshare 3.5\" display mode (640x480)")
     if args.fullscreen:
         print("Fullscreen Spectrometer enabled")
     if args.waterfall:
