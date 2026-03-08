@@ -252,11 +252,11 @@ class SpectrumExtractor:
         return frame[y_start:y_end, :].copy()
     
     def detect_angle(self, frame: np.ndarray, visualize: bool = False) -> tuple[float, Optional[np.ndarray]]:
-        """Auto-detect spectrum rotation angle from vertical spectral lines.
+        """Auto-detect spectrum rotation angle using gradient orientation analysis.
         
-        Detects near-vertical stripes (spectral lines) and measures their
-        deviation from true vertical. Returns the angle needed to rotate
-        the spectrum so lines become horizontal for proper extraction.
+        Analyzes horizontal gradients (edges of vertical stripes) and uses
+        PCA to find the dominant orientation. Works well with imperfect,
+        wide vertical stripes typical in spectrometer images.
         
         Args:
             frame: Input frame as BGR numpy array
@@ -268,95 +268,97 @@ class SpectrumExtractor:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         height, width = gray.shape
         
-        # Adaptive blur based on image size
-        blur_size = max(3, (min(width, height) // 100) | 1)
-        blurred = cv2.GaussianBlur(gray, (blur_size, blur_size), 0)
+        # Compute horizontal gradient (detects vertical edges/stripes)
+        # Use Sobel with larger kernel for noise robustness
+        ksize = max(3, (min(width, height) // 80) | 1)
+        if ksize % 2 == 0:
+            ksize += 1
+        ksize = min(ksize, 31)
         
-        # Use adaptive thresholding for better edge detection on varied lighting
-        block_size = max(11, (min(width, height) // 20) | 1)
-        edges = cv2.adaptiveThreshold(
-            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY, block_size, 2
-        )
-        edges = cv2.Canny(edges, 30, 100)
+        grad_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=ksize)
+        grad_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=ksize)
         
-        # Morphological operations to connect broken edges
-        kernel_height = max(3, height // 30)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, kernel_height))
-        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+        # Compute gradient magnitude
+        magnitude = np.sqrt(grad_x**2 + grad_y**2)
         
-        # Minimum line length based on image height (stripes are tall)
-        min_line_length = height // 4
-        max_line_gap = height // 15
+        # Threshold to keep only strong gradients
+        mag_thresh = np.percentile(magnitude, 90)
+        strong_mask = magnitude > mag_thresh
         
-        lines = cv2.HoughLinesP(
-            edges,
-            rho=1,
-            theta=np.pi / 180,
-            threshold=max(30, height // 10),
-            minLineLength=min_line_length,
-            maxLineGap=max_line_gap,
-        )
+        # Get coordinates of strong gradient points
+        y_coords, x_coords = np.where(strong_mask)
         
-        if lines is None or len(lines) == 0:
+        if len(x_coords) < 10:
             return 0.0, None
         
-        angles = []
-        lengths = []
+        # Weight points by gradient magnitude
+        weights = magnitude[strong_mask]
         
-        for line in lines:
-            x1, y1, x2, y2 = line[0]
-            dx = x2 - x1
-            dy = y2 - y1
-            length = np.sqrt(dx * dx + dy * dy)
-            
-            # Calculate angle from vertical (90 degrees)
-            # atan2 gives angle from horizontal, so vertical is ±90°
-            angle_from_horizontal = np.degrees(np.arctan2(dy, dx))
-            
-            # Convert to deviation from vertical
-            # Vertical lines have angle_from_horizontal near ±90°
-            if angle_from_horizontal > 0:
-                angle_from_vertical = angle_from_horizontal - 90
-            else:
-                angle_from_vertical = angle_from_horizontal + 90
-            
-            # Only consider near-vertical lines (within 45° of vertical)
-            if abs(angle_from_vertical) < 45:
-                angles.append(angle_from_vertical)
-                lengths.append(length)
+        # Compute weighted centroid
+        total_weight = np.sum(weights)
+        cx = np.sum(x_coords * weights) / total_weight
+        cy = np.sum(y_coords * weights) / total_weight
         
-        if not angles:
-            return 0.0, None
+        # Center the coordinates
+        x_centered = x_coords - cx
+        y_centered = y_coords - cy
         
-        lengths = np.array(lengths)
-        angles = np.array(angles)
+        # Compute weighted covariance matrix for PCA
+        cov_xx = np.sum(weights * x_centered * x_centered) / total_weight
+        cov_yy = np.sum(weights * y_centered * y_centered) / total_weight
+        cov_xy = np.sum(weights * x_centered * y_centered) / total_weight
         
-        # Weight by line length
-        weights = lengths / np.sum(lengths)
-        detected_angle = float(np.sum(angles * weights))
+        cov_matrix = np.array([[cov_xx, cov_xy], [cov_xy, cov_yy]])
+        
+        # Compute eigenvalues and eigenvectors
+        eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
+        
+        # The eigenvector with largest eigenvalue is the principal direction
+        # For vertical stripes, this should be near-vertical
+        principal_idx = np.argmax(eigenvalues)
+        principal_vec = eigenvectors[:, principal_idx]
+        
+        # Calculate angle from vertical (y-axis)
+        # principal_vec is (vx, vy), vertical is (0, 1)
+        # Angle from vertical = atan2(vx, vy)
+        angle_from_vertical = np.degrees(np.arctan2(principal_vec[0], principal_vec[1]))
+        
+        # Normalize to [-45, 45] range (stripes should be near-vertical)
+        if angle_from_vertical > 45:
+            angle_from_vertical -= 90
+        elif angle_from_vertical < -45:
+            angle_from_vertical += 90
+        
+        detected_angle = float(angle_from_vertical)
         
         vis_image = None
         if visualize:
             vis_image = frame.copy()
             
-            # Draw detected lines
-            for line in lines:
-                x1, y1, x2, y2 = line[0]
-                cv2.line(vis_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            # Draw gradient strength overlay
+            mag_normalized = (magnitude / magnitude.max() * 255).astype(np.uint8)
+            mag_colored = cv2.applyColorMap(mag_normalized, cv2.COLORMAP_JET)
+            vis_image = cv2.addWeighted(vis_image, 0.6, mag_colored, 0.4, 0)
             
-            # Draw the detected angle indicator (horizontal line showing correction)
-            center_x = width // 2
-            center_y = height // 2
-            line_len = width // 3
-            angle_rad = np.radians(detected_angle)
+            # Draw centroid
+            cv2.circle(vis_image, (int(cx), int(cy)), 8, (255, 255, 255), 2)
             
-            x1 = int(center_x - line_len * np.cos(angle_rad))
-            y1 = int(center_y - line_len * np.sin(angle_rad))
-            x2 = int(center_x + line_len * np.cos(angle_rad))
-            y2 = int(center_y + line_len * np.sin(angle_rad))
+            # Draw principal axis (should align with vertical stripes)
+            line_len = min(width, height) // 2
+            vx, vy = principal_vec
+            x1 = int(cx - line_len * vx)
+            y1 = int(cy - line_len * vy)
+            x2 = int(cx + line_len * vx)
+            y2 = int(cy + line_len * vy)
+            cv2.line(vis_image, (x1, y1), (x2, y2), (0, 255, 0), 3)
             
-            cv2.line(vis_image, (x1, y1), (x2, y2), (0, 0, 255), 3)
+            # Draw what horizontal should be after correction
+            corr_angle_rad = np.radians(detected_angle)
+            hx1 = int(cx - line_len * np.cos(corr_angle_rad))
+            hy1 = int(cy - line_len * np.sin(corr_angle_rad))
+            hx2 = int(cx + line_len * np.cos(corr_angle_rad))
+            hy2 = int(cy + line_len * np.sin(corr_angle_rad))
+            cv2.line(vis_image, (hx1, hy1), (hx2, hy2), (0, 0, 255), 2)
             
             cv2.putText(
                 vis_image,
@@ -369,7 +371,7 @@ class SpectrumExtractor:
             )
             cv2.putText(
                 vis_image,
-                f"Lines: {len(angles)}",
+                f"Points: {len(x_coords)}",
                 (10, 60),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.8,
