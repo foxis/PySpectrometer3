@@ -742,14 +742,7 @@ class Spectrometer:
         self._extractor.set_rotation_angle(angle)
         self._extractor.set_spectrum_y_center(y_center)
         print(f"[AutoLevel] Rotation: {angle:.2f}°  Y Center: {y_center}")
-
-        # Persist extraction params (including crop window Y offset) to cal file
-        if self._calibration.save_extraction_params(
-            rotation_angle=self._extractor.rotation_angle,
-            spectrum_y_center=self._extractor.spectrum_y_center,
-            perpendicular_width=self._extractor.perpendicular_width,
-        ):
-            print("[AutoLevel] Config saved (rotation, Y offset, perp width)")
+        # AutoLevel only sets values. Click Save to persist.
 
         if vis_image is not None:
             self._autolevel_overlay = vis_image

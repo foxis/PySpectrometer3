@@ -193,23 +193,27 @@ class Calibration:
         self._rotation_angle = rotation_angle
         self._spectrum_y_center = spectrum_y_center
         self._perpendicular_width = perpendicular_width
-        
+
         try:
-            pixels, wavelengths, has_errors = self._read_cal_file()
+            pixels, wavelengths, has_errors = self._read_pixels_wavelengths_only()
             if has_errors:
                 pixels = list(self.default_pixels)
                 wavelengths = list(self.default_wavelengths)
-            
+
             pixels_str = ",".join(map(str, pixels))
             wavelengths_str = ",".join(map(str, wavelengths))
-            
+
             with open(self.cal_file, "w") as f:
                 f.write(f"{pixels_str}\r\n")
                 f.write(f"{wavelengths_str}\r\n")
-                f.write(f"{self._rotation_angle}\r\n")
-                f.write(f"{self._spectrum_y_center}\r\n")
-                f.write(f"{self._perpendicular_width}\r\n")
-            
+                f.write(f"{rotation_angle}\r\n")
+                f.write(f"{spectrum_y_center}\r\n")
+                f.write(f"{perpendicular_width}\r\n")
+
+            self._rotation_angle = rotation_angle
+            self._spectrum_y_center = spectrum_y_center
+            self._perpendicular_width = perpendicular_width
+
             print(f"Extraction params saved: angle={rotation_angle:.2f}°, y={spectrum_y_center}, width={perpendicular_width}")
             return True
             
@@ -274,6 +278,23 @@ class Calibration:
         
         return True
     
+    def _read_pixels_wavelengths_only(self) -> tuple[list[int], list[float], bool]:
+        """Read only pixels and wavelengths (lines 0-1). No side effects on extraction params."""
+        pixels: list[int] = []
+        wavelengths: list[float] = []
+        try:
+            with open(self.cal_file, "r") as f:
+                lines = f.readlines()
+            line0 = lines[0].strip()
+            pixels = [int(x) for x in line0.split(",")]
+            line1 = lines[1].strip()
+            wavelengths = [float(x) for x in line1.split(",")]
+            if len(pixels) != len(wavelengths) or len(pixels) < 3:
+                return pixels, wavelengths, True
+        except (OSError, IndexError, ValueError):
+            return pixels, wavelengths, True
+        return pixels, wavelengths, False
+
     def _read_cal_file(self) -> tuple[list[int], list[float], bool]:
         """Read calibration data from file.
         Pixels/wavelengths (lines 0-1) and extraction params (lines 2-4)
