@@ -107,7 +107,7 @@ class DisplayManager:
         title2 = self.config.waterfall_title
         
         if self.config.display.waterfall_enabled:
-            cv2.namedWindow(title2, cv2.WINDOW_NORMAL)
+            cv2.namedWindow(title2, cv2.WINDOW_AUTOSIZE)
             cv2.moveWindow(title2, 200, 200)
         
         if self.config.display.fullscreen:
@@ -118,8 +118,8 @@ class DisplayManager:
                 cv2.WINDOW_FULLSCREEN,
             )
         else:
-            # Use WINDOW_NORMAL to allow window to resize and fit content
-            cv2.namedWindow(title1, cv2.WINDOW_NORMAL)
+            # Use WINDOW_AUTOSIZE for no resize controls, WINDOW_GUI_NORMAL for no toolbar
+            cv2.namedWindow(title1, cv2.WINDOW_AUTOSIZE | cv2.WINDOW_GUI_NORMAL)
             cv2.moveWindow(title1, 0, 0)
         
         cv2.setMouseCallback(title1, self._handle_mouse)
@@ -222,27 +222,28 @@ class DisplayManager:
         )
         messages = self._control_bar.render()
         
-        # Handle preview mode
+        # Handle preview mode - ensure cropped is always correct height
         cropped = data.cropped_frame
+        
+        # Ensure cropped frame is exactly preview_height
+        if cropped is not None:
+            if cropped.shape[0] != preview_height:
+                cropped = cv2.resize(cropped, (width, preview_height))
+        else:
+            cropped = np.zeros([preview_height, width, 3], dtype=np.uint8)
+        
         match self._preview_mode:
             case "none":
                 # No preview - just graph with messages
                 spectrum_vertical = np.vstack((messages, graph))
             case "window":
                 # Windowed preview (cropped)
-                if cropped is not None:
-                    self._draw_sampling_lines(cropped, rotation_angle, perp_width)
-                else:
-                    cropped = np.zeros([preview_height, width, 3], dtype=np.uint8)
+                self._draw_sampling_lines(cropped, rotation_angle, perp_width)
                 spectrum_vertical = np.vstack((messages, cropped, graph))
             case "full":
-                # Full camera view (raw frame scaled)
+                # Full camera view (raw frame scaled to preview_height)
                 raw_frame = data.raw_frame
                 if raw_frame is not None:
-                    # Scale to fit preview area width, keep aspect
-                    h, w = raw_frame.shape[:2] if raw_frame.ndim >= 2 else (preview_height, width)
-                    scale = width / w
-                    new_h = int(h * scale)
                     if raw_frame.ndim == 2:
                         # Monochrome - convert to BGR
                         if raw_frame.dtype == np.uint16:
@@ -252,17 +253,14 @@ class DisplayManager:
                         display = cv2.cvtColor(display, cv2.COLOR_GRAY2BGR)
                     else:
                         display = raw_frame
-                    display = cv2.resize(display, (width, new_h))
+                    # Scale to exact preview dimensions
+                    display = cv2.resize(display, (width, preview_height))
                     spectrum_vertical = np.vstack((messages, display, graph))
                 else:
-                    cropped = np.zeros([preview_height, width, 3], dtype=np.uint8)
                     spectrum_vertical = np.vstack((messages, cropped, graph))
             case _:
                 # Default to windowed
-                if cropped is not None:
-                    self._draw_sampling_lines(cropped, rotation_angle, perp_width)
-                else:
-                    cropped = np.zeros([preview_height, width, 3], dtype=np.uint8)
+                self._draw_sampling_lines(cropped, rotation_angle, perp_width)
                 spectrum_vertical = np.vstack((messages, cropped, graph))
         
         cv2.imshow(self.config.spectrograph_title, spectrum_vertical)

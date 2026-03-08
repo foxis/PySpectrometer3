@@ -253,18 +253,24 @@ class ControlBar:
         return image
     
     def _render_status(self, image: np.ndarray) -> None:
-        """Render status values on the right side."""
+        """Render status values on the right side, respecting height limits."""
         cfg = self.config
         font = cv2.FONT_HERSHEY_SIMPLEX
         
-        status_x = self.width - 200
-        y = cfg.margin_y + 12
-        line_height = 14
+        status_x = self.width - 120
+        line_height = int(12 * (cfg.font_scale / 0.35))
+        line_height = max(10, min(line_height, 14))
+        
+        # Start after margin, limit to available height
+        y = cfg.margin_y + line_height
+        max_y = cfg.height - cfg.margin_y
         
         color = (0, 200, 200)
         
         for key, value in self._status_values.items():
-            text = f"{key}: {value}"
+            if y > max_y:
+                break
+            text = f"{key}:{value}"
             cv2.putText(
                 image,
                 text,
