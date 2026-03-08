@@ -20,6 +20,7 @@ from .display.renderer import DisplayManager
 from .export.csv_exporter import CSVExporter
 from .input.keyboard import KeyboardHandler, Action
 from .modes.calibration import CalibrationMode
+from .modes.measurement import MeasurementMode
 from .data.reference_spectra import ReferenceSource
 
 
@@ -120,10 +121,15 @@ class Spectrometer:
         self._keyboard = KeyboardHandler()
         self._reference_manager = ReferenceSpectrumManager()
         
-        # Mode-specific handler
+        # Mode-specific handlers
         self._calibration_mode: Optional[CalibrationMode] = None
-        if mode == "calibration":
-            self._calibration_mode = CalibrationMode()
+        self._measurement_mode: Optional[MeasurementMode] = None
+        
+        match mode:
+            case "calibration":
+                self._calibration_mode = CalibrationMode()
+            case "measurement":
+                self._measurement_mode = MeasurementMode()
         
         self._held_intensity: Optional[np.ndarray] = None
         self._running = False
@@ -176,20 +182,20 @@ class Spectrometer:
         """Register callbacks for measurement mode buttons."""
         display = self._display
         
+        # Capture and references
+        display.register_button_callback("capture", self._on_capture_current)
+        display.register_button_callback("toggle_averaging", self._on_toggle_averaging_meas)
+        display.register_button_callback("set_dark", self._on_set_dark)
+        display.register_button_callback("set_white", self._on_set_white)
+        display.register_button_callback("clear_refs", self._on_clear_refs)
         display.register_button_callback("save", self._on_button_save)
-        display.register_button_callback("capture_current", self._on_capture_current)
-        display.register_button_callback("load_reference", self._on_load_reference)
-        display.register_button_callback("use_as_reference", self._on_use_as_reference)
-        display.register_button_callback("capture_dark", self._on_capture_dark)
-        display.register_button_callback("auto_gain", self._on_toggle_auto_gain)
-        display.register_button_callback("light_toggle", self._on_toggle_light)
-        display.register_button_callback("fit_xyz", self._on_fit_xyz)
-        display.register_button_callback("toggle_pixel_mode", self._on_toggle_pixel_mode)
-        display.register_button_callback("toggle_measure", self._on_toggle_measure)
-        display.register_button_callback("calibrate", self._on_calibrate)
-        display.register_button_callback("clear_clicks", self._on_clear_clicks)
-        display.register_button_callback("cycle_extraction", self._on_cycle_extraction)
-        display.register_button_callback("auto_detect_angle", self._on_auto_detect_angle)
+        display.register_button_callback("load", self._on_load_spectrum)
+        
+        # Display and control
+        display.register_button_callback("show_reference", self._on_toggle_show_reference)
+        display.register_button_callback("normalize", self._on_toggle_normalize)
+        display.register_button_callback("auto_gain", self._on_toggle_auto_gain_meas)
+        display.register_button_callback("lamp_toggle", self._on_toggle_light)
     
     def _register_calibration_callbacks(self) -> None:
         """Register callbacks for calibration mode buttons."""
@@ -229,7 +235,22 @@ class Spectrometer:
     
     def _on_capture_current(self) -> None:
         """Handle capture current spectrum."""
-        print("[CAPTURE] Capturing current spectrum (not implemented yet)")
+        if self._last_data is None:
+            print("[CAPTURE] No spectrum data available")
+            return
+        
+        if self._measurement_mode is not None:
+            self._measurement_mode.capture_current(
+                self._last_data.intensity,
+                self._last_data.wavelengths,
+            )
+            # Also set as reference for overlay/normalization
+            self._measurement_mode.set_reference_spectrum(
+                self._last_data.intensity,
+                "Captured",
+            )
+        else:
+            print("[CAPTURE] Spectrum captured")
     
     def _on_load_reference(self) -> None:
         """Handle load reference button."""
@@ -259,6 +280,71 @@ class Spectrometer:
     def _on_fit_xyz(self) -> None:
         """Handle XYZ curve fitting."""
         print("[XYZ] Fit XYZ curves (not implemented yet)")
+    
+    # Measurement mode specific handlers
+    
+    def _on_toggle_averaging_meas(self) -> None:
+        """Handle toggle averaging in measurement mode."""
+        if self._measurement_mode is None:
+            return
+        
+        enabled = self._measurement_mode.toggle_averaging()
+        self._display.set_button_active("toggle_averaging", enabled)
+    
+    def _on_set_dark(self) -> None:
+        """Handle set dark reference."""
+        if self._measurement_mode is None or self._last_data is None:
+            print("[DARK] No spectrum data available")
+            return
+        
+        self._measurement_mode.set_dark_reference(self._last_data.intensity)
+    
+    def _on_set_white(self) -> None:
+        """Handle set white reference."""
+        if self._measurement_mode is None or self._last_data is None:
+            print("[WHITE] No spectrum data available")
+            return
+        
+        self._measurement_mode.set_white_reference(self._last_data.intensity)
+    
+    def _on_clear_refs(self) -> None:
+        """Handle clear all references."""
+        if self._measurement_mode is None:
+            return
+        
+        self._measurement_mode.clear_references()
+        self._display.set_button_active("show_reference", False)
+        self._display.set_button_active("normalize", False)
+    
+    def _on_load_spectrum(self) -> None:
+        """Handle load spectrum from file."""
+        print("[LOAD] Load spectrum (file dialog not implemented yet)")
+    
+    def _on_toggle_show_reference(self) -> None:
+        """Handle toggle show reference overlay."""
+        if self._measurement_mode is None:
+            return
+        
+        enabled = self._measurement_mode.toggle_show_reference()
+        self._display.set_button_active("show_reference", enabled)
+    
+    def _on_toggle_normalize(self) -> None:
+        """Handle toggle normalization to reference."""
+        if self._measurement_mode is None:
+            return
+        
+        enabled = self._measurement_mode.toggle_normalize()
+        self._display.set_button_active("normalize", enabled)
+    
+    def _on_toggle_auto_gain_meas(self) -> None:
+        """Handle toggle auto gain in measurement mode."""
+        if self._measurement_mode is None:
+            return
+        
+        self._measurement_mode.state.auto_gain_enabled = not self._measurement_mode.state.auto_gain_enabled
+        enabled = self._measurement_mode.state.auto_gain_enabled
+        self._display.set_button_active("auto_gain", enabled)
+        print(f"[AUTO_GAIN] {'ON' if enabled else 'OFF'}")
     
     # Calibration mode specific handlers
     
@@ -596,9 +682,14 @@ class Spectrometer:
                 else:
                     self._savgol_filter.enabled = True
                 
-                # Calibration mode spectrum averaging
+                # Mode-specific spectrum processing
                 if self._calibration_mode is not None:
                     intensity = self._calibration_mode.accumulate_spectrum(intensity)
+                elif self._measurement_mode is not None:
+                    intensity = self._measurement_mode.process_spectrum(
+                        intensity,
+                        self._calibration.wavelengths,
+                    )
                 
                 data = SpectrumData(
                     intensity=intensity,
@@ -611,7 +702,7 @@ class Spectrometer:
                 
                 self._last_data = processed
                 
-                # Handle calibration mode auto-gain
+                # Handle mode-specific auto-gain
                 if self._calibration_mode is not None and self._calibration_mode.state.auto_gain_enabled:
                     current_max = float(np.max(processed.intensity))
                     new_gain = self._calibration_mode.calculate_auto_gain_adjustment(
@@ -620,8 +711,16 @@ class Spectrometer:
                     )
                     if new_gain != self._camera.gain:
                         self._camera.gain = new_gain
+                elif self._measurement_mode is not None and self._measurement_mode.state.auto_gain_enabled:
+                    current_max = float(np.max(processed.intensity))
+                    new_gain = self._measurement_mode.calculate_auto_gain_adjustment(
+                        current_max,
+                        self._camera.gain,
+                    )
+                    if new_gain != self._camera.gain:
+                        self._camera.gain = new_gain
                 
-                # Update mode overlay (calibration reference)
+                # Update mode overlay
                 if self._calibration_mode is not None:
                     overlay = self._calibration_mode.get_overlay(
                         processed.wavelengths,
@@ -638,8 +737,18 @@ class Spectrometer:
                         self._display._control_bar.set_status("Status", f"AVG:{self._calibration_mode.state.accumulated_frames}")
                     else:
                         self._display._control_bar.set_status("Status", "LIVE")
+                elif self._measurement_mode is not None:
+                    overlay = self._measurement_mode.get_overlay(
+                        processed.wavelengths,
+                        self.config.display.graph_height,
+                    )
+                    self._display.set_mode_overlay(overlay)
+                    
+                    # Update status display
+                    for key, value in self._measurement_mode.get_status().items():
+                        self._display._control_bar.set_status(key, value)
                 else:
-                    # Update reference spectrum overlay for other modes
+                    # Legacy mode: update reference spectrum overlay
                     ref_intensity = self._reference_manager.get_interpolated(
                         processed.wavelengths,
                         processed.intensity,

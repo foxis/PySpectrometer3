@@ -469,7 +469,55 @@ cd /home/pi/PySpectrometer3
 - Reference sources include characteristic spectral lines
 - White LED has blue peak (~450nm) and broad phosphor (~550nm)
 
-### ⏳ Measurement Mode - PENDING
+### ✅ Measurement Mode - IMPLEMENTED
+
+**Files Created/Modified**:
+- `src/pyspectrometer/modes/measurement.py` - Measurement mode implementation
+- `src/pyspectrometer/modes/__init__.py` - Added MeasurementMode export
+- `src/pyspectrometer/gui/control_bar.py` - Added MEASUREMENT_BUTTONS layout
+- `src/pyspectrometer/spectrometer.py` - Measurement mode integration
+
+**GUI Controls**:
+| Button | Action | Description |
+|--------|--------|-------------|
+| Capture | capture | Capture current spectrum as reference |
+| Peak | capture_peak | Peak hold mode |
+| Avg | toggle_averaging | Toggle spectrum averaging |
+| Dark | set_dark | Set dark/black reference |
+| White | set_white | Set white reference |
+| ClrRef | clear_refs | Clear all references |
+| Save | save | Save spectrum to file |
+| Load | load | Load spectrum from file |
+| ShowRef | show_reference | Toggle reference overlay |
+| Norm | normalize | Toggle normalization to reference |
+| AutoG | auto_gain | Toggle automatic gain control |
+| Gain+/- | gain_up/down | Manual gain adjustment |
+| Lamp | lamp_toggle | Toggle GPIO 22 lamp |
+| Quit | quit | Exit application |
+
+**Measurement Workflow**:
+1. `make measure` to start measurement mode
+2. Optional: Click `Dark` with covered sensor to set dark reference
+3. Optional: Click `White` with white reference to set baseline
+4. Point spectrometer at sample
+5. Click `Capture` to capture and set as reference
+6. Enable `ShowRef` to overlay reference spectrum
+7. Enable `Norm` to normalize measured spectrum to reference
+8. Click `Save` to save current spectrum to CSV
+
+**Features**:
+- Dark subtraction: Automatically subtracts dark spectrum if set
+- White normalization: Normalizes to white reference for reflectance/transmittance
+- Reference overlay: Display captured reference as gray overlay
+- Reference normalization: Compute ratio to reference spectrum
+- Averaging: Accumulate multiple spectra for noise reduction
+- Auto-gain: Automatic gain adjustment to keep spectrum in range
+
+**Technical Notes**:
+- Dark and white references are subtracted/normalized before display
+- Captured spectrum is automatically set as reference for overlay/normalization
+- Status bar shows "Dark", "White", "Ref" when references are set
+- Status bar shows averaging count when enabled
 
 ### ⏳ Raman Mode - PENDING
 
@@ -477,6 +525,6 @@ cd /home/pi/PySpectrometer3
 
 ---
 
-*Document Version: 1.1*
+*Document Version: 1.2*
 *Updated: 2026-03-08*
 *Author: AI Assistant*

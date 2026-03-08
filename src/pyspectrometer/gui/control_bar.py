@@ -36,29 +36,29 @@ class ButtonDef:
     row: int = 1
 
 
-# Default buttons for measurement mode
-DEFAULT_BUTTONS = [
-    # Row 1
-    ButtonDef("Capture", "capture_current", row=1),
+# Measurement mode buttons
+MEASUREMENT_BUTTONS = [
+    # Row 1: Capture and references
+    ButtonDef("Capture", "capture", row=1),
     ButtonDef("Peak", "capture_peak", is_toggle=True, shortcut="h", row=1),
+    ButtonDef("Avg", "toggle_averaging", is_toggle=True, row=1),
+    ButtonDef("Dark", "set_dark", row=1),
+    ButtonDef("White", "set_white", row=1),
+    ButtonDef("ClrRef", "clear_refs", row=1),
     ButtonDef("Save", "save", shortcut="s", row=1),
-    ButtonDef("Load", "load_reference", row=1),
-    ButtonDef("Ref", "use_as_reference", row=1),
-    ButtonDef("Dark", "capture_dark", is_toggle=True, row=1),
-    ButtonDef("Gain+", "gain_up", shortcut="t", row=1),
-    ButtonDef("Gain-", "gain_down", shortcut="g", row=1),
-    ButtonDef("AutoG", "auto_gain", is_toggle=True, row=1),
-    # Row 2
-    ButtonDef("Light", "light_toggle", is_toggle=True, row=2),
-    ButtonDef("XYZ", "fit_xyz", row=2),
-    ButtonDef("PixMode", "toggle_pixel_mode", is_toggle=True, shortcut="p", row=2),
-    ButtonDef("Measure", "toggle_measure", is_toggle=True, shortcut="m", row=2),
-    ButtonDef("Cal", "calibrate", shortcut="c", row=2),
-    ButtonDef("ClearPts", "clear_clicks", shortcut="x", row=2),
-    ButtonDef("Ext", "cycle_extraction", shortcut="e", row=2),
-    ButtonDef("AutoAng", "auto_detect_angle", shortcut="a", row=2),
+    ButtonDef("Load", "load", row=1),
+    # Row 2: Display and control
+    ButtonDef("ShowRef", "show_reference", is_toggle=True, row=2),
+    ButtonDef("Norm", "normalize", is_toggle=True, row=2),
+    ButtonDef("AutoG", "auto_gain", is_toggle=True, row=2),
+    ButtonDef("Gain+", "gain_up", shortcut="t", row=2),
+    ButtonDef("Gain-", "gain_down", shortcut="g", row=2),
+    ButtonDef("Lamp", "lamp_toggle", is_toggle=True, row=2),
     ButtonDef("Quit", "quit", shortcut="q", row=2),
 ]
+
+# Default buttons (legacy, for non-mode operation)
+DEFAULT_BUTTONS = MEASUREMENT_BUTTONS
 
 # Calibration mode buttons
 CALIBRATION_BUTTONS = [
@@ -145,7 +145,13 @@ class ControlBar:
         )
         
         # Select button set based on mode
-        buttons = CALIBRATION_BUTTONS if mode == "calibration" else DEFAULT_BUTTONS
+        match mode:
+            case "calibration":
+                buttons = CALIBRATION_BUTTONS
+            case "measurement":
+                buttons = MEASUREMENT_BUTTONS
+            case _:
+                buttons = DEFAULT_BUTTONS
         
         for btn_def in buttons:
             bar = self._row1 if btn_def.row == 1 else self._row2
