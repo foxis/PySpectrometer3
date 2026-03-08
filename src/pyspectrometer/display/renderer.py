@@ -680,15 +680,24 @@ class DisplayManager:
             [0, y_bottom_rot],
         ], dtype=np.float32)
         
-        # To get corners in ORIGINAL coordinates, we need the INVERSE of extraction's
-        # rotation. Extraction uses getRotationMatrix2D(center, -angle, 1.0) to
-        # STRAIGHTEN stripes: it rotates the image so tilted stripes become vertical.
-        # OpenCV: positive angle = CCW rotation of image. So -angle = CW rotation.
+        # ROTATION DIRECTION MUST BE OPPOSITE TO EXTRACTION
         #
-        # Forward: original -> straightened. Image is rotated CW by angle.
-        # Inverse: straightened coords -> original. Rotate points CCW by angle.
-        # (CW placed box below spectrum; CCW centers it.)
-        # Counter-clockwise: x' = x*cos(θ)-y*sin(θ), y' = x*sin(θ)+y*cos(θ)
+        # Extraction: we ROTATE THE IMAGE by -angle to straighten the spectrum.
+        #   warpAffine(frame, getRotationMatrix2D(center, -angle, 1.0))
+        #   So the SPECTRUM (tilted in original) becomes horizontal in rotated.
+        #
+        # We CROP a horizontal band in the ROTATED image (after straightening).
+        # The crop box we draw is that horizontal band, shown on the UNROTATED
+        # original frame. We need: rotated_coords -> original_coords.
+        #
+        # Forward (extraction): orig -> rotated uses R(-angle).
+        # Inverse: rotated -> orig uses R(+angle). BUT we must use R(-angle)
+        # here because we are SHOWING THE CROP REGION, not the spectrum orientation.
+        # The crop in rotated space is horizontal. On the original, that region
+        # comes from a parallelogram tilted THE SAME WAY as the spectrum (we
+        # straighten the spectrum, so the crop-backprojection follows the tilt).
+        # Using R(+angle) gives the wrong tilt. Using R(-angle) = same as
+        # extraction = correct: the box on original overlaps the spectrum.
         center = (original_width / 2, original_height / 2)
         angle_rad = np.radians(rotation_angle)
         cos_a = np.cos(angle_rad)
@@ -698,9 +707,9 @@ class DisplayManager:
         for x, y in corners_rotated:
             x_c = x - center[0]
             y_c = y - center[1]
-            # Counter-clockwise rotation
-            x_r = x_c * cos_a - y_c * sin_a
-            y_r = x_c * sin_a + y_c * cos_a
+            # OPPOSITE of inverse: use R(-angle) so box aligns with spectrum
+            x_r = x_c * cos_a + y_c * sin_a
+            y_r = -x_c * sin_a + y_c * cos_a
             x_orig = x_r + center[0]
             y_orig = y_r + center[1]
             corners_original.append([x_orig, y_orig])
@@ -724,8 +733,9 @@ class DisplayManager:
         for x, y in center_line_rot:
             x_c = x - center[0]
             y_c = y - center[1]
-            x_r = x_c * cos_a - y_c * sin_a
-            y_r = x_c * sin_a + y_c * cos_a
+            # Same R(-angle) as crop box (see comment above)
+            x_r = x_c * cos_a + y_c * sin_a
+            y_r = -x_c * sin_a + y_c * cos_a
             x_orig = x_r + center[0]
             y_orig = y_r + center[1]
             center_line_orig.append([int(x_orig * scale_x), int(y_orig * scale_y)])

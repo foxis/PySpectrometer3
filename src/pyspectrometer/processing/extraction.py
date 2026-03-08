@@ -83,12 +83,14 @@ class SpectrumExtractor:
         self._precompute_sampling_coords()
     
     def _precompute_sampling_coords(self) -> None:
-        """Precompute rotation matrix for current rotation angle."""
-        # Rotation center is frame center
-        self._rotation_center = (self.frame_width // 2, self.frame_height // 2)
+        """Precompute rotation matrix for current rotation angle.
         
-        # Rotation matrix to straighten the spectrum
-        # Negative angle because we want to correct/undo the tilt
+        We ROTATE THE IMAGE (not the crop box) to straighten the spectrum.
+        getRotationMatrix2D(center, -angle, 1): OpenCV positive = CCW.
+        So -angle rotates image CCW by angle, straightening CW-tilted stripes.
+        The crop is a horizontal band in the ROTATED (straightened) image.
+        """
+        self._rotation_center = (self.frame_width // 2, self.frame_height // 2)
         self._rotation_matrix = cv2.getRotationMatrix2D(
             self._rotation_center, -self.rotation_angle, 1.0
         )
