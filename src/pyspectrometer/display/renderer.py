@@ -608,18 +608,14 @@ class DisplayManager:
             [0, y_bottom_rot],
         ], dtype=np.float32)
         
-        # To get corners in ORIGINAL coordinates, we need to apply the
-        # INVERSE rotation. The extraction uses cv2.getRotationMatrix2D(center, -angle, 1.0)
-        # which rotates the image COUNTER-CLOCKWISE by `angle` (OpenCV uses positive = CCW).
-        # Wait, cv2 uses positive angle = CCW, so -angle means CLOCKWISE.
-        # So extraction rotates CLOCKWISE by `rotation_angle`.
-        # The inverse is COUNTER-CLOCKWISE by `rotation_angle`.
+        # To get corners in ORIGINAL coordinates, we need the INVERSE of extraction's
+        # rotation. Extraction uses getRotationMatrix2D(center, -angle, 1.0) to
+        # STRAIGHTEN stripes: it rotates the image so tilted stripes become vertical.
+        # OpenCV: positive angle = CCW rotation of image. So -angle = CW rotation.
         #
-        # But we're transforming POINTS, not the image. When an image is rotated CW,
-        # the points in the new image map back to original by rotating them CCW.
-        # Counter-clockwise rotation of a point by θ:
-        # x' = x*cos(θ) - y*sin(θ)
-        # y' = x*sin(θ) + y*cos(θ)
+        # Forward: original -> straightened. Image is rotated CW by angle.
+        # Inverse: straightened coords -> original. Rotate points CW by angle.
+        # Clockwise rotation: x' = x*cos(θ)+y*sin(θ), y' = -x*sin(θ)+y*cos(θ)
         center = (original_width / 2, original_height / 2)
         angle_rad = np.radians(rotation_angle)
         cos_a = np.cos(angle_rad)
@@ -627,14 +623,11 @@ class DisplayManager:
         
         corners_original = []
         for x, y in corners_rotated:
-            # Translate to origin (rotation center)
             x_c = x - center[0]
             y_c = y - center[1]
-            # Counter-clockwise rotation by rotation_angle
-            # (inverse of the CW rotation applied during extraction)
-            x_r = x_c * cos_a - y_c * sin_a
-            y_r = x_c * sin_a + y_c * cos_a
-            # Translate back
+            # Clockwise rotation (inverse of extraction's CW image rotation)
+            x_r = x_c * cos_a + y_c * sin_a
+            y_r = -x_c * sin_a + y_c * cos_a
             x_orig = x_r + center[0]
             y_orig = y_r + center[1]
             corners_original.append([x_orig, y_orig])
@@ -658,8 +651,8 @@ class DisplayManager:
         for x, y in center_line_rot:
             x_c = x - center[0]
             y_c = y - center[1]
-            x_r = x_c * cos_a - y_c * sin_a
-            y_r = x_c * sin_a + y_c * cos_a
+            x_r = x_c * cos_a + y_c * sin_a
+            y_r = -x_c * sin_a + y_c * cos_a
             x_orig = x_r + center[0]
             y_orig = y_r + center[1]
             center_line_orig.append([int(x_orig * scale_x), int(y_orig * scale_y)])

@@ -334,12 +334,13 @@ class SpectrumExtractor:
         Returns:
             Tuple of (detected_angle_degrees, optimal_y_center, visualization_image_or_None)
         """
-        # Convert to grayscale uint8
+        # Convert to grayscale uint8 (required for Sobel and display)
         if frame.ndim == 3:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         elif frame.dtype == np.uint16:
             # Scale high bit-depth to 8-bit
             max_val = max(frame.max(), 1)
+            print(f"[AutoLevel] uint16 frame: max_val={max_val}")
             if max_val > 255:
                 gray = (frame.astype(np.float32) * 255 / max_val).astype(np.uint8)
             else:
@@ -347,6 +348,7 @@ class SpectrumExtractor:
         else:
             gray = frame
         height, width = gray.shape
+        print(f"[AutoLevel] gray shape={gray.shape}, dtype={gray.dtype}, range=[{gray.min()},{gray.max()}]")
         
         # Compute horizontal gradient (detects vertical edges/stripes)
         # Use Sobel with larger kernel for noise robustness
@@ -447,12 +449,21 @@ class SpectrumExtractor:
         
         vis_image = None
         if visualize:
+            print("[AutoLevel] Building visualization...")
             # Show the ROTATED frame so user can see the corrected result
             rotated_frame = cv2.warpAffine(
                 frame, rotation_matrix, (width, height),
                 flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
             )
+            print(f"[AutoLevel] rotated_frame shape={rotated_frame.shape}, dtype={rotated_frame.dtype}")
             vis_image = rotated_frame.copy()
+            # cv2.imshow expects uint8; uint16 shows as black. Convert if needed.
+            if vis_image.dtype == np.uint16:
+                max_val = max(vis_image.max(), 1)
+                vis_image = (vis_image.astype(np.float32) * 255 / max_val).astype(np.uint8)
+                if vis_image.ndim == 2:
+                    vis_image = cv2.cvtColor(vis_image, cv2.COLOR_GRAY2BGR)
+                print(f"[AutoLevel] vis_image converted to uint8, shape={vis_image.shape}")
             
             # Draw horizontal line at optimal Y center (cyan)
             cv2.line(vis_image, (0, optimal_y_center), (width, optimal_y_center), (255, 255, 0), 2)
@@ -482,6 +493,7 @@ class SpectrumExtractor:
                 (0, 255, 255),
                 2,
             )
+            print("[AutoLevel] Visualization complete, returning")
         
         return detected_angle, optimal_y_center, vis_image
     

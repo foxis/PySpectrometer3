@@ -733,21 +733,30 @@ class Spectrometer:
         old_angle = self._extractor.rotation_angle
         old_y = self._extractor.spectrum_y_center
         
+        print("[AutoLevel] Calling detect_angle...")
         angle, y_center, vis_image = self._extractor.detect_angle(self._last_frame, visualize=True)
+        print("[AutoLevel] detect_angle returned")
         
         if vis_image is not None:
+            print(f"[AutoLevel] vis_image shape={vis_image.shape}, dtype={vis_image.dtype}")
+            print("[AutoLevel] Calling cv2.imshow...")
             cv2.imshow("Angle Detection", vis_image)
-            # Wait for 2 seconds or until key press, with short polling to avoid blocking
-            for _ in range(40):  # 40 * 50ms = 2 seconds
+            print("[AutoLevel] cv2.imshow done, entering waitKey loop...")
+            for i in range(20):
                 key = cv2.waitKey(50)
                 if key != -1:
+                    print(f"[AutoLevel] Key {key} pressed, exiting wait loop at iter {i}")
                     break
+            else:
+                print("[AutoLevel] Wait loop completed (1s timeout)")
+            print("[AutoLevel] Destroying window...")
             try:
                 cv2.destroyWindow("Angle Detection")
-            except cv2.error:
-                pass  # Window might already be closed
+                print("[AutoLevel] Window destroyed")
+            except cv2.error as e:
+                print(f"[AutoLevel] destroyWindow error: {e}")
         
-        # Apply both angle and Y center (do NOT auto-save - user saves with Save button)
+        print("[AutoLevel] Applying results...")
         self._extractor.set_rotation_angle(angle)
         self._extractor.set_spectrum_y_center(y_center)
         
