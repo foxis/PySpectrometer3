@@ -1,7 +1,7 @@
 """Main display manager for spectrum visualization."""
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 import cv2
 import numpy as np
 
@@ -9,6 +9,7 @@ from ..config import Config
 from ..core.spectrum import SpectrumData
 from ..core.calibration import Calibration
 from ..utils.color import wavelength_to_rgb, rgb_to_bgr
+from ..gui.control_bar import ControlBar, ControlBarConfig
 from .graticule import GraticuleRenderer
 from .waterfall import WaterfallDisplay
 
@@ -76,8 +77,17 @@ class DisplayManager:
                 brightness=config.waterfall.brightness,
             )
         
+        self._control_bar = ControlBar(
+            width=config.camera.frame_width,
+            config=ControlBarConfig(
+                height=config.display.message_height,
+                font_scale=config.display.font_scale,
+            ),
+        )
+        
         self._font = cv2.FONT_HERSHEY_SIMPLEX
         self._windows_created = False
+        self._use_control_bar = True
     
     def setup_windows(self) -> None:
         """Create and configure OpenCV windows."""
@@ -109,14 +119,23 @@ class DisplayManager:
     
     def _handle_mouse(self, event: int, x: int, y: int, flags: int, param) -> None:
         """Handle mouse events on the spectrum window."""
-        mouse_y_offset = 160
+        control_bar_height = self.config.display.message_height
+        preview_height = self.config.display.preview_height
+        mouse_y_offset = control_bar_height + preview_height
         
         if event == cv2.EVENT_MOUSEMOVE:
             self.state.cursor.x = x
             self.state.cursor.y = y
+            
+            if self._use_control_bar and y < control_bar_height:
+                self._control_bar.handle_mouse_move(x, y)
+        
         elif event == cv2.EVENT_LBUTTONDOWN:
-            mouse_y = y - mouse_y_offset
-            self.state.click_points.append((x, mouse_y))
+            if self._use_control_bar and y < control_bar_height:
+                self._control_bar.handle_click(x, y)
+            else:
+                mouse_y = y - mouse_y_offset
+                self.state.click_points.append((x, mouse_y))
     
     def render(
         self,
@@ -156,7 +175,19 @@ class DisplayManager:
         self._render_cursor(graph, data)
         self._render_click_points(graph)
         
-        messages = self._create_message_banner()
+        if self._use_control_bar:
+            self._update_control_bar_status(
+                camera_gain,
+                savgol_poly,
+                peak_min_dist,
+                peak_threshold,
+                extraction_method,
+                rotation_angle,
+                perp_width,
+            )
+            messages = self._control_bar.render()
+        else:
+            messages = self._create_message_banner()
         
         cropped = data.cropped_frame
         if cropped is not None:
@@ -625,6 +656,62 @@ class DisplayManager:
         if self._waterfall is not None:
             return self._waterfall.render()
         return None
+    
+    def register_button_callback(
+        self,
+        action_name: str,
+        callback: Callable[[], None],
+    ) -> bool:
+        """Register a callback for a control bar button.
+        
+        Args:
+            action_name: Name of the button action
+            callback: Function to call when button is clicked
+            
+        Returns:
+            True if button was found and callback registered
+        """
+        return self._control_bar.register_callback(action_name, callback)
+    
+    def set_button_active(self, action_name: str, active: bool) -> bool:
+        """Set the active state of a toggle button.
+        
+        Args:
+            action_name: Name of the button action
+            active: Whether button should appear active
+            
+        Returns:
+            True if button was found
+        """
+        return self._control_bar.set_button_active(action_name, active)
+    
+    def _update_control_bar_status(
+        self,
+        camera_gain: float,
+        savgol_poly: int,
+        peak_min_dist: int,
+        peak_threshold: int,
+        extraction_method: str,
+        rotation_angle: float,
+        perp_width: int,
+    ) -> None:
+        """Update status values displayed in the control bar."""
+        cal_result = self.calibration.result
+        
+        self._control_bar.set_status("Cal", cal_result.status_message[:12])
+        self._control_bar.set_status("Gain", f"{camera_gain:.0f}")
+        self._control_bar.set_status("SG", str(savgol_poly))
+        self._control_bar.set_status("Ext", extraction_method[:3].upper())
+        self._control_bar.set_status("Ang", f"{rotation_angle:.1f}")
+        self._control_bar.set_status("Wid", str(perp_width))
+        
+        if self.state.reference_name != "None":
+            self._control_bar.set_status("Ref", self.state.reference_name[:8])
+    
+    @property
+    def control_bar(self) -> ControlBar:
+        """Get the control bar instance."""
+        return self._control_bar
     
     def destroy(self) -> None:
         """Destroy all OpenCV windows."""

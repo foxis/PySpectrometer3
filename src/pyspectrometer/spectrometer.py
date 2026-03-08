@@ -112,6 +112,7 @@ class Spectrometer:
         self._last_frame: Optional[np.ndarray] = None
         
         self._register_key_callbacks()
+        self._register_button_callbacks()
     
     def _register_key_callbacks(self) -> None:
         """Register keyboard action callbacks."""
@@ -137,6 +138,69 @@ class Spectrometer:
         self._keyboard.register(Action.SAVE_EXTRACTION_PARAMS, self._on_save_extraction)
         self._keyboard.register(Action.CYCLE_REFERENCE_SPECTRUM, self._on_cycle_reference)
     
+    def _register_button_callbacks(self) -> None:
+        """Register callbacks for control bar buttons."""
+        display = self._display
+        
+        display.register_button_callback("quit", self._on_quit)
+        display.register_button_callback("save", self._on_button_save)
+        display.register_button_callback("capture_peak", self._on_toggle_hold)
+        display.register_button_callback("capture_current", self._on_capture_current)
+        display.register_button_callback("load_reference", self._on_load_reference)
+        display.register_button_callback("use_as_reference", self._on_use_as_reference)
+        display.register_button_callback("capture_dark", self._on_capture_dark)
+        display.register_button_callback("gain_up", self._on_gain_up)
+        display.register_button_callback("gain_down", self._on_gain_down)
+        display.register_button_callback("auto_gain", self._on_toggle_auto_gain)
+        display.register_button_callback("light_toggle", self._on_toggle_light)
+        display.register_button_callback("fit_xyz", self._on_fit_xyz)
+        display.register_button_callback("toggle_pixel_mode", self._on_toggle_pixel_mode)
+        display.register_button_callback("toggle_measure", self._on_toggle_measure)
+        display.register_button_callback("calibrate", self._on_calibrate)
+        display.register_button_callback("clear_clicks", self._on_clear_clicks)
+        display.register_button_callback("cycle_extraction", self._on_cycle_extraction)
+        display.register_button_callback("auto_detect_angle", self._on_auto_detect_angle)
+    
+    def _on_button_save(self) -> None:
+        """Handle save button click."""
+        if self._last_data is not None:
+            self._save_snapshot(self._last_data)
+        else:
+            print("[SAVE] No spectrum data available")
+    
+    def _on_capture_current(self) -> None:
+        """Handle capture current spectrum."""
+        print("[CAPTURE] Capturing current spectrum (not implemented yet)")
+    
+    def _on_load_reference(self) -> None:
+        """Handle load reference button."""
+        print("[LOAD] Load reference spectrum (not implemented yet)")
+    
+    def _on_use_as_reference(self) -> None:
+        """Handle use current spectrum as reference."""
+        if self._last_data is not None:
+            self._display.state.reference_spectrum = self._last_data.intensity.copy()
+            self._display.state.reference_name = "Current"
+            print("[REF] Set current spectrum as reference")
+        else:
+            print("[REF] No spectrum data available")
+    
+    def _on_capture_dark(self) -> None:
+        """Handle capture dark spectrum."""
+        print("[DARK] Capture dark spectrum (not implemented yet)")
+    
+    def _on_toggle_auto_gain(self) -> None:
+        """Handle toggle auto gain."""
+        print("[AUTO_GAIN] Toggle auto gain (not implemented yet)")
+    
+    def _on_toggle_light(self) -> None:
+        """Handle toggle light control."""
+        print("[LIGHT] Toggle light (GPIO not implemented yet)")
+    
+    def _on_fit_xyz(self) -> None:
+        """Handle XYZ curve fitting."""
+        print("[XYZ] Fit XYZ curves (not implemented yet)")
+    
     def _on_quit(self) -> None:
         """Handle quit action."""
         self._running = False
@@ -144,8 +208,10 @@ class Spectrometer:
     def _on_toggle_hold(self) -> None:
         """Handle toggle hold peaks action."""
         self._display.state.hold_peaks = not self._display.state.hold_peaks
+        self._display.set_button_active("capture_peak", self._display.state.hold_peaks)
         if not self._display.state.hold_peaks:
             self._held_intensity = None
+        print(f"[HOLD] Peak hold {'ON' if self._display.state.hold_peaks else 'OFF'}")
     
     def _on_save(self) -> None:
         """Handle save action."""
@@ -184,13 +250,19 @@ class Spectrometer:
         """Handle toggle measure mode action."""
         self._display.state.cursor.pixel_mode = False
         self._display.state.cursor.measure_mode = not self._display.state.cursor.measure_mode
+        self._display.set_button_active("toggle_measure", self._display.state.cursor.measure_mode)
+        self._display.set_button_active("toggle_pixel_mode", False)
+        print(f"[MODE] Measure mode {'ON' if self._display.state.cursor.measure_mode else 'OFF'}")
     
     def _on_toggle_pixel_mode(self) -> None:
         """Handle toggle pixel mode action."""
         self._display.state.cursor.measure_mode = False
         self._display.state.cursor.pixel_mode = not self._display.state.cursor.pixel_mode
+        self._display.set_button_active("toggle_pixel_mode", self._display.state.cursor.pixel_mode)
+        self._display.set_button_active("toggle_measure", False)
         if not self._display.state.cursor.pixel_mode:
             self._display.state.click_points.clear()
+        print(f"[MODE] Pixel mode {'ON' if self._display.state.cursor.pixel_mode else 'OFF'}")
     
     def _on_savgol_up(self) -> None:
         """Handle Savitzky-Golay order increase."""
