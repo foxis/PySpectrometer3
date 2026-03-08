@@ -83,8 +83,8 @@ CALIBRATION_BUTTONS = [
     ButtonDef("Overlay", "toggle_overlay", is_toggle=True, row=1),
     ButtonDef("AutoLvl", "auto_level", shortcut="a", row=1),  # Action: run auto-level
     ButtonDef("AutoCal", "auto_calibrate", row=1),  # Action: run auto-calibration
-    ButtonDef("SaveCal", "save_cal", shortcut="w", row=1),
-    ButtonDef("LoadCal", "load_cal", row=1),
+    ButtonDef("Save", "save_cal", shortcut="w", row=1),
+    ButtonDef("Load", "load_cal", row=1),
     # Row 2: Display and control
     ButtonDef("Freeze", "freeze", is_toggle=True, shortcut="f", row=2),
     ButtonDef("Peak", "capture_peak", is_toggle=True, shortcut="h", row=2),

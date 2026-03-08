@@ -147,39 +147,23 @@ class SpectrumExtractor:
         """Convert frame to grayscale float32.
         
         Handles:
-        - BGR color (3D uint8) -> grayscale
-        - Monochrome (2D uint8 or uint16) -> float32, scaled to 0-255 range
+        - BGR color (3D uint8) -> grayscale (0-255)
+        - Monochrome (2D uint8 or uint16) -> float32, PRESERVING original range
+        
+        Note: For 10-bit data, values are 0-1023. We do NOT scale to 0-255
+        to preserve full dynamic range. Display code handles scaling separately.
         
         Args:
             frame: Input frame (2D or 3D)
             
         Returns:
-            Grayscale float32 array scaled to 0-255 range
+            Grayscale float32 array (0-255 for 8-bit, 0-1023 for 10-bit, etc.)
         """
         if frame.ndim == 3:
             # Color frame: convert BGR to grayscale
             return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
         
-        # Monochrome frame
-        if frame.dtype == np.uint16:
-            # High bit-depth: scale to 0-255 range
-            # Detect actual bit depth from max value
-            max_val = frame.max()
-            if max_val > 4095:
-                # 16-bit: 0-65535
-                scale = 255.0 / 65535.0
-            elif max_val > 1023:
-                # 12-bit: 0-4095
-                scale = 255.0 / 4095.0
-            elif max_val > 255:
-                # 10-bit: 0-1023
-                scale = 255.0 / 1023.0
-            else:
-                # Already in 8-bit range
-                scale = 1.0
-            return (frame.astype(np.float32) * scale)
-        
-        # 8-bit monochrome
+        # Monochrome frame - preserve original bit depth
         return frame.astype(np.float32)
     
     def _extract_with_method(self, gray: np.ndarray) -> np.ndarray:
@@ -193,7 +177,10 @@ class SpectrumExtractor:
                 return self._extract_gaussian(gray)
     
     def _extract_median(self, gray: np.ndarray) -> np.ndarray:
-        """Extract using median along vertical slices."""
+        """Extract using median along vertical slices.
+        
+        Preserves original bit depth (0-1023 for 10-bit, 0-255 for 8-bit).
+        """
         half_perp = self.perpendicular_width // 2
         y_start = max(0, self.spectrum_y_center - half_perp)
         y_end = min(gray.shape[0], self.spectrum_y_center + half_perp + 1)
@@ -202,10 +189,14 @@ class SpectrumExtractor:
         roi = gray[y_start:y_end, :]
         intensity = np.median(roi, axis=0)
         
-        return np.clip(intensity, 0, 255).astype(np.uint8)
+        # Return as float32, preserving original range
+        return intensity.astype(np.float32)
     
     def _extract_weighted_sum(self, gray: np.ndarray) -> np.ndarray:
-        """Extract using intensity-weighted sum along vertical slices."""
+        """Extract using intensity-weighted sum along vertical slices.
+        
+        Preserves original bit depth (0-1023 for 10-bit, 0-255 for 8-bit).
+        """
         half_perp = self.perpendicular_width // 2
         y_start = max(0, self.spectrum_y_center - half_perp)
         y_end = min(gray.shape[0], self.spectrum_y_center + half_perp + 1)
@@ -223,10 +214,15 @@ class SpectrumExtractor:
         weights = roi_bg / total
         intensity = np.sum(roi * weights, axis=0)
         
-        return np.clip(intensity, 0, 255).astype(np.uint8)
+        # Return as float32, preserving original range
+        return intensity.astype(np.float32)
     
     def _extract_gaussian(self, gray: np.ndarray) -> np.ndarray:
-        """Extract by fitting Gaussian to each vertical slice."""
+        """Extract by fitting Gaussian to each vertical slice.
+        
+        Preserves original bit depth (0-1023 for 10-bit, 0-255 for 8-bit).
+        Returns the fitted amplitude (not normalized).
+        """
         from scipy.optimize import curve_fit
         
         intensity = np.zeros(self.frame_width, dtype=np.float32)
@@ -238,6 +234,10 @@ class SpectrumExtractor:
         roi = gray[y_start:y_end, :]
         n_samples = roi.shape[0]
         y_fit = np.arange(n_samples, dtype=np.float32) - n_samples // 2
+        
+        # Detect intensity range for proper bounds
+        max_possible = float(np.max(gray)) if gray.size > 0 else 255.0
+        max_possible = max(max_possible, 255.0)  # At least 8-bit
         
         for x in range(self.frame_width):
             samples = roi[:, x]
@@ -255,9 +255,10 @@ class SpectrumExtractor:
                 
                 p0 = [amplitude, center, sigma, bg]
                 
+                # Use detected max for bounds
                 bounds = (
                     [0, -n_samples // 2, 0.5, 0],
-                    [300, n_samples // 2, n_samples // 2, 255]
+                    [max_possible, n_samples // 2, n_samples // 2, max_possible]
                 )
                 
                 popt, _ = curve_fit(
@@ -277,11 +278,8 @@ class SpectrumExtractor:
             except (RuntimeError, ValueError):
                 intensity[x] = np.max(samples) - np.percentile(samples, self.background_percentile)
         
-        max_val = np.max(intensity)
-        if max_val > 0:
-            intensity = (intensity / max_val) * 255
-        
-        return np.clip(intensity, 0, 255).astype(np.uint8)
+        # Return as float32, preserving original range (no normalization)
+        return intensity.astype(np.float32)
     
     @staticmethod
     def _gaussian(x: np.ndarray, amplitude: float, center: float, sigma: float, background: float) -> np.ndarray:

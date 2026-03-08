@@ -320,54 +320,83 @@ class Spectrometer:
     def _handle_auto_gain_exposure(self, data) -> None:
         """Handle auto-gain and auto-exposure based on spectrum peak.
         
-        Algorithm: If peak exceeds 95% of max, reduce gain/exposure.
-        Otherwise, try to increase to bring peak to target (around 80%).
+        Algorithm: Iteratively adjust gain/exposure to maximize dynamic range.
+        - Target: 80% of max intensity
+        - Reduce if > 95% (saturating)
+        - Increase if < 50% (too dark)
+        
+        Note: Intensity is currently scaled to 0-255 in extraction.py
+        TODO: Keep full 10-bit precision (0-1023) throughout pipeline
+        
+        Exposure limits:
+        - Continuous: max 1 second (1,000,000 us)
+        - Frozen mode: up to 30 seconds allowed (set via slider)
         """
         if data is None or len(data.intensity) == 0:
             return
         
-        auto_gain = getattr(self, "_auto_gain_enabled", False)
-        auto_exposure = getattr(self, "_auto_exposure_enabled", False)
+        auto_gain = self._auto_gain_enabled
+        auto_exposure = self._auto_exposure_enabled
         
         if not auto_gain and not auto_exposure:
             return
         
+        # Don't adjust while frozen
+        if self._frozen_spectrum:
+            return
+        
+        # Detect actual intensity range from data
+        # Extraction now preserves original bit depth as float32
+        # 10-bit: 0-1023, 8-bit: 0-255
         current_max = float(np.max(data.intensity))
-        graph_height = self.config.display.graph_height
-        threshold_high = graph_height * 0.95  # 95% - need to reduce
-        threshold_target = graph_height * 0.80  # 80% - optimal level
-        threshold_low = graph_height * 0.50  # 50% - need to increase
         
-        # Calculate adjustment ratio
-        if current_max < 1:
-            return  # No signal
+        # Determine max possible value based on actual data range
+        if current_max > 255:
+            # 10-bit or higher data
+            max_intensity = 1023.0
+        else:
+            # 8-bit data
+            max_intensity = 255.0
         
-        if current_max > threshold_high:
-            # Peak is too high - reduce
+        threshold_high = max_intensity * 0.95  # Saturating, need to reduce
+        threshold_target = max_intensity * 0.80  # Optimal level
+        threshold_low = max_intensity * 0.50  # Too dark, need to increase
+        
+        if current_max < max_intensity * 0.02:
+            # No signal - try to increase significantly
+            ratio = 1.5
+        elif current_max > threshold_high:
+            # Peak is too high (saturating) - reduce
             ratio = threshold_target / current_max
         elif current_max < threshold_low:
             # Peak is too low - increase
             ratio = threshold_target / current_max
         else:
-            # Peak is in acceptable range
+            # Peak is in acceptable range (50-95%)
             return
         
-        # Limit adjustment speed (don't change too fast)
-        ratio = max(0.8, min(1.25, ratio))
+        # Limit adjustment speed (don't change too fast for stability)
+        ratio = max(0.7, min(1.5, ratio))
         
-        if auto_gain:
-            new_gain = self._camera.gain * ratio
-            new_gain = max(1.0, min(50.0, new_gain))
-            if abs(new_gain - self._camera.gain) > 0.1:
-                self._camera.gain = new_gain
-                self._display.set_gain_value(new_gain)
+        # Max exposure for continuous mode: 1 second = 1,000,000 microseconds
+        max_exposure_continuous = 1_000_000
         
         if auto_exposure:
             new_exposure = self._camera.exposure * ratio
-            new_exposure = max(100, min(100000, int(new_exposure)))
-            if abs(new_exposure - self._camera.exposure) > 10:
+            # Clamp to continuous mode limits
+            new_exposure = max(100, min(max_exposure_continuous, int(new_exposure)))
+            if abs(new_exposure - self._camera.exposure) > 50:
                 self._camera.exposure = new_exposure
                 self._display.set_exposure_value(new_exposure)
+                print(f"[AE] Exposure: {new_exposure} us (peak: {current_max:.0f}/{max_intensity:.0f})")
+        
+        if auto_gain:
+            new_gain = self._camera.gain * ratio
+            new_gain = max(1.0, min(16.0, new_gain))  # Most cameras max at 16x
+            if abs(new_gain - self._camera.gain) > 0.2:
+                self._camera.gain = new_gain
+                self._display.set_gain_value(new_gain)
+                print(f"[AG] Gain: {new_gain:.1f} (peak: {current_max:.0f}/{max_intensity:.0f})")
     
     def _on_toggle_light(self) -> None:
         """Handle toggle light control."""
@@ -466,21 +495,9 @@ class Spectrometer:
         self._display.set_button_active("toggle_overlay", visible)
     
     def _on_auto_level(self) -> None:
-        """Handle auto-level button - runs auto-level algorithm once."""
-        if self._calibration_mode is None:
-            return
-        
-        if self._last_data is None:
-            print("[AutoLevel] No spectrum data available")
-            return
-        
-        new_gain = self._calibration_mode.run_auto_level(
-            self._last_data.intensity,
-            self._camera.gain,
-        )
-        
-        if new_gain != self._camera.gain:
-            self._camera.gain = new_gain
+        """Handle auto-level button - detects rotation, shift, centers spectrum."""
+        # This calls the same function as pressing "a" key
+        self._on_auto_detect_angle()
     
     def _on_toggle_freeze(self) -> None:
         """Handle toggle spectrum freeze."""
@@ -551,26 +568,38 @@ class Spectrometer:
             print("[CAL] Auto-calibration failed to find enough matches")
     
     def _on_save_calibration(self) -> None:
-        """Handle save calibration."""
-        if self._calibration_mode is None:
-            return
+        """Handle save calibration - saves both wavelength cal and extraction params."""
+        saved_something = False
         
-        cal_points = self._calibration_mode.get_calibration_points()
-        if len(cal_points) < 4:
-            # Use current calibration data if no auto-cal points
-            pixels = self._calibration.cal_pixels
-            wavelengths = self._calibration.cal_wavelengths
-        else:
-            pixels = [p for p, w in cal_points]
-            wavelengths = [w for p, w in cal_points]
-        
-        if len(pixels) >= 4:
-            if self._calibration.save(pixels, wavelengths):
-                print("[CAL] Calibration saved!")
+        # Save wavelength calibration points (if in calibration mode)
+        if self._calibration_mode is not None:
+            cal_points = self._calibration_mode.get_calibration_points()
+            if len(cal_points) < 4:
+                # Use current calibration data if no auto-cal points
+                pixels = self._calibration.cal_pixels
+                wavelengths = self._calibration.cal_wavelengths
             else:
-                print("[CAL] Failed to save calibration")
-        else:
-            print("[CAL] Need at least 4 calibration points to save")
+                pixels = [p for p, w in cal_points]
+                wavelengths = [w for p, w in cal_points]
+            
+            if len(pixels) >= 4:
+                if self._calibration.save(pixels, wavelengths):
+                    print(f"[CAL] Wavelength calibration saved ({len(pixels)} points)")
+                    saved_something = True
+                else:
+                    print("[CAL] Failed to save wavelength calibration")
+        
+        # Always save extraction parameters (rotation, y center, perp width)
+        self._calibration.save_extraction_params(
+            rotation_angle=self._extractor.rotation_angle,
+            spectrum_y_center=self._extractor.spectrum_y_center,
+            perpendicular_width=self._extractor.perpendicular_width,
+        )
+        print(f"[CAL] Extraction params saved (angle: {self._extractor.rotation_angle:.2f}°, Y: {self._extractor.spectrum_y_center})")
+        saved_something = True
+        
+        if not saved_something:
+            print("[CAL] Nothing to save - need at least 4 calibration points")
     
     def _on_load_calibration(self) -> None:
         """Handle load calibration."""
@@ -706,18 +735,10 @@ class Spectrometer:
             cv2.waitKey(2000)
             cv2.destroyWindow("Angle Detection")
         
-        # Apply both angle and Y center
+        # Apply both angle and Y center (do NOT auto-save - user saves with Save button)
         self._extractor.set_rotation_angle(angle)
         self._extractor.set_spectrum_y_center(y_center)
         print(f"Rotation Angle: {angle:.2f}°, Y Center: {y_center}")
-        
-        # Auto-save extraction parameters
-        self._calibration.save_extraction_params(
-            rotation_angle=self._extractor.rotation_angle,
-            spectrum_y_center=self._extractor.spectrum_y_center,
-            perpendicular_width=self._extractor.perpendicular_width,
-        )
-        print("Extraction parameters saved.")
     
     def _on_perp_width_up(self) -> None:
         """Handle perpendicular width increase."""

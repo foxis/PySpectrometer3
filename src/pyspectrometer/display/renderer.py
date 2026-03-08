@@ -124,17 +124,21 @@ class DisplayManager:
             cv2.namedWindow(title2, cv2.WINDOW_AUTOSIZE)
             cv2.moveWindow(title2, 200, 200)
         
+        # WINDOW_GUI_NORMAL (0x10 = 16) disables the Qt/GTK toolbar and statusbar
+        # Use explicit value for compatibility with older OpenCV versions
+        WINDOW_GUI_NORMAL = getattr(cv2, 'WINDOW_GUI_NORMAL', 0x00000010)
+        
         if self.config.display.fullscreen:
-            # True fullscreen - fills entire screen
-            cv2.namedWindow(title1, cv2.WINDOW_NORMAL)
+            # True fullscreen - fills entire screen, no toolbar
+            cv2.namedWindow(title1, cv2.WINDOW_NORMAL | WINDOW_GUI_NORMAL)
             cv2.setWindowProperty(
                 title1,
                 cv2.WND_PROP_FULLSCREEN,
                 cv2.WINDOW_FULLSCREEN,
             )
         else:
-            # Windowed mode - auto-size to content, minimal GUI
-            cv2.namedWindow(title1, cv2.WINDOW_AUTOSIZE)
+            # Windowed mode - auto-size, no toolbar/statusbar
+            cv2.namedWindow(title1, cv2.WINDOW_AUTOSIZE | WINDOW_GUI_NORMAL)
             cv2.moveWindow(title1, 0, 0)
         
         cv2.setMouseCallback(title1, self._handle_mouse)
@@ -384,18 +388,37 @@ class DisplayManager:
                 cv2.line(graph, points[j], points[j + 1], ref_color, 1, cv2.LINE_AA)
     
     def _render_spectrum(self, graph: np.ndarray, data: SpectrumData) -> None:
-        """Render the spectrum intensity curve."""
+        """Render the spectrum intensity curve.
+        
+        Scales intensity to fit graph height. Supports both 8-bit (0-255)
+        and 10-bit (0-1023) data.
+        """
         height = graph.shape[0]
+        
+        # Detect intensity range for proper scaling
+        max_intensity = float(np.max(data.intensity)) if len(data.intensity) > 0 else 255.0
+        # Use the max of actual max or expected max (10-bit = 1023, 8-bit = 255)
+        intensity_range = max(max_intensity, 255.0)
+        if intensity_range > 255:
+            # Likely 10-bit or higher
+            intensity_range = max(intensity_range, 1023.0)
+        
+        # Scale factor to fit intensity into graph height
+        scale = (height - 1) / intensity_range if intensity_range > 0 else 1.0
         
         for i, intensity in enumerate(data.intensity):
             rgb = wavelength_to_rgb(round(data.wavelengths[i]))
             bgr = rgb_to_bgr(rgb)
             
-            cv2.line(graph, (i, height), (i, height - int(intensity)), bgr, 1)
+            # Scale intensity to graph height
+            scaled_intensity = int(intensity * scale)
+            scaled_intensity = min(scaled_intensity, height - 1)  # Clamp to graph
+            
+            cv2.line(graph, (i, height), (i, height - scaled_intensity), bgr, 1)
             cv2.line(
                 graph,
-                (i, height - 1 - int(intensity)),
-                (i, height - int(intensity)),
+                (i, height - 1 - scaled_intensity),
+                (i, height - scaled_intensity),
                 (0, 0, 0),
                 1,
                 cv2.LINE_AA,

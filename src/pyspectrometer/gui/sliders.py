@@ -254,24 +254,27 @@ class SliderPanel:
         
         slider_height = height - 30  # Leave room for labels
         
+        # Gain range: 1x to 16x (typical camera max)
         self.gain_slider = VerticalSlider(
             x=x,
             y=y + 15,  # Leave room for value text
             height=slider_height,
             min_val=1.0,
-            max_val=50.0,
-            value=10.0,
+            max_val=16.0,
+            value=1.0,
             label="G",
             style=self.style,
             log_scale=True,
         )
         
+        # Exposure range: 100us to 30 seconds (30,000,000 us)
+        # Continuous mode limited to 1s by auto-exposure algorithm
         self.exposure_slider = VerticalSlider(
             x=x + self.gain_slider.width + 5,
             y=y + 15,
             height=slider_height,
             min_val=100,
-            max_val=100000,
+            max_val=30_000_000,  # 30 seconds max for frozen/long exposure
             value=10000,
             label="E",
             style=self.style,
