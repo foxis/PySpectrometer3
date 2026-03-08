@@ -160,17 +160,24 @@ class Config:
         return config
     
     def apply_waveshare_preset(self) -> None:
-        """Apply settings optimized for Waveshare 3.5\" display (640x480)."""
+        """Apply settings optimized for Waveshare display (640x400).
+        
+        Layout breakdown for 400px height:
+        - message_height: 60 (control bar with 2 rows of buttons)
+        - preview_height: 60 (camera preview window)
+        - graph_height: 280 (spectrum graph)
+        Total: 400px
+        """
         self.camera.frame_width = 640
-        self.camera.frame_height = 480
+        self.camera.frame_height = 400
         
         self.display.window_width = 640
-        self.display.window_height = 480
+        self.display.window_height = 400
         self.display.graph_height = 280
-        self.display.preview_height = 80
-        self.display.message_height = 120
+        self.display.preview_height = 60
+        self.display.message_height = 60
         
-        self.display.font_scale = 0.4
+        self.display.font_scale = 0.35
         self.display.text_thickness = 1
         self.display.status_col1_x = 340
         self.display.status_col2_x = 500

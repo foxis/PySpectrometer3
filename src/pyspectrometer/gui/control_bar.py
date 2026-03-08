@@ -23,6 +23,17 @@ class ControlBarConfig:
     
     font_scale: float = 0.35
     font_thickness: int = 1
+    
+    def __post_init__(self) -> None:
+        """Adjust row sizes to fit within height."""
+        # Calculate what fits: margin + row + spacing + row + margin
+        min_needed = self.margin_y * 2 + self.row_height * 2 + self.row_spacing
+        if min_needed > self.height:
+            # Reduce row height and margins to fit
+            available = self.height - 4  # minimal margins
+            self.margin_y = 2
+            self.row_spacing = 2
+            self.row_height = (available - self.row_spacing) // 2
 
 
 @dataclass
@@ -53,6 +64,7 @@ MEASUREMENT_BUTTONS = [
     ButtonDef("AutoG", "auto_gain", is_toggle=True, row=2),
     ButtonDef("Gain+", "gain_up", shortcut="t", row=2),
     ButtonDef("Gain-", "gain_down", shortcut="g", row=2),
+    ButtonDef("Prev", "cycle_preview", shortcut="v", row=2),
     ButtonDef("Lamp", "lamp_toggle", is_toggle=True, row=2),
     ButtonDef("Quit", "quit", shortcut="q", row=2),
 ]
@@ -79,6 +91,7 @@ CALIBRATION_BUTTONS = [
     ButtonDef("AutoG", "auto_gain", is_toggle=True, row=2),
     ButtonDef("Gain+", "gain_up", shortcut="t", row=2),
     ButtonDef("Gain-", "gain_down", shortcut="g", row=2),
+    ButtonDef("Prev", "cycle_preview", shortcut="v", row=2),
     ButtonDef("Clear", "clear_points", shortcut="x", row=2),
     ButtonDef("Quit", "quit", shortcut="q", row=2),
 ]

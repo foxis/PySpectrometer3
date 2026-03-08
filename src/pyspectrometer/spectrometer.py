@@ -135,6 +135,7 @@ class Spectrometer:
         self._running = False
         self._last_frame: Optional[np.ndarray] = None
         self._frozen_spectrum: bool = False
+        self._frozen_intensity: Optional[np.ndarray] = None  # Stored frozen spectrum
         
         self._register_key_callbacks()
         self._register_button_callbacks()
@@ -172,6 +173,7 @@ class Spectrometer:
         display.register_button_callback("gain_up", self._on_gain_up)
         display.register_button_callback("gain_down", self._on_gain_down)
         display.register_button_callback("capture_peak", self._on_toggle_hold)
+        display.register_button_callback("cycle_preview", self._on_cycle_preview)
         
         if self.mode == "calibration":
             self._register_calibration_callbacks()
@@ -384,6 +386,14 @@ class Spectrometer:
         
         frozen = self._calibration_mode.toggle_freeze()
         self._frozen_spectrum = frozen
+        
+        if frozen and self._last_data is not None:
+            # Store the current spectrum when freezing
+            self._frozen_intensity = self._last_data.intensity.copy()
+        elif not frozen:
+            # Clear frozen spectrum when unfreezing
+            self._frozen_intensity = None
+        
         self._display.set_button_active("freeze", frozen)
         print(f"[FREEZE] Spectrum {'FROZEN' if frozen else 'LIVE'}")
     
@@ -570,6 +580,10 @@ class Spectrometer:
         self._camera.gain = self._camera.gain - 1
         print(f"Camera Gain: {self._camera.gain}")
     
+    def _on_cycle_preview(self) -> None:
+        """Handle preview mode cycling."""
+        self._display.cycle_preview_mode()
+    
     def _on_cycle_extraction(self) -> None:
         """Handle extraction method cycling."""
         new_method = self._extractor.cycle_method()
@@ -667,10 +681,10 @@ class Spectrometer:
                 cropped = extraction_result.cropped_frame
                 intensity = extraction_result.intensity
                 
-                # Handle calibration mode freeze
+                # Handle calibration mode freeze - use stored frozen intensity
                 if self._calibration_mode is not None and self._frozen_spectrum:
-                    if self._last_data is not None:
-                        intensity = self._last_data.intensity
+                    if self._frozen_intensity is not None:
+                        intensity = self._frozen_intensity.copy()
                 
                 if self._display.state.hold_peaks:
                     if self._held_intensity is None:
@@ -682,8 +696,8 @@ class Spectrometer:
                 else:
                     self._savgol_filter.enabled = True
                 
-                # Mode-specific spectrum processing
-                if self._calibration_mode is not None:
+                # Mode-specific spectrum processing (skip if frozen)
+                if self._calibration_mode is not None and not self._frozen_spectrum:
                     intensity = self._calibration_mode.accumulate_spectrum(intensity)
                 elif self._measurement_mode is not None:
                     intensity = self._measurement_mode.process_spectrum(
