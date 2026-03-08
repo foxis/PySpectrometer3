@@ -5,6 +5,12 @@ import numpy as np
 from ..core.spectrum import SpectrumData, Peak
 from .base import ProcessorInterface
 
+try:
+    from scipy.signal import find_peaks as scipy_find_peaks
+    _SCIPY_AVAILABLE = True
+except ImportError:
+    _SCIPY_AVAILABLE = False
+
 
 def find_peak_indexes(
     y: np.ndarray,
@@ -84,6 +90,50 @@ def find_peak_indexes(
         peaks = np.arange(y.size)[~rem]
     
     return peaks
+
+
+def find_peak_indexes_scipy(
+    y: np.ndarray,
+    *,
+    threshold: float = 0.2,
+    min_dist: int = 15,
+    prominence: float = 0.03,
+) -> np.ndarray:
+    """Find peak indexes using scipy.signal.find_peaks, tuned for sharp emission lines.
+
+    Sharp Hg/fluorescent lines (1-5 pixels wide) are detected reliably with low
+    prominence and distance. Prominence filters noise while allowing weak sharp peaks.
+
+    Args:
+        y: Input signal (will be cast to float64)
+        threshold: Minimum height as fraction of range (0-1)
+        min_dist: Minimum distance between peaks in samples
+        prominence: Minimum prominence as fraction of range (0-1). Lower = more sensitive.
+
+    Returns:
+        Array of peak indexes, sorted by position.
+    """
+    if not _SCIPY_AVAILABLE:
+        return np.array([])
+
+    arr = np.asarray(y, dtype=np.float64)
+    if arr.size < 3:
+        return np.array([])
+
+    rng = float(np.max(arr) - np.min(arr))
+    if rng <= 0:
+        return np.array([])
+
+    height = float(np.min(arr) + threshold * rng)
+    prom = float(prominence * rng)
+
+    idx, _ = scipy_find_peaks(
+        arr,
+        height=height,
+        prominence=prom,
+        distance=max(1, int(min_dist)),
+    )
+    return np.asarray(idx, dtype=np.intp)
 
 
 class PeakDetector(ProcessorInterface):
@@ -195,11 +245,20 @@ class PeakDetector(ProcessorInterface):
         # Pass threshold as fraction of range (0-1). _threshold 0-100 → 0.0-1.0
         threshold_normalized = self._threshold / 100.0
 
-        indexes = find_peak_indexes(
-            intensity,
-            threshold=threshold_normalized,
-            min_dist=self._min_distance,
-        )
+        if _SCIPY_AVAILABLE:
+            # scipy find_peaks: better for sharp Hg/emission lines (1-5 px wide)
+            indexes = find_peak_indexes_scipy(
+                intensity,
+                threshold=threshold_normalized,
+                min_dist=self._min_distance,
+                prominence=0.02,  # low = catch weak sharp peaks; filters noise
+            )
+        else:
+            indexes = find_peak_indexes(
+                intensity,
+                threshold=threshold_normalized,
+                min_dist=self._min_distance,
+            )
 
         peaks = [
             Peak(

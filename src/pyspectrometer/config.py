@@ -56,8 +56,8 @@ class ProcessingConfig:
     savgol_poly_min: int = 0
     savgol_poly_max: int = 15
     
-    peak_min_distance: int = 50
-    peak_min_distance_min: int = 0
+    peak_min_distance: int = 15  # Lower for sharp Hg lines (577/579 ~7 px apart)
+    peak_min_distance_min: int = 1
     peak_min_distance_max: int = 100
     
     peak_threshold: int = 20
@@ -183,8 +183,8 @@ class Config:
         self.display.status_col2_x = 500
         
         self.calibration.default_pixels = (0, 320, 640)
-        
-        self.processing.peak_min_distance = 40
+
+        self.processing.peak_min_distance = 15  # Sharp Hg lines
     
     @classmethod
     def waveshare_35(cls) -> "Config":

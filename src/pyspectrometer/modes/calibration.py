@@ -258,17 +258,20 @@ class CalibrationMode(BaseMode):
         best_points: list[tuple[int, float]] = []
         best_r2 = -1.0
 
-        # When measured has more peaks, try shifts to skip extra peaks at start
-        max_shift = max(0, n_meas - n_use)
-        for shift in range(max_shift + 1):
-            pts = [
-                (peak_pixels[shift + i], ref_sorted[i].wavelength)
-                for i in range(n_use)
-            ]
-            r2 = self._linearity_score(pts)
-            if r2 > best_r2:
-                best_r2 = r2
-                best_points = pts
+        # Try shifts: measured can have extra peaks (skip leading); reference can
+        # have extra (e.g. Hg 5 lines, we see 4). Pick mapping with best linearity.
+        meas_shift_max = max(0, n_meas - n_use)
+        ref_offset_max = max(0, n_ref - n_use)
+        for m_shift in range(meas_shift_max + 1):
+            for r_off in range(ref_offset_max + 1):
+                pts = [
+                    (peak_pixels[m_shift + i], ref_sorted[r_off + i].wavelength)
+                    for i in range(n_use)
+                ]
+                r2 = self._linearity_score(pts)
+                if r2 > best_r2:
+                    best_r2 = r2
+                    best_points = pts
 
         calibration_points = best_points[:min(6, len(best_points))]
         self.cal_state.calibration_points = calibration_points
