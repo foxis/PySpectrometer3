@@ -102,6 +102,7 @@ class Spectrometer:
             poly_order_min=self.config.processing.savgol_poly_min,
             poly_order_max=self.config.processing.savgol_poly_max,
         )
+        self._savgol_filter.enabled = False  # Disabled for now (clipping artifacts)
         
         self._peak_detector = PeakDetector(
             min_distance=self.config.processing.peak_min_distance,
