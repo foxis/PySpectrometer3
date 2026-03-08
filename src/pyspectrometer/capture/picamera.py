@@ -236,8 +236,8 @@ class PicameraCapture(CameraInterface):
         
         # If using raw capture, get raw frame for higher bit depth
         if self._use_raw:
-            arrays = self._camera.capture_arrays(["main", "raw"])
-            raw_frame = arrays["raw"]
+            # capture_arrays returns a tuple in order of stream names
+            main_frame, raw_frame = self._camera.capture_arrays(["main", "raw"])
             return self._process_raw_frame(raw_frame)
         
         frame = self._camera.capture_array()
