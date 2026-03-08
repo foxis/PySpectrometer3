@@ -438,7 +438,7 @@ cd /home/pi/PySpectrometer3
 |--------|--------|-------------|
 | FL | source_fl | Select Fluorescent reference |
 | Hg | source_hg | Select Mercury reference |
-| Sun | source_sun | Select Solar reference |
+| D65 | source_d65 | Select CIE D65 daylight reference |
 | LED | source_led | Select White LED reference |
 | Overlay | toggle_overlay | Toggle reference overlay visibility |
 | AutoLvl | auto_level | Toggle auto-level (gain adjustment) |
