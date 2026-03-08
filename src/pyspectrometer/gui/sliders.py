@@ -1,0 +1,322 @@
+"""Vertical slider controls for gain and exposure."""
+
+from dataclasses import dataclass
+from typing import Callable, Optional
+import cv2
+import numpy as np
+
+
+@dataclass
+class SliderStyle:
+    """Visual style for vertical sliders."""
+    
+    track_color: tuple[int, int, int] = (60, 60, 60)
+    fill_color: tuple[int, int, int] = (80, 150, 80)
+    thumb_color: tuple[int, int, int] = (200, 200, 200)
+    thumb_hover_color: tuple[int, int, int] = (255, 255, 255)
+    border_color: tuple[int, int, int] = (100, 100, 100)
+    label_color: tuple[int, int, int] = (200, 200, 200)
+    value_color: tuple[int, int, int] = (0, 255, 255)
+    
+    track_width: int = 20
+    thumb_height: int = 8
+    border_width: int = 1
+    font_scale: float = 0.35
+    font_thickness: int = 1
+
+
+DEFAULT_SLIDER_STYLE = SliderStyle()
+
+
+class VerticalSlider:
+    """A vertical draggable slider control."""
+    
+    def __init__(
+        self,
+        x: int,
+        y: int,
+        height: int,
+        min_val: float,
+        max_val: float,
+        value: float,
+        label: str = "",
+        style: Optional[SliderStyle] = None,
+        log_scale: bool = False,
+    ):
+        """Initialize vertical slider.
+        
+        Args:
+            x: X position (left edge)
+            y: Y position (top edge)
+            height: Height of the slider
+            min_val: Minimum value
+            max_val: Maximum value
+            value: Initial value
+            label: Label to display above slider
+            style: Visual style
+            log_scale: Use logarithmic scale
+        """
+        self.x = x
+        self.y = y
+        self.height = height
+        self.min_val = min_val
+        self.max_val = max_val
+        self._value = value
+        self.label = label
+        self.style = style or DEFAULT_SLIDER_STYLE
+        self.log_scale = log_scale
+        
+        self.visible = False
+        self.dragging = False
+        self.hovered = False
+        
+        self.on_change: Optional[Callable[[float], None]] = None
+    
+    @property
+    def value(self) -> float:
+        """Get current value."""
+        return self._value
+    
+    @value.setter
+    def value(self, val: float) -> None:
+        """Set value (clamped to range)."""
+        self._value = max(self.min_val, min(self.max_val, val))
+    
+    @property
+    def width(self) -> int:
+        """Total width including label area."""
+        return self.style.track_width + 30
+    
+    def _value_to_position(self, val: float) -> int:
+        """Convert value to Y position."""
+        if self.log_scale and self.min_val > 0:
+            import math
+            log_min = math.log(self.min_val)
+            log_max = math.log(self.max_val)
+            log_val = math.log(max(val, self.min_val))
+            ratio = (log_val - log_min) / (log_max - log_min) if log_max > log_min else 0
+        else:
+            ratio = (val - self.min_val) / (self.max_val - self.min_val) if self.max_val > self.min_val else 0
+        
+        # Invert: top = max, bottom = min
+        track_height = self.height - self.style.thumb_height
+        return int(self.y + track_height * (1 - ratio))
+    
+    def _position_to_value(self, py: int) -> float:
+        """Convert Y position to value."""
+        track_height = self.height - self.style.thumb_height
+        ratio = 1 - (py - self.y) / track_height if track_height > 0 else 0
+        ratio = max(0, min(1, ratio))
+        
+        if self.log_scale and self.min_val > 0:
+            import math
+            log_min = math.log(self.min_val)
+            log_max = math.log(self.max_val)
+            log_val = log_min + ratio * (log_max - log_min)
+            return math.exp(log_val)
+        
+        return self.min_val + ratio * (self.max_val - self.min_val)
+    
+    def contains(self, px: int, py: int) -> bool:
+        """Check if point is inside slider area."""
+        return (
+            self.x <= px < self.x + self.width and
+            self.y <= py < self.y + self.height
+        )
+    
+    def render(self, image: np.ndarray) -> None:
+        """Render slider onto image."""
+        if not self.visible:
+            return
+        
+        style = self.style
+        
+        # Track area
+        track_x = self.x + (self.width - style.track_width) // 2
+        track_y = self.y
+        track_h = self.height
+        
+        # Draw track background
+        cv2.rectangle(
+            image,
+            (track_x, track_y),
+            (track_x + style.track_width, track_y + track_h),
+            style.track_color,
+            -1,
+        )
+        cv2.rectangle(
+            image,
+            (track_x, track_y),
+            (track_x + style.track_width, track_y + track_h),
+            style.border_color,
+            style.border_width,
+        )
+        
+        # Fill bar (from bottom to current value)
+        thumb_y = self._value_to_position(self._value)
+        cv2.rectangle(
+            image,
+            (track_x + 2, thumb_y),
+            (track_x + style.track_width - 2, track_y + track_h - 2),
+            style.fill_color,
+            -1,
+        )
+        
+        # Thumb
+        thumb_color = style.thumb_hover_color if self.hovered or self.dragging else style.thumb_color
+        cv2.rectangle(
+            image,
+            (track_x, thumb_y),
+            (track_x + style.track_width, thumb_y + style.thumb_height),
+            thumb_color,
+            -1,
+        )
+        
+        # Value text (above slider)
+        val_text = f"{self._value:.1f}"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        (text_w, text_h), _ = cv2.getTextSize(val_text, font, style.font_scale, style.font_thickness)
+        text_x = self.x + (self.width - text_w) // 2
+        text_y = self.y - 3
+        cv2.putText(image, val_text, (text_x, text_y), font, style.font_scale, style.value_color, style.font_thickness, cv2.LINE_AA)
+        
+        # Label (below slider)
+        if self.label:
+            (label_w, _), _ = cv2.getTextSize(self.label, font, style.font_scale, style.font_thickness)
+            label_x = self.x + (self.width - label_w) // 2
+            label_y = self.y + self.height + text_h + 3
+            cv2.putText(image, self.label, (label_x, label_y), font, style.font_scale, style.label_color, style.font_thickness, cv2.LINE_AA)
+    
+    def handle_mouse_move(self, px: int, py: int) -> bool:
+        """Handle mouse move. Returns True if slider state changed."""
+        if not self.visible:
+            return False
+        
+        was_hovered = self.hovered
+        self.hovered = self.contains(px, py)
+        
+        if self.dragging:
+            new_val = self._position_to_value(py)
+            if new_val != self._value:
+                self._value = new_val
+                if self.on_change:
+                    self.on_change(self._value)
+                return True
+        
+        return self.hovered != was_hovered
+    
+    def handle_mouse_down(self, px: int, py: int) -> bool:
+        """Handle mouse down. Returns True if handled."""
+        if not self.visible:
+            return False
+        
+        if self.contains(px, py):
+            self.dragging = True
+            new_val = self._position_to_value(py)
+            if new_val != self._value:
+                self._value = new_val
+                if self.on_change:
+                    self.on_change(self._value)
+            return True
+        
+        return False
+    
+    def handle_mouse_up(self) -> bool:
+        """Handle mouse up. Returns True if was dragging."""
+        if self.dragging:
+            self.dragging = False
+            return True
+        return False
+
+
+class SliderPanel:
+    """Panel containing gain and exposure sliders."""
+    
+    def __init__(
+        self,
+        x: int,
+        y: int,
+        height: int,
+        style: Optional[SliderStyle] = None,
+    ):
+        """Initialize slider panel.
+        
+        Args:
+            x: X position (right side of display)
+            y: Y position
+            height: Height available for sliders
+            style: Visual style
+        """
+        self.x = x
+        self.y = y
+        self.height = height
+        self.style = style or DEFAULT_SLIDER_STYLE
+        
+        slider_height = height - 30  # Leave room for labels
+        
+        self.gain_slider = VerticalSlider(
+            x=x,
+            y=y + 15,  # Leave room for value text
+            height=slider_height,
+            min_val=1.0,
+            max_val=50.0,
+            value=10.0,
+            label="G",
+            style=self.style,
+            log_scale=True,
+        )
+        
+        self.exposure_slider = VerticalSlider(
+            x=x + self.gain_slider.width + 5,
+            y=y + 15,
+            height=slider_height,
+            min_val=100,
+            max_val=100000,
+            value=10000,
+            label="E",
+            style=self.style,
+            log_scale=True,
+        )
+        
+        self._sliders = [self.gain_slider, self.exposure_slider]
+    
+    @property
+    def width(self) -> int:
+        """Total width of panel."""
+        return self.gain_slider.width + self.exposure_slider.width + 5
+    
+    def render(self, image: np.ndarray) -> None:
+        """Render all visible sliders."""
+        for slider in self._sliders:
+            slider.render(image)
+    
+    def handle_mouse_move(self, px: int, py: int) -> bool:
+        """Handle mouse move. Returns True if any slider changed."""
+        changed = False
+        for slider in self._sliders:
+            if slider.handle_mouse_move(px, py):
+                changed = True
+        return changed
+    
+    def handle_mouse_down(self, px: int, py: int) -> bool:
+        """Handle mouse down. Returns True if handled."""
+        for slider in self._sliders:
+            if slider.handle_mouse_down(px, py):
+                return True
+        return False
+    
+    def handle_mouse_up(self) -> bool:
+        """Handle mouse up. Returns True if any slider was dragging."""
+        handled = False
+        for slider in self._sliders:
+            if slider.handle_mouse_up():
+                handled = True
+        return handled
+    
+    def any_visible(self) -> bool:
+        """Check if any slider is visible."""
+        return any(s.visible for s in self._sliders)
+    
+    def any_dragging(self) -> bool:
+        """Check if any slider is being dragged."""
+        return any(s.dragging for s in self._sliders)
