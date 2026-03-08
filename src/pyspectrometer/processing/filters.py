@@ -155,6 +155,9 @@ class SavitzkyGolayFilter(ProcessorInterface):
             self._window_size,
             self._poly_order,
         )
-        smoothed = np.clip(smoothed, 0.0, 1.0).astype(np.float32)
-        
-        return data.with_intensity(smoothed)
+        # Clip to [0, 1], but preserve saturated regions: SG overshoots negative
+        # at flat-top edges, producing sharp 0 dips; keep original value there
+        out = np.clip(smoothed, 0.0, 1.0).astype(np.float32)
+        saturated = (smoothed < 0) & (intensity >= 0.99)
+        np.copyto(out, intensity.astype(np.float32), where=saturated)
+        return data.with_intensity(out)

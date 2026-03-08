@@ -234,6 +234,8 @@ class Spectrometer:
         display.register_button_callback("source_hg", lambda: self._on_select_source(ReferenceSource.HG))
         display.register_button_callback("source_d65", lambda: self._on_select_source(ReferenceSource.D65))
         display.register_button_callback("source_led", lambda: self._on_select_source(ReferenceSource.LED))
+        display.register_button_callback("source_led2", lambda: self._on_select_source(ReferenceSource.LED2))
+        display.register_button_callback("source_led3", lambda: self._on_select_source(ReferenceSource.LED3))
         
         # Calibration actions
         display.register_button_callback("toggle_overlay", self._on_toggle_overlay)

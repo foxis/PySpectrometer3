@@ -35,6 +35,8 @@ class ReferenceSource(Enum):
     D65 = auto()     # CIE Illuminant D65 (daylight 6504K) - actual spectrum
     HG = auto()      # Mercury low-pressure lamp
     LED = auto()     # CIE LED-B1 (phosphor white LED)
+    LED2 = auto()    # CIE LED-B2 (phosphor white LED)
+    LED3 = auto()    # CIE LED-B3 (phosphor white LED)
 
 
 @dataclass
@@ -67,6 +69,8 @@ _COLOUR_SDS_MAP = {
     ReferenceSource.A: "A",
     ReferenceSource.D65: "D65",
     ReferenceSource.LED: "LED-B1",
+    ReferenceSource.LED2: "LED-B2",
+    ReferenceSource.LED3: "LED-B3",
 }
 
 # Mercury low-pressure lamp emission lines (for peak-matching calibration)
@@ -166,11 +170,25 @@ REFERENCE_SPECTRA: dict[ReferenceSource, ReferenceSpectrum] = {
         colour_key="D65",
     ),
     ReferenceSource.LED: ReferenceSpectrum(
-        name="White LED",
+        name="LED-B1",
         source=ReferenceSource.LED,
         peaks=LED_LINES,
         description="CIE LED-B1 (phosphor white LED)",
         colour_key="LED-B1",
+    ),
+    ReferenceSource.LED2: ReferenceSpectrum(
+        name="LED-B2",
+        source=ReferenceSource.LED2,
+        peaks=LED_LINES,
+        description="CIE LED-B2 (phosphor white LED)",
+        colour_key="LED-B2",
+    ),
+    ReferenceSource.LED3: ReferenceSpectrum(
+        name="LED-B3",
+        source=ReferenceSource.LED3,
+        peaks=LED_LINES,
+        description="CIE LED-B3 (phosphor white LED)",
+        colour_key="LED-B3",
     ),
 }
 

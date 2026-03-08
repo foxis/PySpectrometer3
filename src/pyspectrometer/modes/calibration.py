@@ -72,6 +72,8 @@ class CalibrationMode(BaseMode):
         ReferenceSource.D65,
         ReferenceSource.HG,
         ReferenceSource.LED,
+        ReferenceSource.LED2,
+        ReferenceSource.LED3,
     ]
     
     def __init__(self):
@@ -109,7 +111,9 @@ class CalibrationMode(BaseMode):
             ButtonDefinition("FL", "source_fl", row=1),
             ButtonDefinition("Hg", "source_hg", row=1),
             ButtonDefinition("D65", "source_d65", row=1),
-            ButtonDefinition("LED", "source_led", row=1),
+            ButtonDefinition("LED1", "source_led", row=1),
+            ButtonDefinition("LED2", "source_led2", row=1),
+            ButtonDefinition("LED3", "source_led3", row=1),
             ButtonDefinition("AutoLvl", "auto_level", is_toggle=True, row=1),
             ButtonDefinition("AutoCal", "auto_calibrate", row=1),
             ButtonDefinition("Save", "save_cal", shortcut="w", row=1),
@@ -164,10 +168,12 @@ class CalibrationMode(BaseMode):
         
         # Color based on source
         colors = {
-            ReferenceSource.FL: (255, 200, 0),    # Yellow
-            ReferenceSource.HG: (255, 0, 255),    # Magenta
-            ReferenceSource.D65: (100, 200, 255), # Daylight blue
-            ReferenceSource.LED: (200, 200, 200), # White/gray
+            ReferenceSource.FL: (255, 200, 0),     # Yellow
+            ReferenceSource.HG: (255, 0, 255),     # Magenta
+            ReferenceSource.D65: (100, 200, 255),  # Daylight blue
+            ReferenceSource.LED: (200, 200, 200),  # White/gray
+            ReferenceSource.LED2: (180, 220, 220), # Light cyan
+            ReferenceSource.LED3: (220, 200, 220), # Light purple
         }
         color = colors.get(self.cal_state.current_source, (200, 200, 200))
         
@@ -196,23 +202,81 @@ class CalibrationMode(BaseMode):
         self,
         measured_intensity: np.ndarray,
         wavelengths: np.ndarray,
-        peak_indices: list[int],
+        peak_indices: list,
     ) -> list[tuple[int, float]]:
-        """Perform automatic calibration by optimizing spectrum correlation.
+        """Perform automatic calibration. Tries peak matching first, falls back to correlation.
 
-        Uses gradient descent to find the polynomial calibration that maximizes
-        correlation between measured spectrum and reference, with linearity
-        regularization (prism dispersion is roughly linear).
+        Peak matching (ordered): Match detected peaks to reference peaks by order
+        (leftmost measured → leftmost reference). Robust when spectrum shape differs
+        slightly (e.g. different LED CCT, different fluorescent phosphor mix) but
+        major peaks are present in the same order.
+
+        Correlation: Optimizes polynomial to maximize spectrum correlation.
+        Can misalign when dominant region (green-yellow-red) drives the fit and
+        blue peak gets ignored.
 
         Args:
             measured_intensity: Measured spectrum intensity (per pixel)
-            wavelengths: Current wavelength calibration (unused for this method)
-            peak_indices: Detected peak pixel positions (unused; kept for API)
+            wavelengths: Current wavelength calibration (used only for fallback)
+            peak_indices: Detected peaks (Peak objects or int pixel indices)
 
         Returns:
             List of (pixel, wavelength) calibration points for recalibrate
         """
+        # Try peak-based ordered matching first (robust for slightly different spectra)
+        result = self._auto_calibrate_peak_ordered(peak_indices)
+        if result:
+            return result
+        # Fall back to correlation
         return self._auto_calibrate_correlation(measured_intensity)
+
+    def _auto_calibrate_peak_ordered(
+        self,
+        peak_indices: list,
+    ) -> list[tuple[int, float]]:
+        """Calibrate by matching peaks by order (no wavelength guess needed).
+
+        When measured has MORE peaks than reference (e.g. Hg lamp with extra
+        lines), tries multiple shift hypotheses and picks the one with best
+        linearity (spectrometer dispersion is roughly linear).
+        """
+        peak_pixels = [p.index if hasattr(p, "index") else int(p) for p in peak_indices]
+        peak_pixels = sorted(peak_pixels)
+
+        ref_peaks = get_reference_peaks(self.cal_state.current_source)
+        ref_sorted = sorted(ref_peaks, key=lambda p: p.wavelength)
+
+        min_required = 3
+        n_ref = len(ref_sorted)
+        n_meas = len(peak_pixels)
+        if n_ref < min_required or n_meas < min_required:
+            print(f"[Calibration] Peak matching: need {min_required}+ peaks, "
+                  f"have {n_meas} measured, {n_ref} reference")
+            return []
+
+        n_use = min(n_ref, n_meas)
+        best_points: list[tuple[int, float]] = []
+        best_r2 = -1.0
+
+        # When measured has more peaks, try shifts to skip extra peaks at start
+        max_shift = max(0, n_meas - n_use)
+        for shift in range(max_shift + 1):
+            pts = [
+                (peak_pixels[shift + i], ref_sorted[i].wavelength)
+                for i in range(n_use)
+            ]
+            r2 = self._linearity_score(pts)
+            if r2 > best_r2:
+                best_r2 = r2
+                best_points = pts
+
+        calibration_points = best_points[:min(6, len(best_points))]
+        self.cal_state.calibration_points = calibration_points
+
+        print(f"[Calibration] Peak-ordered calibration: {len(calibration_points)} points")
+        for pixel, wl in calibration_points:
+            print(f"  Pixel {pixel} -> {wl:.1f} nm")
+        return calibration_points
 
     def _auto_calibrate_correlation(
         self,
