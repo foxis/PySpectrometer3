@@ -252,7 +252,11 @@ class SpectrumExtractor:
         return frame[y_start:y_end, :].copy()
     
     def detect_angle(self, frame: np.ndarray, visualize: bool = False) -> tuple[float, Optional[np.ndarray]]:
-        """Auto-detect spectrum rotation angle using Hough transform.
+        """Auto-detect spectrum rotation angle from vertical spectral lines.
+        
+        Detects near-vertical stripes (spectral lines) and measures their
+        deviation from true vertical. Returns the angle needed to rotate
+        the spectrum so lines become horizontal for proper extraction.
         
         Args:
             frame: Input frame as BGR numpy array
@@ -262,22 +266,36 @@ class SpectrumExtractor:
             Tuple of (detected_angle_degrees, visualization_image_or_None)
         """
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
         height, width = gray.shape
-        roi_y_start = height // 4
-        roi_y_end = 3 * height // 4
-        roi = gray[roi_y_start:roi_y_end, :]
         
-        blurred = cv2.GaussianBlur(roi, (5, 5), 0)
-        edges = cv2.Canny(blurred, 50, 150)
+        # Adaptive blur based on image size
+        blur_size = max(3, (min(width, height) // 100) | 1)
+        blurred = cv2.GaussianBlur(gray, (blur_size, blur_size), 0)
+        
+        # Use adaptive thresholding for better edge detection on varied lighting
+        block_size = max(11, (min(width, height) // 20) | 1)
+        edges = cv2.adaptiveThreshold(
+            blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY, block_size, 2
+        )
+        edges = cv2.Canny(edges, 30, 100)
+        
+        # Morphological operations to connect broken edges
+        kernel_height = max(3, height // 30)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, kernel_height))
+        edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
+        
+        # Minimum line length based on image height (stripes are tall)
+        min_line_length = height // 4
+        max_line_gap = height // 15
         
         lines = cv2.HoughLinesP(
             edges,
             rho=1,
             theta=np.pi / 180,
-            threshold=100,
-            minLineLength=width // 4,
-            maxLineGap=20,
+            threshold=max(30, height // 10),
+            minLineLength=min_line_length,
+            maxLineGap=max_line_gap,
         )
         
         if lines is None or len(lines) == 0:
@@ -288,36 +306,49 @@ class SpectrumExtractor:
         
         for line in lines:
             x1, y1, x2, y2 = line[0]
-            length = np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+            dx = x2 - x1
+            dy = y2 - y1
+            length = np.sqrt(dx * dx + dy * dy)
             
-            if x2 != x1:
-                angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
-                
-                if abs(angle) < 45:
-                    angles.append(angle)
-                    lengths.append(length)
+            # Calculate angle from vertical (90 degrees)
+            # atan2 gives angle from horizontal, so vertical is ±90°
+            angle_from_horizontal = np.degrees(np.arctan2(dy, dx))
+            
+            # Convert to deviation from vertical
+            # Vertical lines have angle_from_horizontal near ±90°
+            if angle_from_horizontal > 0:
+                angle_from_vertical = angle_from_horizontal - 90
+            else:
+                angle_from_vertical = angle_from_horizontal + 90
+            
+            # Only consider near-vertical lines (within 45° of vertical)
+            if abs(angle_from_vertical) < 45:
+                angles.append(angle_from_vertical)
+                lengths.append(length)
         
         if not angles:
             return 0.0, None
         
         lengths = np.array(lengths)
         angles = np.array(angles)
+        
+        # Weight by line length
         weights = lengths / np.sum(lengths)
-        detected_angle = np.sum(angles * weights)
+        detected_angle = float(np.sum(angles * weights))
         
         vis_image = None
         if visualize:
             vis_image = frame.copy()
             
+            # Draw detected lines
             for line in lines:
                 x1, y1, x2, y2 = line[0]
-                y1 += roi_y_start
-                y2 += roi_y_start
                 cv2.line(vis_image, (x1, y1), (x2, y2), (0, 255, 0), 2)
             
+            # Draw the detected angle indicator (horizontal line showing correction)
             center_x = width // 2
             center_y = height // 2
-            line_len = width // 2
+            line_len = width // 3
             angle_rad = np.radians(detected_angle)
             
             x1 = int(center_x - line_len * np.cos(angle_rad))
@@ -332,7 +363,16 @@ class SpectrumExtractor:
                 f"Angle: {detected_angle:.2f} deg",
                 (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                1.0,
+                0.8,
+                (0, 255, 255),
+                2,
+            )
+            cv2.putText(
+                vis_image,
+                f"Lines: {len(angles)}",
+                (10, 60),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
                 (0, 255, 255),
                 2,
             )
