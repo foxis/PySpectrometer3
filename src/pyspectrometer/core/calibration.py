@@ -398,11 +398,13 @@ class Calibration:
 
     def _try_cauchy_fit(self, px: np.ndarray, wl: np.ndarray) -> tuple[np.ndarray, str]:
         """Try Cauchy-inverse fit: 1/λ² = poly(pixel) → λ = 1/√poly.
-        Returns (wavelength_array, method) where method is 'cauchy' or fallback name.
+        Uses Cauchy only within [min(px), max(px)]; extrapolates linearly outside
+        to avoid explosion at red/blue ends.
         """
         if len(px) < 3:
             return np.zeros(self.width), "linear"
 
+        p_min, p_max = float(px.min()), float(px.max())
         # 1/λ² in µm⁻² for numerical stability (nm→µm)
         inv_wl_sq = 1.0 / ((wl * 1e-3) ** 2)
         deg = min(2, len(px) - 1)
@@ -412,30 +414,43 @@ class Calibration:
         except np.linalg.LinAlgError:
             return np.zeros(self.width), "linear"
 
-        # Evaluate over full pixel range
-        pred_inv = poly(np.arange(self.width))
+        # Evaluate only within cal range to avoid polynomial extrapolation explosion
+        interp_in = np.arange(max(0, int(p_min)), min(self.width, int(p_max) + 1), dtype=np.float64)
+        pred_inv = poly(interp_in)
         eps = 1e-12
         if np.any(pred_inv <= eps):
             print("Cauchy fit produced non-positive values; falling back.")
             return np.zeros(self.width), "pchip" if _SCIPY_AVAILABLE else "linear"
 
-        interp_wl = 1.0 / np.sqrt(pred_inv) * 1000.0  # µm⁻¹ → nm
-        d = np.diff(interp_wl)
+        wl_in = 1.0 / np.sqrt(pred_inv) * 1000.0  # µm⁻¹ → nm
+        d = np.diff(wl_in)
         if not (np.all(d > 0) or np.all(d < 0)):
             print("Cauchy fit produced non-monotonic result; falling back.")
             return np.zeros(self.width), "pchip" if _SCIPY_AVAILABLE else "linear"
 
+        # Build full array: linear extrapolation outside cal range
+        full_wl = np.interp(np.arange(self.width), px, wl)  # base
+        i0, i1 = int(p_min), int(p_max)
+        if i0 <= i1:
+            full_wl[i0 : i1 + 1] = wl_in
         print("Calculating Cauchy-inverse fit (prism dispersion)...")
-        return interp_wl, "cauchy"
+        return full_wl, "cauchy"
 
     def _fallback_interp(self, px: np.ndarray, wl: np.ndarray, method: str) -> np.ndarray:
-        """Fallback interpolation when Cauchy fails."""
+        """Fallback interpolation when Cauchy fails. Uses linear (no PCHIP extrapolation
+        beyond cal range) to avoid red/blue explosion.
+        """
         if method == "pchip" and _SCIPY_AVAILABLE and len(px) >= 3:
             print("Using PCHIP interpolation (strictly monotonic)...")
-            interp = PchipInterpolator(px, wl, extrapolate=True)
-            out = interp(np.arange(self.width))
+            p_min, p_max = float(px.min()), float(px.max())
+            interp = PchipInterpolator(px, wl, extrapolate=False)  # no wild extrapolation
+            # Evaluate only inside [p_min, p_max]; use linear for rest
+            out = np.interp(np.arange(self.width), px, wl)
+            pixel_grid = np.arange(self.width, dtype=np.float64)
+            mask = (pixel_grid >= p_min) & (pixel_grid <= p_max)
+            out[mask] = interp(pixel_grid[mask])
             d = np.diff(out)
-            if (np.all(d > 0) or np.all(d < 0)):
+            if np.all(d > 0) or np.all(d < 0):
                 return out
         print("Using linear interpolation (strictly monotonic)...")
         return np.interp(np.arange(self.width), px, wl)

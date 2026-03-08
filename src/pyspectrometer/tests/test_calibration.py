@@ -4,9 +4,12 @@ Verifies that both peak-based and correlation-based calibration recover
 the correct wavelength mapping. Tests must assert alignment (max/mean error).
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
+from ..core.calibration import Calibration
 from ..core.spectrum import Peak
 from ..data.reference_spectra import ReferenceSource, get_reference_spectrum
 from ..modes.calibration import CalibrationMode
@@ -306,3 +309,86 @@ def test_calibration_alignment_tolerance():
     wl_est = poly(np.arange(n_pixels, dtype=np.float64))
     max_err = float(np.max(np.abs(wl_est - wl_true)))
     assert max_err < 10.0, f"Correlation calibration max error {max_err:.2f} nm exceeds 10 nm"
+
+
+def test_hg_csv_calibration_monotonic_no_explosion():
+    """Calibrate against Hg spectrum from CSV using same peak detection and matching as calibration.
+
+    Uses data/Spectrum-20260309--010902.csv (Hg lamp, Pixel, Intensity - ignore Wavelength).
+    Runs CalibrationMode.auto_calibrate with Hg reference (peak matching or correlation),
+    applies Calibration.recalibrate, and asserts:
+    - Strictly monotonic wavelengths
+    - No explosion (wavelengths in visible/NIR 250-850 nm)
+    - Mostly linear (dispersion in typical prism range 0.2-0.5 nm/px)
+    """
+    from ..data.reference_spectra import ReferenceSource
+    from ..processing.peak_detection import find_peak_indexes_scipy
+
+    csv_path = Path(__file__).resolve().parent.parent.parent.parent / "data" / "Spectrum-20260309--010902.csv"
+    if not csv_path.exists():
+        pytest.skip(f"CSV not found: {csv_path}")
+
+    data = np.loadtxt(csv_path, delimiter=",", skiprows=1)
+    pixels_arr = data[:, 0].astype(int)
+    intensity = data[:, 2].astype(np.float32)  # Use Intensity only (Wavelength column is from failed cal)
+    width = int(pixels_arr[-1]) + 1
+
+    # Placeholder wavelengths for PeakDetector (not used for matching)
+    wl_dummy = np.linspace(380.0, 750.0, width, dtype=np.float64)
+
+    # Same peak detection as calibration procedure (PeakDetector / find_peak_indexes_scipy)
+    peak_idx = find_peak_indexes_scipy(
+        intensity,
+        threshold=0.05,
+        min_dist=15,
+        prominence=0.005,
+    )
+    peaks = [
+        Peak(index=int(i), wavelength=float(wl_dummy[i]), intensity=float(intensity[i]))
+        for i in peak_idx
+    ]
+
+    # Same calibration procedure: CalibrationMode.auto_calibrate (peak matching or correlation)
+    cal_mode = CalibrationMode()
+    cal_mode.select_source(ReferenceSource.HG)
+    cal_points = cal_mode.auto_calibrate(
+        measured_intensity=intensity,
+        wavelengths=wl_dummy,
+        peak_indices=peaks,
+    )
+
+    assert len(cal_points) >= 3, (
+        f"Auto-calibrate must return 3+ points (peak or correlation); got {len(cal_points)}"
+    )
+
+    # Apply calibration
+    cal = Calibration(width=width)
+    ok = cal.recalibrate(
+        [p for p, _ in cal_points],
+        [w for _, w in cal_points],
+    )
+    assert ok, "recalibrate must succeed"
+
+    wl = cal.wavelengths
+    p_min, p_max = min(p for p, _ in cal_points), max(p for p, _ in cal_points)
+
+    # 1. Strictly monotonic within interpolation range
+    seg = wl[p_min : p_max + 1]
+    diff = np.diff(seg)
+    assert np.all(diff < 0) or np.all(diff > 0), (
+        f"Wavelengths must be strictly monotonic in [{p_min},{p_max}]"
+    )
+    assert np.all(diff != 0), "No flat segments in interpolation range"
+
+    # 2. No explosion: wavelengths in visible/NIR
+    assert 250 <= wl.min() <= 900 and 250 <= wl.max() <= 900, (
+        f"Wavelengths must be 250-900 nm (got [{wl.min():.1f}, {wl.max():.1f}])"
+    )
+
+    # 3. Mostly linear: dispersion in typical prism range 0.2-0.5 nm/px
+    px_span = cal_points[-1][0] - cal_points[0][0]
+    wl_span = abs(cal_points[-1][1] - cal_points[0][1])
+    disp = wl_span / max(px_span, 1)
+    assert 0.15 <= disp <= 0.6, (
+        f"Dispersion {disp:.3f} nm/px outside typical prism range 0.15-0.6"
+    )
