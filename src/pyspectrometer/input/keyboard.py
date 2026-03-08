@@ -57,7 +57,7 @@ DEFAULT_BINDINGS: list[KeyBinding] = [
     KeyBinding("t", Action.GAIN_UP, "Increase camera gain"),
     KeyBinding("g", Action.GAIN_DOWN, "Decrease camera gain"),
     KeyBinding("e", Action.CYCLE_EXTRACTION_METHOD, "Cycle extraction method"),
-    KeyBinding("E", Action.AUTO_DETECT_ANGLE, "Auto-detect rotation angle"),
+    KeyBinding("a", Action.AUTO_DETECT_ANGLE, "Auto-detect rotation angle"),
     KeyBinding("]", Action.PERP_WIDTH_UP, "Increase perpendicular width"),
     KeyBinding("[", Action.PERP_WIDTH_DOWN, "Decrease perpendicular width"),
     KeyBinding("w", Action.SAVE_EXTRACTION_PARAMS, "Save extraction parameters"),
@@ -118,12 +118,18 @@ class KeyboardHandler:
         Returns:
             The action that was triggered, or None if no key pressed
         """
-        key_press = cv2.waitKey(wait_ms)
+        key_press_raw = cv2.waitKey(wait_ms)
         
-        if key_press == -1:
+        if key_press_raw == -1:
             return None
         
-        action = self._key_to_action.get(key_press)
+        # Try raw key first
+        action = self._key_to_action.get(key_press_raw)
+        
+        # Fall back to masked key (for compatibility with some platforms)
+        if action is None:
+            key_press_masked = key_press_raw & 0xFF
+            action = self._key_to_action.get(key_press_masked)
         
         if action is None:
             return None
