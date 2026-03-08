@@ -237,6 +237,20 @@ class CalibrationMode(BaseMode):
             wl += c2 * (np.arange(n, dtype=np.float64) ** 2) / (n * n)
             wl += c3 * (np.arange(n, dtype=np.float64) ** 3) / (n * n * n)
             ref = get_reference_spectrum(source, wl)
+            # Apply sensitivity to source when S is on: ref_sensor = ref * sens for better match with raw measured
+            if (
+                self.cal_state.sensitivity_correction_enabled
+                and self._cmos_sensitivity_wl is not None
+                and self._cmos_sensitivity_val is not None
+            ):
+                sens = np.interp(
+                    wl,
+                    self._cmos_sensitivity_wl,
+                    self._cmos_sensitivity_val,
+                    left=0.0,
+                    right=0.0,
+                )
+                ref = ref * np.maximum(sens, 1e-9)
             if ref.size < 2 or np.std(ref) < 1e-9 or np.std(measured_intensity) < 1e-9:
                 return 1e6
             corr = np.corrcoef(measured_intensity, ref)[0, 1]
@@ -275,6 +289,19 @@ class CalibrationMode(BaseMode):
         self.cal_state.calibration_points = calibration_points
 
         ref_final = get_reference_spectrum(source, wl_arr)
+        if (
+            self.cal_state.sensitivity_correction_enabled
+            and self._cmos_sensitivity_wl is not None
+            and self._cmos_sensitivity_val is not None
+        ):
+            sens = np.interp(
+                wl_arr,
+                self._cmos_sensitivity_wl,
+                self._cmos_sensitivity_val,
+                left=0.0,
+                right=0.0,
+            )
+            ref_final = ref_final * np.maximum(sens, 1e-9)
         corr_final = np.corrcoef(measured_intensity, ref_final)[0, 1] if np.std(ref_final) > 1e-9 else 0
         print(f"[Calibration] Correlation calibration: r={corr_final:.4f}")
         for pixel, wl in calibration_points:
@@ -418,12 +445,23 @@ class CalibrationMode(BaseMode):
         return get_reference_name(self.cal_state.current_source)
     
     def _load_cmos_sensitivity(self) -> None:
-        """Load CMOS spectral sensitivity curve from CSV."""
-        csv_path = _DATA_DIR / "silicon_CMOS_spectral_sensitivity.csv"
-        if not csv_path.exists():
-            print(f"[Calibration] CMOS sensitivity file not found: {csv_path}")
+        """Load CMOS spectral sensitivity curve from CSV.
+        Tries cwd/data first, then package-relative data dir.
+        """
+        name = "silicon_CMOS_spectral_sensitivity.csv"
+        candidates = [
+            Path.cwd() / "data" / name,
+            _DATA_DIR / name,
+        ]
+        csv_path = None
+        for p in candidates:
+            if p.exists():
+                csv_path = p
+                break
+        if csv_path is None:
+            print(f"[Calibration] CMOS sensitivity file not found (tried: {[str(p) for p in candidates]})")
             return
-        
+
         try:
             data = np.loadtxt(csv_path, delimiter=",", skiprows=2)
             self._cmos_sensitivity_wl = data[:, 0]
@@ -479,30 +517,38 @@ class CalibrationMode(BaseMode):
         wavelengths: np.ndarray,
     ) -> np.ndarray:
         """Apply CMOS sensitivity correction to linearize spectrum.
-        
+
         Args:
             intensity: Measured spectrum intensity
-            wavelengths: Wavelength array (per pixel)
-            
+            wavelengths: Wavelength array (per pixel), same length as intensity or longer
+
         Returns:
-            Corrected intensity (linearized)
+            Corrected intensity (linearized), float32
         """
         if not self.cal_state.sensitivity_correction_enabled:
             return intensity
-        
+
         if self._cmos_sensitivity_wl is None or self._cmos_sensitivity_val is None:
             return intensity
-        
+
+        n_wl = len(wavelengths)
+        n_int = len(intensity)
+        n = min(n_wl, n_int)
+        intensity = intensity[:n]
+        wl = wavelengths[:n]
+
         sensitivity = np.interp(
-            wavelengths,
+            wl,
             self._cmos_sensitivity_wl,
             self._cmos_sensitivity_val,
             left=0.0,
             right=0.0,
         )
-        
-        corrected = np.zeros_like(intensity, dtype=np.float32)
+
+        intensity_f = np.asarray(intensity, dtype=np.float32)
+        corrected = np.zeros(n, dtype=np.float32)
         mask = sensitivity > 1e-6
-        corrected[mask] = intensity[mask] / sensitivity[mask]
-        
+        corrected[mask] = intensity_f[mask] / sensitivity[mask]
+        corrected[~mask] = intensity_f[~mask]
+
         return corrected

@@ -8,6 +8,16 @@ import numpy as np
 from .buttons import Button, ButtonBar, ButtonStyle
 
 
+def _estimate_button_width(label: str, shortcut: str, style: ButtonStyle) -> int:
+    """Estimate button width from label and shortcut."""
+    display_text = f"[{shortcut}] {label}" if shortcut else label
+    (text_w, _), _ = cv2.getTextSize(
+        display_text, cv2.FONT_HERSHEY_SIMPLEX,
+        style.font_scale, style.font_thickness,
+    )
+    return text_w + style.padding_x * 2
+
+
 @dataclass
 class ControlBarConfig:
     """Configuration for the control bar."""
@@ -57,9 +67,7 @@ MEASUREMENT_BUTTONS = [
     ButtonDef("Dark", "set_dark", row=1),
     ButtonDef("White", "set_white", row=1),
     ButtonDef("ClrRef", "clear_refs", row=1),
-    ButtonDef("Save", "save", shortcut="s", row=1),
-    ButtonDef("Load", "load", row=1),
-    # Row 2: Display and control
+    # Row 2: Display and control, Save/Load before Quit, Quit right-justified
     ButtonDef("ShowRef", "show_reference", is_toggle=True, row=2),
     ButtonDef("Norm", "normalize", is_toggle=True, row=2),
     ButtonDef("G", "show_gain_slider", is_toggle=True, row=2),
@@ -68,6 +76,9 @@ MEASUREMENT_BUTTONS = [
     ButtonDef("AE", "auto_exposure", is_toggle=True, row=2),
     ButtonDef("Prev", "cycle_preview", shortcut="v", row=2),
     ButtonDef("Lamp", "lamp_toggle", is_toggle=True, row=2),
+    ButtonDef("Save", "save", shortcut="s", row=2),
+    ButtonDef("Load", "load", row=2),
+    ButtonDef("__spacer__", "__spacer_right__", row=2),
     ButtonDef("Quit", "quit", shortcut="q", row=2),
 ]
 
@@ -88,8 +99,6 @@ CALIBRATION_BUTTONS = [
     ButtonDef("FL5", "source_fl5", row=1),
     ButtonDef("A", "source_a", row=1),
     ButtonDef("Overlay", "toggle_overlay", is_toggle=True, row=1),
-    ButtonDef("Save", "save_cal", shortcut="w", row=1),
-    ButtonDef("Load", "load_cal", row=1),
     ButtonDef("__spacer__", "__spacer_left__", row=1),  # Pushes S/CORR/LEVEL/CALIB/R right
     ButtonDef("S", "toggle_sensitivity", is_toggle=True, row=1),
     ButtonDef("CORR", "correct_sensitivity", row=1),
@@ -106,6 +115,9 @@ CALIBRATION_BUTTONS = [
     ButtonDef("AE", "auto_exposure", is_toggle=True, row=2),
     ButtonDef("Prev", "cycle_preview", shortcut="v", row=2),
     ButtonDef("Clear", "clear_points", shortcut="x", row=2),
+    ButtonDef("Save", "save_cal", shortcut="w", row=2),
+    ButtonDef("Load", "load_cal", row=2),
+    ButtonDef("__spacer__", "__spacer_right__", row=2),
     ButtonDef("Quit", "quit", shortcut="q", row=2),
 ]
 
@@ -182,7 +194,20 @@ class ControlBar:
         for btn_def in buttons:
             bar = self._row1 if btn_def.row == 1 else self._row2
             if btn_def.action_name.startswith("__spacer"):
-                bar.add_separator(width=150)  # Push LEVEL/CALIB to the right
+                left_width = bar._next_x - bar.x
+                spacer_idx = next(i for i, b in enumerate(buttons) if b is btn_def)
+                same_row = btn_def.row
+                right_defs = [b for i, b in enumerate(buttons) if i > spacer_idx and b.row == same_row
+                              and not b.action_name.startswith("__spacer")]
+                right_width = 0
+                for rd in right_defs:
+                    w = _estimate_button_width(rd.label, rd.shortcut, self._button_style)
+                    right_width += w + cfg.button_spacing
+                if right_defs:
+                    right_width -= cfg.button_spacing
+                available = self.width - cfg.margin_x * 2 - left_width - right_width
+                spacer_width = max(10, min(available, 300))
+                bar.add_separator(width=spacer_width)
                 continue
             bar.add_button(
                 btn_def.label,

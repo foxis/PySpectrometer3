@@ -420,21 +420,30 @@ class DisplayManager:
             cv2.polylines(graph, [pts], isClosed=False, color=color, thickness=2, lineType=cv2.LINE_AA)
     
     def _render_sensitivity_overlay(self, graph: np.ndarray) -> None:
-        """Render CMOS sensitivity curve overlay."""
+        """Render CMOS sensitivity curve overlay.
+        Resamples overlay to graph width so it always matches the spectrum axis.
+        """
         if self._sensitivity_overlay is None:
             return
-        
+
         intensity, color = self._sensitivity_overlay
-        height = graph.shape[0]
-        
+        height, width = graph.shape[0], graph.shape[1]
+
+        # Resample to graph width so overlay aligns with spectrum
+        if len(intensity) != width:
+            x_old = np.linspace(0, width - 1, num=len(intensity), dtype=np.float32)
+            x_new = np.arange(width, dtype=np.float32)
+            intensity = np.interp(x_new, x_old, np.asarray(intensity, dtype=np.float32))
+
         points = []
-        for i, val in enumerate(intensity):
+        for i in range(min(len(intensity), width)):
+            val = intensity[i]
             y = height - int(min(val, height - 1))
             points.append((i, max(0, y)))
-        
+
         if len(points) > 1:
             pts = np.array(points, dtype=np.int32)
-            cv2.polylines(graph, [pts], isClosed=False, color=color, thickness=1, lineType=cv2.LINE_AA)
+            cv2.polylines(graph, [pts], isClosed=False, color=color, thickness=2, lineType=cv2.LINE_AA)
     
     def _render_reference_spectrum(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render the reference spectrum overlay line."""
@@ -459,18 +468,19 @@ class DisplayManager:
     def _render_spectrum(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render the spectrum intensity curve.
         
-        Scales intensity to fit graph height. Supports both 8-bit (0-255)
-        and 10-bit (0-1023) data.
+        Scales intensity to fit graph height. Uses config.camera.bit_depth
+        for Y-axis range (10-bit: 0-1023, 8-bit: 0-255).
         """
         height = graph.shape[0]
         
-        # Detect intensity range for proper scaling
-        max_intensity = float(np.max(data.intensity)) if len(data.intensity) > 0 else 255.0
-        # Use the max of actual max or expected max (10-bit = 1023, 8-bit = 255)
-        intensity_range = max(max_intensity, 255.0)
-        if intensity_range > 255:
-            # Likely 10-bit or higher
-            intensity_range = max(intensity_range, 1023.0)
+        # Use config bit depth for Y-axis range (not inferred from data)
+        bit_depth = getattr(self.config.camera, "bit_depth", 10)
+        if bit_depth >= 16:
+            intensity_range = 65535.0
+        elif bit_depth >= 10:
+            intensity_range = 1023.0
+        else:
+            intensity_range = 255.0
         
         # Scale factor to fit intensity into graph height
         scale = (height - 1) / intensity_range if intensity_range > 0 else 1.0

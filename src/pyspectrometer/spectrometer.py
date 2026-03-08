@@ -135,7 +135,8 @@ class Spectrometer:
         self._running = False
         self._last_frame: Optional[np.ndarray] = None
         self._frozen_spectrum: bool = False
-        self._frozen_intensity: Optional[np.ndarray] = None  # Stored frozen spectrum
+        self._frozen_intensity: Optional[np.ndarray] = None  # Stored frozen spectrum (pre-sensitivity)
+        self._last_intensity_pre_sensitivity: Optional[np.ndarray] = None  # For freeze capture
         self._autolevel_overlay: Optional[np.ndarray] = None  # Non-blocking autolevel display
 
         # Auto-gain/exposure state
@@ -249,6 +250,8 @@ class Spectrometer:
         if self._calibration_mode is not None:
             display.set_button_active("toggle_overlay", self._calibration_mode.cal_state.overlay_visible)
             display.set_button_active("toggle_sensitivity", self._calibration_mode.cal_state.sensitivity_correction_enabled)
+            # Freeze button: active = record (live), inactive = stopped (frozen). Default: live = record
+            display.set_button_active("freeze", not self._frozen_spectrum)
 
     def _on_correct_sensitivity(self) -> None:
         """Handle CORR button - placeholder for future sensitivity curve correction."""
@@ -538,9 +541,9 @@ class Spectrometer:
         frozen = self._calibration_mode.toggle_freeze()
         self._frozen_spectrum = frozen
         
-        if frozen and self._last_data is not None:
-            # Store the current spectrum when freezing
-            self._frozen_intensity = self._last_data.intensity.copy()
+        if frozen and self._last_intensity_pre_sensitivity is not None:
+            # Store pre-sensitivity intensity so S toggle applies correctly when frozen
+            self._frozen_intensity = self._last_intensity_pre_sensitivity.copy()
         elif not frozen:
             # Clear frozen spectrum when unfreezing
             self._frozen_intensity = None
@@ -574,8 +577,18 @@ class Spectrometer:
             print("[CAL] No data available for calibration")
             return
 
+        # Use raw (pre-sensitivity) measured when S is on so correlation uses ref*sens vs raw (both sensor space)
+        measured = (
+            self._last_intensity_pre_sensitivity
+            if (
+                self._calibration_mode.cal_state.sensitivity_correction_enabled
+                and self._last_intensity_pre_sensitivity is not None
+                and len(self._last_intensity_pre_sensitivity) == len(self._last_data.intensity)
+            )
+            else self._last_data.intensity
+        )
         cal_points = self._calibration_mode.auto_calibrate(
-            measured_intensity=self._last_data.intensity,
+            measured_intensity=measured,
             wavelengths=self._last_data.wavelengths,
             peak_indices=self._last_data.peaks,
         )
@@ -763,7 +776,16 @@ class Spectrometer:
 
         self._extractor.set_rotation_angle(angle)
         self._extractor.set_spectrum_y_center(y_center)
+        self._extractor._precompute_sampling_coords()
         print(f"[AutoLevel] Rotation: {angle:.2f}°  Y Center: {y_center}")
+
+        # Persist extraction params (including crop window Y offset) to cal file
+        if self._calibration.save_extraction_params(
+            rotation_angle=self._extractor.rotation_angle,
+            spectrum_y_center=self._extractor.spectrum_y_center,
+            perpendicular_width=self._extractor.perpendicular_width,
+        ):
+            print("[AutoLevel] Config saved (rotation, Y offset, perp width)")
 
         if vis_image is not None:
             self._autolevel_overlay = vis_image
@@ -863,6 +885,9 @@ class Spectrometer:
                         intensity,
                         self._calibration.wavelengths,
                     )
+
+                if self._calibration_mode is not None:
+                    self._last_intensity_pre_sensitivity = intensity.copy()
                 
                 # Apply CMOS sensitivity correction if enabled (calibration mode)
                 if self._calibration_mode is not None:
@@ -870,10 +895,18 @@ class Spectrometer:
                         intensity,
                         self._calibration.wavelengths,
                     )
-                
+
+                # Align intensity and wavelengths length (extractor width may differ from calibration width)
+                n_wl = len(self._calibration.wavelengths)
+                n_int = len(intensity)
+                n = min(n_wl, n_int)
+                if n < n_int:
+                    intensity = intensity[:n]
+                wl = self._calibration.wavelengths[:n]
+
                 data = SpectrumData(
                     intensity=intensity,
-                    wavelengths=self._calibration.wavelengths,
+                    wavelengths=wl,
                     raw_frame=frame,
                     cropped_frame=cropped,
                 )
@@ -918,12 +951,15 @@ class Spectrometer:
                         self.config.display.graph_height,
                     )
                     self._display.set_mode_overlay(overlay)
-                    
+                    self._display.set_sensitivity_overlay(None)
+
                     # Update status display
                     for key, value in self._measurement_mode.get_status().items():
                         self._display._control_bar.set_status(key, value)
                 else:
                     # Legacy mode: update reference spectrum overlay
+                    self._display.set_mode_overlay(None)
+                    self._display.set_sensitivity_overlay(None)
                     ref_intensity = self._reference_manager.get_interpolated(
                         processed.wavelengths,
                         processed.intensity,

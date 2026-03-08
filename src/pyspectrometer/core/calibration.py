@@ -275,49 +275,51 @@ class Calibration:
         return True
     
     def _read_cal_file(self) -> tuple[list[int], list[float], bool]:
-        """Read calibration data from file."""
+        """Read calibration data from file.
+        Pixels/wavelengths (lines 0-1) and extraction params (lines 2-4)
+        are read independently so offset/rotation still load when lines 0-1 fail.
+        """
         errors = False
         pixels: list[int] = []
         wavelengths: list[float] = []
-        
+        lines: list[str] = []
+
         try:
             print("Loading calibration data...")
             with open(self.cal_file, "r") as f:
                 lines = f.readlines()
-                
+        except OSError:
+            return pixels, wavelengths, True
+
+        # Parse pixels and wavelengths (lines 0-1)
+        try:
             line0 = lines[0].strip()
             pixels = [int(x) for x in line0.split(",")]
-            
             line1 = lines[1].strip()
             wavelengths = [float(x) for x in line1.split(",")]
-            
-            if len(pixels) != len(wavelengths):
+            if len(pixels) != len(wavelengths) or len(pixels) < 3:
                 errors = True
-            if len(pixels) < 3 or len(wavelengths) < 3:
-                errors = True
-            
-            if not errors:
+            else:
                 self._cal_pixels = pixels
                 self._cal_wavelengths = wavelengths
-            
-            if len(lines) >= 3:
-                line2 = lines[2].strip()
-                self._rotation_angle = float(line2)
-                print(f"Loaded rotation angle: {self._rotation_angle:.2f} deg")
-            
-            if len(lines) >= 4:
-                line3 = lines[3].strip()
-                self._spectrum_y_center = int(float(line3))
-                print(f"Loaded spectrum Y center: {self._spectrum_y_center}")
-            
-            if len(lines) >= 5:
-                line4 = lines[4].strip()
-                self._perpendicular_width = int(float(line4))
-                print(f"Loaded perpendicular width: {self._perpendicular_width}")
-                
-        except Exception:
+        except (IndexError, ValueError):
             errors = True
-        
+
+        # Always load extraction params (offset, rotation, perpendicular width)
+        # so they apply even when pixel/wavelength lines fail
+        try:
+            if len(lines) >= 3:
+                self._rotation_angle = float(lines[2].strip())
+                print(f"Loaded rotation angle: {self._rotation_angle:.2f} deg")
+            if len(lines) >= 4:
+                self._spectrum_y_center = int(float(lines[3].strip()))
+                print(f"Loaded spectrum Y center (offset): {self._spectrum_y_center}")
+            if len(lines) >= 5:
+                self._perpendicular_width = int(float(lines[4].strip()))
+                print(f"Loaded perpendicular width: {self._perpendicular_width}")
+        except (IndexError, ValueError) as e:
+            print(f"[Calibration] Could not parse extraction params: {e}")
+
         return pixels, wavelengths, errors
     
     def _compute_calibration(
