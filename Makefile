@@ -19,6 +19,7 @@ endif
 
 .PHONY: all install install-deps install-system-deps install-desktop \
         install-waveshare install-waveshare-fullscreen \
+        install-waveshare-link install-waveshare-fullscreen-link \
         uninstall run run-fullscreen run-waterfall run-waveshare \
         clean help venv
 
@@ -93,6 +94,20 @@ install-waveshare-fullscreen: create-icon
 	@chmod +x $(DESKTOP_DIR)/PySpectrometer3-Waveshare-FS.desktop
 	@echo "Desktop shortcut created at $(DESKTOP_DIR)/PySpectrometer3-Waveshare-FS.desktop"
 
+install-waveshare-link: create-waveshare-script
+	@echo "Creating Waveshare 3.5\" desktop symlink..."
+	@mkdir -p $(DESKTOP_DIR)
+	@ln -sf $(shell pwd)/run-waveshare.sh $(DESKTOP_DIR)/PySpectrometer3-Waveshare.sh
+	@chmod +x $(DESKTOP_DIR)/PySpectrometer3-Waveshare.sh
+	@echo "Desktop symlink created at $(DESKTOP_DIR)/PySpectrometer3-Waveshare.sh"
+
+install-waveshare-fullscreen-link: create-waveshare-fullscreen-script
+	@echo "Creating Waveshare 3.5\" fullscreen desktop symlink..."
+	@mkdir -p $(DESKTOP_DIR)
+	@ln -sf $(shell pwd)/run-waveshare-fullscreen.sh $(DESKTOP_DIR)/PySpectrometer3-Waveshare-FS.sh
+	@chmod +x $(DESKTOP_DIR)/PySpectrometer3-Waveshare-FS.sh
+	@echo "Desktop symlink created at $(DESKTOP_DIR)/PySpectrometer3-Waveshare-FS.sh"
+
 create-icon:
 	@echo "Creating application icon..."
 	@mkdir -p $(SRC_DIR)/resources
@@ -117,6 +132,14 @@ create-waveshare-script:
 	@echo '$(PYTHON) -m $(PACKAGE) --waveshare "$$@"' >> run-waveshare.sh
 	@chmod +x run-waveshare.sh
 
+create-waveshare-fullscreen-script:
+	@echo "Creating Waveshare 3.5\" fullscreen run script..."
+	@echo '#!/bin/bash' > run-waveshare-fullscreen.sh
+	@echo 'cd "$(shell pwd)"' >> run-waveshare-fullscreen.sh
+	@echo 'export DISPLAY=:0' >> run-waveshare-fullscreen.sh
+	@echo '$(PYTHON) -m $(PACKAGE) --waveshare --fullscreen "$$@"' >> run-waveshare-fullscreen.sh
+	@chmod +x run-waveshare-fullscreen.sh
+
 ## Uninstall target
 
 uninstall:
@@ -124,6 +147,8 @@ uninstall:
 	@rm -f $(DESKTOP_DIR)/$(DESKTOP_FILE)
 	@rm -f $(DESKTOP_DIR)/PySpectrometer3-Waveshare.desktop
 	@rm -f $(DESKTOP_DIR)/PySpectrometer3-Waveshare-FS.desktop
+	@rm -f $(DESKTOP_DIR)/PySpectrometer3-Waveshare.sh
+	@rm -f $(DESKTOP_DIR)/PySpectrometer3-Waveshare-FS.sh
 	@rm -f run.sh run-waveshare.sh run-waveshare-fullscreen.sh
 	@echo "Uninstall complete. Dependencies not removed."
 
@@ -189,6 +214,8 @@ help:
 	@echo "  make install-desktop           - Create standard desktop shortcut (800x480)"
 	@echo "  make install-waveshare         - Create Waveshare 3.5\" desktop shortcut"
 	@echo "  make install-waveshare-fullscreen - Create Waveshare fullscreen shortcut"
+	@echo "  make install-waveshare-link    - Create Waveshare desktop symlink"
+	@echo "  make install-waveshare-fullscreen-link - Create Waveshare fullscreen symlink"
 	@echo "  make uninstall                 - Remove all desktop shortcuts"
 	@echo ""
 	@echo "Running:"
