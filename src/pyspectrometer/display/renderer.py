@@ -8,11 +8,17 @@ import numpy as np
 from ..config import Config
 from ..core.spectrum import SpectrumData
 from ..core.calibration import Calibration
+from ..processing.spectrum_transform import (
+    get_crop_corners_rotated,
+    params_from_saved,
+    transform_bbox_rotated_to_original,
+)
 from ..utils.color import wavelength_to_rgb, rgb_to_bgr
 from ..gui.control_bar import ControlBar, ControlBarConfig
 from ..gui.sliders import SliderPanel
 from .graticule import GraticuleRenderer
 from .waterfall import WaterfallDisplay
+from .overlay_utils import render_polyline_overlay
 
 
 @dataclass
@@ -406,45 +412,18 @@ class DisplayManager:
         """Render mode-specific overlay (e.g., reference spectrum for calibration)."""
         if self._mode_overlay is None:
             return
-        
         intensity, color = self._mode_overlay
-        height = graph.shape[0]
-        
-        # Draw connected line for overlay
-        points = []
-        for i, val in enumerate(intensity):
-            y = height - int(min(val, height - 1))
-            points.append((i, max(0, y)))
-        
-        if len(points) > 1:
-            pts = np.array(points, dtype=np.int32)
-            cv2.polylines(graph, [pts], isClosed=False, color=color, thickness=2, lineType=cv2.LINE_AA)
-    
+        render_polyline_overlay(graph, intensity, color)
+
     def _render_sensitivity_overlay(self, graph: np.ndarray) -> None:
         """Render CMOS sensitivity curve overlay.
         Resamples overlay to graph width so it always matches the spectrum axis.
         """
         if self._sensitivity_overlay is None:
             return
-
         intensity, color = self._sensitivity_overlay
-        height, width = graph.shape[0], graph.shape[1]
-
-        # Resample to graph width so overlay aligns with spectrum
-        if len(intensity) != width:
-            x_old = np.linspace(0, width - 1, num=len(intensity), dtype=np.float32)
-            x_new = np.arange(width, dtype=np.float32)
-            intensity = np.interp(x_new, x_old, np.asarray(intensity, dtype=np.float32))
-
-        points = []
-        for i in range(min(len(intensity), width)):
-            val = intensity[i]
-            y = height - int(min(val, height - 1))
-            points.append((i, max(0, y)))
-
-        if len(points) > 1:
-            pts = np.array(points, dtype=np.int32)
-            cv2.polylines(graph, [pts], isClosed=False, color=color, thickness=2, lineType=cv2.LINE_AA)
+        width = graph.shape[1]
+        render_polyline_overlay(graph, intensity, color, resample_to_width=width)
     
     def _render_reference_spectrum(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render the reference spectrum overlay line. Both measured and reference are 0-1."""
@@ -454,18 +433,16 @@ class DisplayManager:
 
         height = graph.shape[0]
         scale = float(height - 1) if height > 1 else 1.0
-        ref_color = (180, 180, 180)  # Light gray for reference
-
-        points = []
-        for i, intensity in enumerate(ref_intensity):
-            if i < len(data.wavelengths):
-                scaled = int(min(float(intensity) * scale, height - 1))
-                y = height - scaled
-                points.append((i, max(0, y)))
-        
-        if len(points) > 1:
-            for j in range(len(points) - 1):
-                cv2.line(graph, points[j], points[j + 1], ref_color, 1, cv2.LINE_AA)
+        scaled = np.minimum(
+            np.asarray(ref_intensity, dtype=np.float32) * scale,
+            height - 1,
+        )
+        render_polyline_overlay(
+            graph,
+            scaled,
+            (180, 180, 180),
+            thickness=1,
+        )
     
     def _render_spectrum(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render the spectrum intensity curve.
@@ -620,102 +597,46 @@ class DisplayManager:
         original_width: int,
         original_height: int,
     ) -> None:
-        """Draw a rotated crop box on the UNROTATED full camera view.
-        
-        This shows where the extraction region is in the original camera frame.
-        The box is rotated by rotation_angle and positioned at spectrum_y_center
-        (which is in rotated coordinates).
-        
-        Args:
-            frame: Display frame (already scaled for display)
-            rotation_angle: Rotation angle in degrees
-            perp_width: Height of sampling region (in original coordinates)
-            spectrum_y_center: Y center in ROTATED frame coordinates
-            original_width: Original frame width before scaling
-            original_height: Original frame height before scaling
+        """Draw crop box on UNROTATED full camera view using spectrum_transform.
+
+        Uses spectrum_transform to transform bbox from corrected (rotated) coords
+        to original image coords. Uses cv2.getRotationMatrix2D (no manual cos/sin).
         """
         display_height, display_width = frame.shape[:2]
-        
-        # Protect against division by zero
         if original_width <= 0 or original_height <= 0:
             return
-        
-        # Scale factors
+
+        params = params_from_saved(
+            rotation_angle, spectrum_y_center, original_height
+        )
+        crop_height = self.config.display.preview_height
+
+        corners_rotated = get_crop_corners_rotated(
+            original_width, spectrum_y_center, crop_height
+        )
+        corners_original = transform_bbox_rotated_to_original(
+            corners_rotated, params, original_width, original_height
+        )
+
         scale_x = display_width / original_width
         scale_y = display_height / original_height
-        
-        # The crop box in ROTATED coordinates is:
-        # - Full width of frame
-        # - Centered at spectrum_y_center with height matching the preview crop
-        # Use the preview_height from config to match what's shown in windowed preview
-        crop_height = self.config.display.preview_height
-        half_height = crop_height // 2
-        
-        # Define crop box corners in ROTATED frame coordinates
-        # (0, y_center - half) to (width, y_center + half)
-        y_top_rot = spectrum_y_center - half_height
-        y_bottom_rot = spectrum_y_center + half_height
-        
-        # Corners in rotated coordinates (clockwise from top-left)
-        corners_rotated = np.array([
-            [0, y_top_rot],
-            [original_width, y_top_rot],
-            [original_width, y_bottom_rot],
-            [0, y_bottom_rot],
-        ], dtype=np.float32)
-        
-        # CRITICAL: rotated -> original MUST use R(+angle). DO NOT change the signs.
-        #
-        # Extraction uses warpAffine(getRotationMatrix2D(center, -angle)) = R(-angle)
-        # for orig -> rotated. Inverse rotated -> orig = R(+angle). NOT R(-angle).
-        #
-        # R(+angle): x' = x*cos - y*sin,  y' = x*sin + y*cos
-        # Signs: x term gets -y*sin, y term gets +x*sin. If you use +y*sin and -x*sin
-        # you get R(-angle) which is WRONG - the box tilts opposite to the spectrum.
-        # DO NOT "fix" this by flipping signs; the current signs are correct.
-        center = (original_width / 2, original_height / 2)
-        angle_rad = np.radians(rotation_angle)
-        cos_a = np.cos(angle_rad)
-        sin_a = np.sin(angle_rad)
-        
-        corners_original = []
-        for x, y in corners_rotated:
-            x_c = x - center[0]
-            y_c = y - center[1]
-            # Inverse R(+angle): rotated -> original
-            x_r = x_c * cos_a - y_c * sin_a
-            y_r = x_c * sin_a + y_c * cos_a
-            x_orig = x_r + center[0]
-            y_orig = y_r + center[1]
-            corners_original.append([x_orig, y_orig])
-        
-        # Scale corners to display coordinates
         corners_display = np.array([
             [int(x * scale_x), int(y * scale_y)]
             for x, y in corners_original
         ], dtype=np.int32)
-        
-        # Draw the rotated box
+
         cv2.polylines(frame, [corners_display], True, (0, 255, 255), 2)
-        
-        # Also draw center line (transformed)
-        center_line_rot = np.array([
-            [0, spectrum_y_center],
-            [original_width, spectrum_y_center],
-        ], dtype=np.float32)
-        
-        center_line_orig = []
-        for x, y in center_line_rot:
-            x_c = x - center[0]
-            y_c = y - center[1]
-            # Same R(+angle) as crop box (inverse: rotated -> original)
-            x_r = x_c * cos_a - y_c * sin_a
-            y_r = x_c * sin_a + y_c * cos_a
-            x_orig = x_r + center[0]
-            y_orig = y_r + center[1]
-            center_line_orig.append([int(x_orig * scale_x), int(y_orig * scale_y)])
-        
-        cv2.line(frame, tuple(center_line_orig[0]), tuple(center_line_orig[1]), (255, 255, 0), 1)
+
+        center_line_rot = np.array(
+            [[0, spectrum_y_center], [original_width, spectrum_y_center]],
+            dtype=np.float32,
+        )
+        center_line_orig = transform_bbox_rotated_to_original(
+            center_line_rot, params, original_width, original_height
+        )
+        p0 = (int(center_line_orig[0, 0] * scale_x), int(center_line_orig[0, 1] * scale_y))
+        p1 = (int(center_line_orig[1, 0] * scale_x), int(center_line_orig[1, 1] * scale_y))
+        cv2.line(frame, p0, p1, (255, 255, 0), 1)
     
     def _draw_sampling_lines_full(
         self,
@@ -850,7 +771,18 @@ class DisplayManager:
             True if button was found
         """
         return self._control_bar.set_button_active(action_name, active)
-    
+
+    def set_status(self, key: str, value: str) -> None:
+        """Set a status value displayed in the control bar.
+        
+        Prefer this over accessing _control_bar directly.
+        
+        Args:
+            key: Status key (e.g., "Ref", "Pts", "Status", "Dark")
+            value: Value to display
+        """
+        self._control_bar.set_status(key, value)
+
     def _update_control_bar_status(
         self,
         camera_gain: float,
@@ -863,16 +795,16 @@ class DisplayManager:
     ) -> None:
         """Update status values displayed in the control bar."""
         cal_result = self.calibration.result
-        
-        self._control_bar.set_status("Cal", cal_result.status_message[:12])
-        self._control_bar.set_status("Gain", f"{camera_gain:.0f}")
-        self._control_bar.set_status("SG", str(savgol_poly))
-        self._control_bar.set_status("Ext", extraction_method[:3].upper())
-        self._control_bar.set_status("Ang", f"{rotation_angle:.1f}")
-        self._control_bar.set_status("Wid", str(perp_width))
-        
+
+        self.set_status("Cal", cal_result.status_message[:12])
+        self.set_status("Gain", f"{camera_gain:.0f}")
+        self.set_status("SG", str(savgol_poly))
+        self.set_status("Ext", extraction_method[:3].upper())
+        self.set_status("Ang", f"{rotation_angle:.1f}")
+        self.set_status("Wid", str(perp_width))
+
         if self.state.reference_name != "None":
-            self._control_bar.set_status("Ref", self.state.reference_name[:8])
+            self.set_status("Ref", self.state.reference_name[:8])
     
     @property
     def control_bar(self) -> ControlBar:

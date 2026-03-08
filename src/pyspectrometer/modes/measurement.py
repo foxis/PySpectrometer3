@@ -15,6 +15,7 @@ from typing import Optional, Callable
 import numpy as np
 
 from .base import BaseMode, ModeType, ButtonDefinition
+from ..processing.reference_correction import apply_dark_white_correction
 
 
 @dataclass
@@ -87,34 +88,33 @@ class MeasurementMode(BaseMode):
         intensity: np.ndarray,
         wavelengths: np.ndarray,
     ) -> np.ndarray:
-        """Process spectrum with dark/white correction and normalization."""
+        """Process spectrum with dark/white correction and normalization.
+
+        Returns 0-1 normalized intensity for pipeline consistency.
+        """
         result = intensity.astype(np.float64)
-        
+
         # Apply averaging if enabled
         if self.state.averaging_enabled:
             result = self.accumulate_spectrum(result)
-        
-        # Subtract dark reference
-        if self.meas_state.subtract_dark and self.meas_state.dark_spectrum is not None:
-            dark = self.meas_state.dark_spectrum.astype(np.float64)
-            result = result - dark
-            result = np.maximum(result, 0)
-        
-        # Normalize to white reference
-        if self.meas_state.white_spectrum is not None:
-            white = self.meas_state.white_spectrum.astype(np.float64)
-            if self.meas_state.dark_spectrum is not None:
-                white = white - self.meas_state.dark_spectrum.astype(np.float64)
-            white = np.maximum(white, 1)  # Avoid division by zero
-            result = (result / white) * 255
-        
-        # Normalize to reference spectrum
+
+        # Apply dark/white reference correction (shared logic)
+        dark = self.meas_state.dark_spectrum if self.meas_state.subtract_dark else None
+        result = apply_dark_white_correction(
+            result,
+            dark,
+            self.meas_state.white_spectrum,
+        )
+
+        # Normalize to reference spectrum if enabled
         if self.meas_state.normalize_to_reference and self.meas_state.reference_spectrum is not None:
-            ref = self.meas_state.reference_spectrum.astype(np.float64)
-            ref = np.maximum(ref, 1)
-            result = (result / ref) * 255
-        
-        return np.clip(result, 0, 255)
+            ref = np.maximum(
+                np.asarray(self.meas_state.reference_spectrum, dtype=np.float64),
+                1,
+            )
+            result = np.clip(result.astype(np.float64) / ref, 0, 1).astype(np.float32)
+
+        return result
     
     def get_overlay(
         self,

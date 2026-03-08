@@ -138,12 +138,11 @@ class SavitzkyGolayFilter(ProcessorInterface):
     def process(self, data: SpectrumData) -> SpectrumData:
         """Apply Savitzky-Golay filter to spectrum intensity.
 
-        Preserves bit depth: clips to 0-255 for 8-bit, 0-1023 for 10-bit,
-        0-65535 for 16-bit based on input data range.
-        
+        Expects intensity in 0-1 range (normalized by extraction). Clips output to [0, 1].
+
         Args:
             data: Input spectrum data
-            
+
         Returns:
             Spectrum data with smoothed intensity values
         """
@@ -151,16 +150,11 @@ class SavitzkyGolayFilter(ProcessorInterface):
             return data
 
         intensity = data.intensity.astype(np.float64)
-        max_val = float(np.max(intensity)) if intensity.size > 0 else 255.0
-        # Preserve bit depth: 8-bit (255), 10-bit (1023), 16-bit (65535)
-        clip_max = 255.0 if max_val <= 255 else (65535.0 if max_val > 1023 else 1023.0)
-        
         smoothed = savitzky_golay(
             intensity,
             self._window_size,
             self._poly_order,
         )
-        
-        smoothed = np.clip(smoothed, 0.0, clip_max).astype(np.float32)
+        smoothed = np.clip(smoothed, 0.0, 1.0).astype(np.float32)
         
         return data.with_intensity(smoothed)

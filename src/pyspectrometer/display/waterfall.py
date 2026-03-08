@@ -51,8 +51,9 @@ class WaterfallDisplay:
             
             wavelength = round(data.wavelengths[i])
             rgb = wavelength_to_rgb(wavelength)
-            
-            luminosity = int(intensity) / 255.0
+
+            # Intensity is 0-1 (normalized by extraction)
+            luminosity = float(intensity)
             scaled = apply_luminosity(rgb, luminosity)
             
             line[0, i] = (scaled.r, scaled.g, scaled.b)

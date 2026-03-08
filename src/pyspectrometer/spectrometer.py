@@ -14,6 +14,7 @@ from .capture.base import CameraInterface
 from .capture.picamera import PicameraCapture
 from .processing.pipeline import ProcessingPipeline
 from .processing.filters import SavitzkyGolayFilter
+from .processing.auto_controls import AutoGainController, AutoExposureController
 from .processing.peak_detection import PeakDetector
 from .processing.extraction import SpectrumExtractor, ExtractionMethod
 from .display.renderer import DisplayManager
@@ -142,7 +143,9 @@ class Spectrometer:
         # Auto-gain/exposure state
         self._auto_gain_enabled: bool = False
         self._auto_exposure_enabled: bool = False
-        
+        self._auto_gain = AutoGainController()
+        self._auto_exposure = AutoExposureController()
+
         self._register_key_callbacks()
         self._register_button_callbacks()
     
@@ -345,76 +348,40 @@ class Spectrometer:
         """Handle exposure slider value change."""
         self._camera.exposure = int(value)
     
-    def _handle_auto_gain_exposure(self, data) -> None:
-        """Handle auto-gain and auto-exposure based on spectrum peak.
-        
-        Algorithm: Iteratively adjust gain/exposure to maximize dynamic range.
-        - Target: 95% of max intensity
-        - Reduce if > 95% (saturating)
-        - Increase if < 50% (too dark)
-        
-        Intensity is float32 0-1; target 95% = 0.95.
-        
-        Exposure limits:
-        - Continuous: max 1 second (1,000,000 us)
-        - Frozen mode: up to 30 seconds allowed (set via slider)
-        """
-        if data is None or len(data.intensity) == 0:
+    def _handle_auto_gain_exposure(self, data: SpectrumData) -> None:
+        """Handle auto-gain and auto-exposure based on spectrum peak."""
+        if not self._auto_gain_enabled and not self._auto_exposure_enabled:
             return
-        
-        auto_gain = self._auto_gain_enabled
-        auto_exposure = self._auto_exposure_enabled
-        
-        if not auto_gain and not auto_exposure:
-            return
-        
-        # Don't adjust while frozen
         if self._frozen_spectrum:
             return
-        
-        # Intensity is float32 0-1 (normalized after extraction)
-        current_max = float(np.max(data.intensity))
-        max_intensity = 1.0
 
-        threshold_high = max_intensity * 0.95  # Saturating, need to reduce
-        threshold_target = max_intensity * 0.95  # Optimal level
-        threshold_low = max_intensity * 0.50  # Too dark, need to increase
-        
-        if current_max < max_intensity * 0.02:
-            # No signal - try to increase significantly
-            ratio = 1.5
-        elif current_max > threshold_high:
-            # Peak is too high (saturating) - reduce
-            ratio = threshold_target / current_max
-        elif current_max < threshold_low:
-            # Peak is too low - increase
-            ratio = threshold_target / current_max
-        else:
-            # Peak is in acceptable range (50-95%)
-            return
-        
-        # Limit adjustment speed (don't change too fast for stability)
-        ratio = max(0.7, min(1.5, ratio))
-        
-        # Max exposure for continuous mode: 1 second = 1,000,000 microseconds
-        max_exposure_continuous = 1_000_000
-        
-        if auto_exposure:
-            new_exposure = self._camera.exposure * ratio
-            # Clamp to continuous mode limits
-            new_exposure = max(100, min(max_exposure_continuous, int(new_exposure)))
-            if abs(new_exposure - self._camera.exposure) > 50:
-                self._camera.exposure = new_exposure
-                self._display.set_exposure_value(new_exposure)
-                print(f"[AE] Exposure: {new_exposure} us (peak: {current_max:.0f}/{max_intensity:.0f})")
-        
-        if auto_gain:
-            new_gain = self._camera.gain * ratio
-            new_gain = max(1.0, min(16.0, new_gain))  # Most cameras max at 16x
-            if abs(new_gain - self._camera.gain) > 0.2:
-                self._camera.gain = new_gain
-                self._display.set_gain_value(new_gain)
-                print(f"[AG] Gain: {new_gain:.1f} (peak: {current_max:.0f}/{max_intensity:.0f})")
+        def get_gain() -> float:
+            return self._camera.gain
+
+        def set_gain(v: float) -> None:
+            self._camera.gain = v
+
+        def get_exposure() -> int:
+            return getattr(self._camera, "exposure", 10000)
+
+        def set_exposure(v: int) -> None:
+            if hasattr(self._camera, "exposure"):
+                self._camera.exposure = v
+
+        if self._auto_exposure_enabled:
+            self._auto_exposure.adjust(
+                data,
+                get_exposure,
+                set_exposure,
+                self._display.set_exposure_value,
+            )
+        if self._auto_gain_enabled:
+            self._auto_gain.adjust(
+                data,
+                get_gain,
+                set_gain,
+                self._display.set_gain_value,
+            )
     
     def _on_toggle_light(self) -> None:
         """Handle toggle light control."""
@@ -630,9 +597,15 @@ class Spectrometer:
             print("[CAL] Nothing to save - need at least 4 calibration points")
     
     def _on_load_calibration(self) -> None:
-        """Handle load calibration."""
+        """Handle load calibration - load file and sync extractor with saved params."""
         if self._calibration.load():
-            print("[CAL] Calibration loaded")
+            self._extractor.set_rotation_angle(self._calibration.rotation_angle)
+            self._extractor.set_spectrum_y_center(self._calibration.spectrum_y_center)
+            self._extractor.set_perpendicular_width(self._calibration.perpendicular_width)
+            print(
+                f"[CAL] Calibration loaded (angle: {self._calibration.rotation_angle:.2f}°, "
+                f"Y: {self._calibration.spectrum_y_center})"
+            )
         else:
             print("[CAL] Failed to load calibration (file may not exist)")
     
@@ -767,7 +740,6 @@ class Spectrometer:
 
         self._extractor.set_rotation_angle(angle)
         self._extractor.set_spectrum_y_center(y_center)
-        self._extractor._precompute_sampling_coords()
         print(f"[AutoLevel] Rotation: {angle:.2f}°  Y Center: {y_center}")
 
         # Persist extraction params (including crop window Y offset) to cal file
@@ -831,9 +803,8 @@ class Spectrometer:
         # Always apply extraction params from calibration file
         self._extractor.set_rotation_angle(self._calibration.rotation_angle)
         self._extractor.set_spectrum_y_center(self._calibration.spectrum_y_center)
-        self._extractor.perpendicular_width = self._calibration.perpendicular_width
-        self._extractor._precompute_sampling_coords()
-        
+        self._extractor.set_perpendicular_width(self._calibration.perpendicular_width)
+
         self._camera.start()
         self._display.setup_windows()
         
@@ -849,14 +820,11 @@ class Spectrometer:
                 frame = self._camera.capture()
                 self._last_frame = frame
                 
-                extraction_result = self._extractor.extract(frame)
-                cropped = extraction_result.cropped_frame
-                intensity = extraction_result.intensity.astype(np.float32)
-
-                # Normalize to float32 0-1 using capture bit depth (pipeline: extract → normalize → all downstream 0-1)
                 bit_depth = getattr(self._camera, "bit_depth", self.config.camera.bit_depth)
                 max_val = float((1 << bit_depth) - 1)
-                intensity = intensity / max_val
+                extraction_result = self._extractor.extract(frame, max_val=max_val)
+                cropped = extraction_result.cropped_frame
+                intensity = extraction_result.intensity.astype(np.float32)
                 
                 # Handle calibration mode freeze - use stored frozen intensity
                 if self._calibration_mode is not None and self._frozen_spectrum:
@@ -933,14 +901,14 @@ class Spectrometer:
                         self._display.set_sensitivity_overlay(None)
                     
                     # Update status display
-                    self._display._control_bar.set_status("Ref", self._calibration_mode.get_current_source_name())
-                    self._display._control_bar.set_status("Pts", str(len(self._calibration_mode.cal_state.calibration_points)))
+                    self._display.set_status("Ref", self._calibration_mode.get_current_source_name())
+                    self._display.set_status("Pts", str(len(self._calibration_mode.cal_state.calibration_points)))
                     if self._frozen_spectrum:
-                        self._display._control_bar.set_status("Status", "FROZEN")
+                        self._display.set_status("Status", "FROZEN")
                     elif self._calibration_mode.state.averaging_enabled:
-                        self._display._control_bar.set_status("Status", f"AVG:{self._calibration_mode.state.accumulated_frames}")
+                        self._display.set_status("Status", f"AVG:{self._calibration_mode.state.accumulated_frames}")
                     else:
-                        self._display._control_bar.set_status("Status", "LIVE")
+                        self._display.set_status("Status", "LIVE")
                 elif self._measurement_mode is not None:
                     overlay = self._measurement_mode.get_overlay(
                         processed.wavelengths,
@@ -951,7 +919,7 @@ class Spectrometer:
 
                     # Update status display
                     for key, value in self._measurement_mode.get_status().items():
-                        self._display._control_bar.set_status(key, value)
+                        self._display.set_status(key, value)
                 else:
                     # Legacy mode: update reference spectrum overlay
                     self._display.set_mode_overlay(None)

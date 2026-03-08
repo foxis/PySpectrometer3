@@ -6,6 +6,15 @@ from typing import Optional
 import numpy as np
 import cv2
 
+from .spectrum_transform import (
+    SpectrumTransformParams,
+    apply_forward_transform,
+    crop_region,
+    detect_orientation_and_offset,
+    inverse_params,
+    params_from_saved,
+)
+
 
 class ExtractionMethod(Enum):
     """Available spectrum extraction methods."""
@@ -25,7 +34,10 @@ class ExtractionMethod(Enum):
 
 @dataclass
 class ExtractionResult:
-    """Result of spectrum extraction."""
+    """Result of spectrum extraction.
+
+    intensity: float32 array in 0-1 range (normalized by sensor full scale).
+    """
     intensity: np.ndarray
     cropped_frame: np.ndarray
     method_used: ExtractionMethod
@@ -79,60 +91,49 @@ class SpectrumExtractor:
         self._perpendicular_width_max = 100
         
         self._last_gaussian_params: Optional[np.ndarray] = None
-        
-        self._precompute_sampling_coords()
     
-    def _precompute_sampling_coords(self) -> None:
-        """Precompute rotation matrix for current rotation angle.
-        
-        We ROTATE THE IMAGE (not the crop box) to straighten the spectrum.
-        getRotationMatrix2D(center, -angle, 1): OpenCV positive = CCW.
-        So -angle rotates image CCW by angle, straightening CW-tilted stripes.
-        The crop is a horizontal band in the ROTATED (straightened) image.
-        """
-        self._rotation_center = (self.frame_width // 2, self.frame_height // 2)
-        self._rotation_matrix = cv2.getRotationMatrix2D(
-            self._rotation_center, -self.rotation_angle, 1.0
+    def _transform_params(self) -> SpectrumTransformParams:
+        """Build transform params from saved rotation_angle and spectrum_y_center."""
+        return params_from_saved(
+            self.rotation_angle,
+            self.spectrum_y_center,
+            self.frame_height,
         )
     
     def _rotate_frame(self, frame: np.ndarray) -> np.ndarray:
-        """Rotate frame to straighten spectrum lines.
-        
-        Args:
-            frame: Input frame (BGR or grayscale)
-            
-        Returns:
-            Rotated frame with straightened spectrum
-        """
-        if abs(self.rotation_angle) < 0.01:
-            return frame
-        
-        return cv2.warpAffine(
-            frame, self._rotation_matrix,
-            (self.frame_width, self.frame_height),
-            flags=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_REPLICATE
-        )
+        """Rotate frame to straighten spectrum lines. Uses spectrum_transform."""
+        params = self._transform_params()
+        return apply_forward_transform(frame, params)
     
-    def extract(self, frame: np.ndarray) -> ExtractionResult:
+    def extract(
+        self,
+        frame: np.ndarray,
+        max_val: Optional[float] = None,
+    ) -> ExtractionResult:
         """Extract spectrum intensity from frame.
-        
+
         Args:
             frame: Input frame as numpy array:
                    - BGR color: (height, width, 3) uint8
                    - Monochrome 8-bit: (height, width) uint8
                    - Monochrome 10/16-bit: (height, width) uint16
-            
+            max_val: Max sensor value for 0-1 normalization (e.g. 1023 for 10-bit).
+                     If None, defaults to 1023 (10-bit sensor).
+
         Returns:
-            ExtractionResult with intensity array and cropped frame
+            ExtractionResult with intensity in 0-1 range and cropped frame
         """
         # Rotate frame to straighten spectrum lines
         rotated_frame = self._rotate_frame(frame)
-        
+
         # Convert to grayscale float for processing
         gray = self._frame_to_gray(rotated_frame)
-        
+
         intensity = self._extract_with_method(gray)
+
+        # Normalize to 0-1 using sensor full scale
+        scale = max_val if max_val is not None and max_val > 0 else 1023.0
+        intensity = (intensity.astype(np.float32) / scale).astype(np.float32)
         
         # Use rotated frame for preview so lines appear straight
         cropped = self._create_cropped_preview(rotated_frame)
@@ -291,21 +292,8 @@ class SpectrumExtractor:
         return amplitude * np.exp(-0.5 * ((x - center) / sigma) ** 2) + background
     
     def _create_cropped_preview(self, frame: np.ndarray) -> np.ndarray:
-        """Create cropped preview region centered on spectrum.
-        
-        Handles both color (3D) and monochrome (2D) frames.
-        Monochrome frames are converted to 3-channel grayscale for display.
-        
-        CRITICAL: spectrum_y_center is absolute Y in ROTATED frame coordinates.
-        Crop MUST use: y_start = spectrum_y_center - half_crop, y_end = spectrum_y_center + half_crop.
-        DO NOT flip signs (e.g. center - offset); spectrum_y_center is already the absolute row.
-        This crop region must match what the renderer draws as the crop box (same coords).
-        """
-        half_crop = self.crop_height // 2
-        y_start = max(0, self.spectrum_y_center - half_crop)
-        y_end = min(frame.shape[0], self.spectrum_y_center + half_crop)
-        
-        cropped = frame[y_start:y_end, :].copy()
+        """Create cropped preview region centered on spectrum. Uses spectrum_transform."""
+        cropped = crop_region(frame, self.spectrum_y_center, self.crop_height)
         
         # Convert monochrome to 3-channel for display
         if cropped.ndim == 2:
@@ -339,125 +327,25 @@ class SpectrumExtractor:
             visualize: If True, return visualization image
             
         Returns:
-            Tuple of (detected_angle_degrees, optimal_y_center, visualization_image_or_None)
+            Tuple of (correction_angle, spectrum_y_center, visualization_or_None)
+            correction_angle is the inverse of orientation (what we save).
         """
-        # Convert to grayscale, preserving bit depth for thresholding precision
-        # 10-bit/16-bit: keep full range as float32 (no 8-bit scaling before Sobel)
-        if frame.ndim == 3:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
-        elif frame.dtype == np.uint16:
-            # Preserve 10/16-bit range - don't scale to 8-bit before thresholding
-            gray = frame.astype(np.float32)
-            print(f"[AutoLevel] uint16 frame: max_val={gray.max():.0f} (preserving bit depth)")
-        elif frame.dtype == np.uint8:
-            gray = frame.astype(np.float32)
+        result = detect_orientation_and_offset(frame, return_debug=visualize)
+        if visualize and len(result) == 6:
+            orientation, y_offset, spectrum_y, strong_mask, gray, rotated_gray = result
         else:
-            gray = np.asarray(frame, dtype=np.float32)
-        height, width = gray.shape
-        print(f"[AutoLevel] gray shape={gray.shape}, dtype={gray.dtype}, range=[{gray.min()},{gray.max()}]")
-        
-        # Compute horizontal gradient (detects vertical edges/stripes)
-        # Use Sobel with larger kernel for noise robustness
-        ksize = max(3, (min(width, height) // 80) | 1)
-        if ksize % 2 == 0:
-            ksize += 1
-        ksize = min(ksize, 31)
-        
-        grad_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=ksize)
-        grad_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=ksize)
-        
-        # Compute gradient magnitude
-        magnitude = np.sqrt(grad_x**2 + grad_y**2)
-        
-        # Threshold: sample first 20 rows for noise, use 3x max as threshold
-        n_rows = min(20, height)
-        noise_region = magnitude[:n_rows, :]
-        noise_max = float(noise_region.max()) if noise_region.size > 0 else 0.0
-        mag_thresh = max(noise_max * 3.0, magnitude.min() * 1.1)
-        strong_mask = magnitude > mag_thresh
-        
-        # Get coordinates of strong gradient points
-        y_coords, x_coords = np.where(strong_mask)
-        
-        if len(x_coords) < 10:
-            return 0.0, height // 2, None
-        
-        # Weight points by gradient magnitude
-        weights = magnitude[strong_mask]
-        
-        # Compute weighted centroid
-        total_weight = np.sum(weights)
-        cx = np.sum(x_coords * weights) / total_weight
-        cy = np.sum(y_coords * weights) / total_weight
-        
-        # Center the coordinates
-        x_centered = x_coords - cx
-        y_centered = y_coords - cy
-        
-        # Compute weighted covariance matrix for PCA
-        cov_xx = np.sum(weights * x_centered * x_centered) / total_weight
-        cov_yy = np.sum(weights * y_centered * y_centered) / total_weight
-        cov_xy = np.sum(weights * x_centered * y_centered) / total_weight
-        
-        cov_matrix = np.array([[cov_xx, cov_xy], [cov_xy, cov_yy]])
-        
-        # Compute eigenvalues and eigenvectors
-        eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
-        
-        # The eigenvector with largest eigenvalue is the principal direction
-        # For vertical stripes, this should be near-vertical
-        principal_idx = np.argmax(eigenvalues)
-        principal_vec = eigenvectors[:, principal_idx]
-        
-        # Calculate angle from vertical (y-axis)
-        # principal_vec is (vx, vy), vertical is (0, 1)
-        # Angle from vertical = atan2(vx, vy)
-        angle_from_vertical = np.degrees(np.arctan2(principal_vec[0], principal_vec[1]))
-        
-        # Normalize to [-45, 45] range (stripes should be near-vertical)
-        if angle_from_vertical > 45:
-            angle_from_vertical -= 90
-        elif angle_from_vertical < -45:
-            angle_from_vertical += 90
-        
-        detected_angle = float(angle_from_vertical)
-        
-        # Now rotate the frame and find Y center on the rotated image
-        rotation_center = (width // 2, height // 2)
-        rotation_matrix = cv2.getRotationMatrix2D(rotation_center, -detected_angle, 1.0)
-        rotated_gray = cv2.warpAffine(
-            gray, rotation_matrix, (width, height),
-            flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
-        )
-        
-        # Find Y center using multiple methods and pick the best one:
-        # 1. Weighted centroid of strong gradient points (best for spectrum stripes)
-        # 2. Row with maximum intensity variation (horizontal gradients = vertical stripes)
-        # 3. Row with maximum intensity sum (fallback)
-        
-        # Method 1: Use weighted centroid Y from gradient analysis (already computed)
-        # This is the Y position where most vertical stripes are
-        gradient_y_center = int(cy)
-        
-        # Method 2: Find row with maximum horizontal gradient sum (vertical edges)
-        rotated_grad_x = cv2.Sobel(rotated_gray, cv2.CV_64F, 1, 0, ksize=ksize)
-        row_gradient_sums = np.sum(np.abs(rotated_grad_x), axis=1)
-        gradient_y_center_rotated = int(np.argmax(row_gradient_sums))
-        
-        # Method 3: Row with maximum intensity (original method, less reliable)
-        row_intensity_sums = np.sum(rotated_gray, axis=1)
-        intensity_y_center = int(np.argmax(row_intensity_sums))
-        
-        # Pick the gradient-based Y center (more reliable for spectrum stripes)
-        # Use the rotated gradient analysis since that's where we'll extract from
-        optimal_y_center = gradient_y_center_rotated
-        
-        print(f"[AutoLevel] Y candidates: gradient={gradient_y_center}, "
-              f"rotated_gradient={gradient_y_center_rotated}, intensity={intensity_y_center}")
-        print(f"[AutoLevel] Selected Y center: {optimal_y_center}")
-        
+            orientation, y_offset, spectrum_y = result[:3]
+            strong_mask = gray = rotated_gray = None
+        params = inverse_params(orientation, y_offset)
+        correction_angle = params.rotation_angle
+        optimal_y_center = spectrum_y
+        height, width = self.frame_height, self.frame_width
+
+        print(f"[AutoLevel] Orientation: {orientation:.2f}°  Offset: {y_offset:.1f}px")
+        print(f"[AutoLevel] Correction: angle={correction_angle:.2f}°  Y center={optimal_y_center}")
+
         vis_image = None
-        if visualize:
+        if visualize and strong_mask is not None and gray is not None and rotated_gray is not None:
             print("[AutoLevel] Building visualization...")
             # Left panel: thresholded gradient (strong_mask as grayscale BGR)
             thresh_display = (strong_mask.astype(np.uint8) * 255)
@@ -495,11 +383,8 @@ class SpectrumExtractor:
                 except cv2.error:
                     pass
 
-            # Draw ROTATED frame with crop box (crop box uses optimal_y_center from rotated)
-            rotated_frame = cv2.warpAffine(
-                frame, rotation_matrix, (width, height),
-                flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
-            )
+            # Draw ROTATED frame with crop box (uses spectrum_transform forward)
+            rotated_frame = apply_forward_transform(frame, params)
             vis_rot = rotated_frame.copy()
             if vis_rot.dtype == np.uint16:
                 max_val = max(vis_rot.max(), 1)
@@ -527,7 +412,7 @@ class SpectrumExtractor:
             )
             cv2.putText(
                 vis_rot,
-                f"Angle: {detected_angle:.2f} deg  Y: {optimal_y_center}",
+                f"Angle: {correction_angle:.2f} deg  Y: {optimal_y_center}",
                 (10, 55),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
@@ -547,7 +432,7 @@ class SpectrumExtractor:
             vis_image = np.hstack([thresh_bgr, vis_orig, vis_rot])
             print("[AutoLevel] Visualization complete, returning")
         
-        return detected_angle, optimal_y_center, vis_image
+        return correction_angle, optimal_y_center, vis_image
     
     def set_method(self, method: ExtractionMethod) -> None:
         """Set the extraction method."""
@@ -561,29 +446,32 @@ class SpectrumExtractor:
         return self.method
     
     def set_rotation_angle(self, angle: float) -> None:
-        """Set rotation angle and recompute sampling coordinates."""
+        """Set rotation angle (correction = inverse of orientation)."""
         self.rotation_angle = angle
-        self._precompute_sampling_coords()
-    
+
     def set_spectrum_y_center(self, y: int) -> None:
-        """Set spectrum Y center and recompute sampling coordinates."""
+        """Set spectrum Y center in corrected frame."""
         self.spectrum_y_center = y
-        self._precompute_sampling_coords()
-    
+
+    def set_perpendicular_width(self, width: int) -> None:
+        """Set perpendicular sampling width (clamped to valid range)."""
+        self.perpendicular_width = max(
+            self._perpendicular_width_min,
+            min(width, self._perpendicular_width_max),
+        )
+
     def increase_perpendicular_width(self, step: int = 2) -> int:
         """Increase perpendicular sampling width."""
         self.perpendicular_width = min(
             self.perpendicular_width + step,
             self._perpendicular_width_max
         )
-        self._precompute_sampling_coords()
         return self.perpendicular_width
-    
+
     def decrease_perpendicular_width(self, step: int = 2) -> int:
         """Decrease perpendicular sampling width."""
         self.perpendicular_width = max(
             self.perpendicular_width - step,
             self._perpendicular_width_min
         )
-        self._precompute_sampling_coords()
         return self.perpendicular_width

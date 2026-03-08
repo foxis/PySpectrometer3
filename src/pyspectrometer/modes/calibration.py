@@ -137,7 +137,7 @@ class CalibrationMode(BaseMode):
         
         # Apply averaging if enabled
         if self.state.averaging_enabled:
-            intensity = self.accumulate_frame(intensity)
+            intensity = self.accumulate_spectrum(intensity)
         
         # Store for freeze
         self.cal_state.frozen_intensity = intensity.copy()

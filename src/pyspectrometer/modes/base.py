@@ -189,27 +189,21 @@ class BaseMode(ABC):
     
     def apply_references(self, intensity: np.ndarray) -> np.ndarray:
         """Apply black/white reference correction.
-        
+
+        Returns 0-1 normalized intensity for pipeline consistency.
+
         Args:
-            intensity: Raw intensity
-            
+            intensity: Raw intensity (0-1)
+
         Returns:
-            Corrected intensity
+            Corrected intensity in 0-1 range
         """
-        result = intensity.astype(np.float64)
-        
-        if self.state.black_reference is not None:
-            result = result - self.state.black_reference
-            result = np.maximum(result, 0)
-        
-        if self.state.white_reference is not None:
-            white = self.state.white_reference.astype(np.float64)
-            if self.state.black_reference is not None:
-                white = white - self.state.black_reference
-            white = np.maximum(white, 1)
-            result = (result / white) * 255
-        
-        return np.clip(result, 0, 255)
+        from ..processing.reference_correction import apply_dark_white_correction
+        return apply_dark_white_correction(
+            intensity,
+            self.state.black_reference,
+            self.state.white_reference,
+        )
     
     def calculate_auto_gain_adjustment(
         self,
