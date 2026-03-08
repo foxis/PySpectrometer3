@@ -166,10 +166,10 @@ class BaseMode(ABC):
             self.state.accumulated_intensity = intensity.astype(np.float64)
             self.state.accumulated_frames = 1
         else:
-            self.state.accumulated_intensity += intensity
+            self.state.accumulated_intensity = self.state.accumulated_intensity.astype(np.float32) + np.asarray(intensity, dtype=np.float32)
             self.state.accumulated_frames += 1
         
-        return (self.state.accumulated_intensity / self.state.accumulated_frames).astype(np.float64)
+        return (self.state.accumulated_intensity / self.state.accumulated_frames).astype(np.float32)
     
     def set_black_reference(self, intensity: np.ndarray) -> None:
         """Set black/dark reference spectrum."""

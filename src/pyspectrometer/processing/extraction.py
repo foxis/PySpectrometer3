@@ -472,44 +472,46 @@ class SpectrumExtractor:
                     except cv2.error:
                         pass
 
-            # Right panel: rotated frame with ellipses + crop box
-            rotated_frame = cv2.warpAffine(
-                frame, rotation_matrix, (width, height),
-                flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
-            )
-            vis_orig = rotated_frame.copy()
+            # Right panel: ORIGINAL frame with ellipses (same coords - no transform)
+            # Ellipses are fitted on original; crop box is on ROTATED frame, so draw it on rotated
+            vis_orig = frame.copy()
             if vis_orig.dtype == np.uint16:
                 max_val = max(vis_orig.max(), 1)
                 vis_orig = (vis_orig.astype(np.float32) * 255 / max_val).astype(np.uint8)
             if vis_orig.ndim == 2:
                 vis_orig = cv2.cvtColor(vis_orig, cv2.COLOR_GRAY2BGR)
 
-            # Transform ellipses to rotated frame coords (rotate each center)
-            cos_a = np.cos(np.radians(detected_angle))
-            sin_a = np.sin(np.radians(detected_angle))
-            cx_rot, cy_rot = width / 2, height / 2
+            # Draw ellipses in original coords (no transform - image and ellipses match)
             for el in ellipses:
-                cx_el, cy_el = el[0]
-                dx, dy = cx_el - cx_rot, cy_el - cy_rot
-                x_new = cx_rot + dx * cos_a + dy * sin_a
-                y_new = cy_rot - dx * sin_a + dy * cos_a
-                el_rot = ((x_new, y_new), el[1], el[2] - detected_angle)
                 try:
-                    cv2.ellipse(vis_orig, el_rot, (0, 255, 0), 1)
+                    cv2.ellipse(vis_orig, el, (0, 255, 0), 1)
                 except cv2.error:
                     pass
 
-            # Draw crop box (rectangle around spectrum region)
+            # Draw ROTATED frame with crop box (crop box uses optimal_y_center from rotated)
+            rotated_frame = cv2.warpAffine(
+                frame, rotation_matrix, (width, height),
+                flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+            )
+            vis_rot = rotated_frame.copy()
+            if vis_rot.dtype == np.uint16:
+                max_val = max(vis_rot.max(), 1)
+                vis_rot = (vis_rot.astype(np.float32) * 255 / max_val).astype(np.uint8)
+            if vis_rot.ndim == 2:
+                vis_rot = cv2.cvtColor(vis_rot, cv2.COLOR_GRAY2BGR)
+
             half_perp = self.perpendicular_width // 2
             half_crop = self.crop_height // 2
             y_top = max(0, optimal_y_center - half_crop)
             y_bottom = min(height - 1, optimal_y_center + half_crop)
-            cv2.rectangle(vis_orig, (0, y_top), (width, y_bottom), (0, 255, 255), 2)
-            cv2.line(vis_orig, (0, optimal_y_center), (width, optimal_y_center), (255, 255, 0), 2)
+            cv2.rectangle(vis_rot, (0, y_top), (width, y_bottom), (0, 255, 255), 2)
+            cv2.line(vis_rot, (0, optimal_y_center), (width, optimal_y_center), (255, 255, 0), 2)
+
+            cv2.putText(vis_rot, "Rotated + crop", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
 
             cv2.putText(
                 vis_orig,
-                "Original + ellipses + crop",
+                "Original + ellipses",
                 (10, 25),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
@@ -517,7 +519,7 @@ class SpectrumExtractor:
                 2,
             )
             cv2.putText(
-                vis_orig,
+                vis_rot,
                 f"Angle: {detected_angle:.2f} deg  Y: {optimal_y_center}",
                 (10, 55),
                 cv2.FONT_HERSHEY_SIMPLEX,
@@ -526,7 +528,7 @@ class SpectrumExtractor:
                 2,
             )
             cv2.putText(
-                vis_orig,
+                vis_rot,
                 "Click or press key to close",
                 (10, height - 10),
                 cv2.FONT_HERSHEY_SIMPLEX,
@@ -535,7 +537,7 @@ class SpectrumExtractor:
                 2,
             )
 
-            vis_image = np.hstack([thresh_bgr, vis_orig])
+            vis_image = np.hstack([thresh_bgr, vis_orig, vis_rot])
             print("[AutoLevel] Visualization complete, returning")
         
         return detected_angle, optimal_y_center, vis_image

@@ -63,7 +63,7 @@ class Button:
     is_active: bool = False
     style: ButtonStyle = field(default_factory=lambda: DEFAULT_STYLE)
     
-    # Keyboard shortcut hint (displayed in button)
+    # Keyboard shortcut (used by keyboard handler, not displayed in button)
     shortcut: str = ""
     # Icon type: "playback" = red circle when active, gray square when stopped
     icon_type: str = ""
@@ -130,8 +130,6 @@ class Button:
                 )
         else:
             display_text = self.label
-            if self.shortcut:
-                display_text = f"[{self.shortcut}] {self.label}"
             font = cv2.FONT_HERSHEY_SIMPLEX
             (text_w, text_h), baseline = cv2.getTextSize(
                 display_text, font, style.font_scale, style.font_thickness
@@ -223,13 +221,9 @@ class ButtonBar:
             The created button
         """
         if width is None:
-            display_text = label
-            if shortcut:
-                display_text = f"[{shortcut}] {label}"
-            
             font = cv2.FONT_HERSHEY_SIMPLEX
             (text_w, _), _ = cv2.getTextSize(
-                display_text, font, self.style.font_scale, self.style.font_thickness
+                label, font, self.style.font_scale, self.style.font_thickness
             )
             width = text_w + self.style.padding_x * 2
         

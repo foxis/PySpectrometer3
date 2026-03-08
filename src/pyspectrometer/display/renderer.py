@@ -111,7 +111,9 @@ class DisplayManager:
 
         self._font = cv2.FONT_HERSHEY_SIMPLEX
         self._windows_created = False
-        
+        # Actual bit depth from camera (overrides config when set)
+        self._intensity_bit_depth: Optional[int] = None
+
         # Preview display mode: "full", "window", "none"
         self._preview_mode = "window"
         
@@ -315,9 +317,10 @@ class DisplayManager:
                 if raw_frame is not None:
                     # Convert raw frame to displayable BGR
                     if raw_frame.ndim == 2:
-                        # Monochrome - convert to BGR
+                        # Monochrome - scale to 8-bit for display only (preserve 10/16-bit in data)
                         if raw_frame.dtype == np.uint16:
-                            display = (raw_frame / 4).astype(np.uint8)
+                            max_val = max(float(np.max(raw_frame)), 1.0)
+                            display = (raw_frame.astype(np.float32) * 255.0 / max_val).astype(np.uint8)
                         else:
                             display = raw_frame.astype(np.uint8)
                         display = cv2.cvtColor(display, cv2.COLOR_GRAY2BGR)
@@ -472,9 +475,9 @@ class DisplayManager:
         for Y-axis range (10-bit: 0-1023, 8-bit: 0-255).
         """
         height = graph.shape[0]
-        
-        # Use config bit depth for Y-axis range (not inferred from data)
-        bit_depth = getattr(self.config.camera, "bit_depth", 10)
+
+        # Use camera actual bit depth if set, else config (10-bit: 0-1023, 8-bit: 0-255)
+        bit_depth = self._intensity_bit_depth if self._intensity_bit_depth is not None else getattr(self.config.camera, "bit_depth", 10)
         if bit_depth >= 16:
             intensity_range = 65535.0
         elif bit_depth >= 10:

@@ -9,10 +9,9 @@ from .buttons import Button, ButtonBar, ButtonStyle
 
 
 def _estimate_button_width(label: str, shortcut: str, style: ButtonStyle) -> int:
-    """Estimate button width from label and shortcut."""
-    display_text = f"[{shortcut}] {label}" if shortcut else label
+    """Estimate button width from label (shortcut not displayed in button)."""
     (text_w, _), _ = cv2.getTextSize(
-        display_text, cv2.FONT_HERSHEY_SIMPLEX,
+        label, cv2.FONT_HERSHEY_SIMPLEX,
         style.font_scale, style.font_thickness,
     )
     return text_w + style.padding_x * 2
@@ -24,7 +23,7 @@ class ControlBarConfig:
     
     height: int = 80
     row_height: int = 24
-    row_spacing: int = 6  # 4 + 2px vertical separation between rows
+    row_spacing: int = 12  # Vertical separation between button rows
     button_spacing: int = 4
     margin_x: int = 5
     margin_y: int = 8
@@ -39,10 +38,10 @@ class ControlBarConfig:
         # Calculate what fits: margin + row + spacing + row + margin
         min_needed = self.margin_y * 2 + self.row_height * 2 + self.row_spacing
         if min_needed > self.height:
-            # Reduce row height and margins to fit
+            # Reduce row height and margins to fit, but keep at least 4px vertical spacing
             available = self.height - 4  # minimal margins
             self.margin_y = 2
-            self.row_spacing = 2
+            self.row_spacing = max(4, min(self.row_spacing, available - 2 * 20))  # min 4px between rows
             self.row_height = (available - self.row_spacing) // 2
 
 

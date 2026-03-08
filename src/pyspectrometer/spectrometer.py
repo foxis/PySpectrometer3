@@ -844,6 +844,7 @@ class Spectrometer:
         self._extractor._precompute_sampling_coords()
         
         self._camera.start()
+        self._display.set_intensity_bit_depth(getattr(self._camera, "bit_depth", self.config.camera.bit_depth))
         self._display.setup_windows()
         
         self._running = True
