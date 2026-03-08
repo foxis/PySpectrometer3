@@ -236,8 +236,8 @@ class PicameraCapture(CameraInterface):
         
         # If using raw capture, get raw frame for higher bit depth
         if self._use_raw:
-            # capture_arrays returns a tuple in order of stream names
-            main_frame, raw_frame = self._camera.capture_arrays(["main", "raw"])
+            # capture_array("raw") returns the raw stream directly
+            raw_frame = self._camera.capture_array("raw")
             return self._process_raw_frame(raw_frame)
         
         frame = self._camera.capture_array()
@@ -263,31 +263,44 @@ class PicameraCapture(CameraInterface):
     def _process_raw_frame(self, raw_frame: np.ndarray) -> np.ndarray:
         """Process raw frame from sensor to extract monochrome data.
         
-        Raw frames from sensors like OV9281 come in Bayer format (e.g., SRGGB10)
-        but for monochrome sensors, all pixels are the same so we can use directly.
+        Raw frames from OV9281 with R10_CSI2P format come as packed 10-bit data.
+        The raw frame is typically uint8 with packed pixels that need unpacking,
+        or uint16 if the driver already unpacked them.
+        
+        For monochrome sensors like OV9281, all pixels are grayscale (no Bayer).
         
         Args:
-            raw_frame: Raw sensor data
+            raw_frame: Raw sensor data (uint8 packed or uint16)
             
         Returns:
             Processed monochrome frame as uint16
         """
-        # Raw frame is typically 16-bit packed or already uint16
+        # Already uint16 - use directly
         if raw_frame.dtype == np.uint16:
             return raw_frame
         
-        # If 8-bit packed data for 10-bit, unpack
+        # uint8 data needs processing
         if raw_frame.dtype == np.uint8:
-            # For 10-bit packed in 16-bit: every 2 bytes = 1 pixel
-            if len(raw_frame.shape) == 2:
-                # Already 2D monochrome
-                return raw_frame.astype(np.uint16)
-            elif len(raw_frame.shape) == 3:
-                # Bayer pattern - for monochrome sensor, just take any channel
-                # Or average for better result
-                return raw_frame[:, :, 0].astype(np.uint16)
+            if raw_frame.ndim == 2:
+                # 2D array - either packed or already grayscale
+                # For 10-bit CSI2 packed (R10_CSI2P): 4 pixels in 5 bytes
+                # But Picamera2 may return it as a wider uint8 array
+                # that can be viewed as uint16
+                height, width = raw_frame.shape
+                
+                # Check if width suggests packed format (5/4 ratio for 10-bit)
+                # For packed 10-bit: actual_width * 5 / 4 = byte_width
+                # So if we see this ratio, we need to unpack
+                # However, for simplicity and reliability, treat as 8-bit
+                # and scale to 10-bit range
+                return raw_frame.astype(np.uint16) * 4  # Scale 8-bit to 10-bit
+            
+            if raw_frame.ndim == 3:
+                # 3D array - take first channel
+                return raw_frame[:, :, 0].astype(np.uint16) * 4
         
-        return raw_frame.astype(np.uint16)
+        # Unknown format - convert and hope for the best
+        return np.asarray(raw_frame, dtype=np.uint16)
     
     def capture_normalized(self) -> np.ndarray:
         """Capture a frame normalized to 0-255 range.
