@@ -724,21 +724,35 @@ class Spectrometer:
     def _on_auto_detect_angle(self) -> None:
         """Handle auto-detect rotation angle and Y center."""
         if self._last_frame is None:
-            print("No frame available for angle detection")
+            print("[AutoLevel] No frame available for angle detection")
             return
         
-        print("Detecting spectrum rotation angle and position...")
+        print("[AutoLevel] Detecting spectrum rotation angle and position...")
+        print(f"[AutoLevel] Frame shape: {self._last_frame.shape}, dtype: {self._last_frame.dtype}")
+        
+        old_angle = self._extractor.rotation_angle
+        old_y = self._extractor.spectrum_y_center
+        
         angle, y_center, vis_image = self._extractor.detect_angle(self._last_frame, visualize=True)
         
         if vis_image is not None:
             cv2.imshow("Angle Detection", vis_image)
-            cv2.waitKey(2000)
-            cv2.destroyWindow("Angle Detection")
+            # Wait for 2 seconds or until key press, with short polling to avoid blocking
+            for _ in range(40):  # 40 * 50ms = 2 seconds
+                key = cv2.waitKey(50)
+                if key != -1:
+                    break
+            try:
+                cv2.destroyWindow("Angle Detection")
+            except cv2.error:
+                pass  # Window might already be closed
         
         # Apply both angle and Y center (do NOT auto-save - user saves with Save button)
         self._extractor.set_rotation_angle(angle)
         self._extractor.set_spectrum_y_center(y_center)
-        print(f"Rotation Angle: {angle:.2f}°, Y Center: {y_center}")
+        
+        print(f"[AutoLevel] Rotation: {old_angle:.2f}° -> {angle:.2f}°")
+        print(f"[AutoLevel] Y Center: {old_y} -> {y_center}")
     
     def _on_perp_width_up(self) -> None:
         """Handle perpendicular width increase."""
@@ -887,6 +901,7 @@ class Spectrometer:
                     extraction_method=str(self._extractor.method),
                     rotation_angle=self._extractor.rotation_angle,
                     perp_width=self._extractor.perpendicular_width,
+                    spectrum_y_center=self._extractor.spectrum_y_center,
                 )
                 
                 action = self._keyboard.poll()

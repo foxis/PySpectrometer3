@@ -291,6 +291,8 @@ class SpectrumExtractor:
         
         Handles both color (3D) and monochrome (2D) frames.
         Monochrome frames are converted to 3-channel grayscale for display.
+        
+        Uses self.spectrum_y_center to determine crop position.
         """
         half_crop = self.crop_height // 2
         y_start = max(0, self.spectrum_y_center - half_crop)
@@ -417,9 +419,31 @@ class SpectrumExtractor:
             flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
         )
         
-        # Find Y center on rotated image by finding the row with maximum intensity
-        row_sums = np.sum(rotated_gray, axis=1)
-        optimal_y_center = int(np.argmax(row_sums))
+        # Find Y center using multiple methods and pick the best one:
+        # 1. Weighted centroid of strong gradient points (best for spectrum stripes)
+        # 2. Row with maximum intensity variation (horizontal gradients = vertical stripes)
+        # 3. Row with maximum intensity sum (fallback)
+        
+        # Method 1: Use weighted centroid Y from gradient analysis (already computed)
+        # This is the Y position where most vertical stripes are
+        gradient_y_center = int(cy)
+        
+        # Method 2: Find row with maximum horizontal gradient sum (vertical edges)
+        rotated_grad_x = cv2.Sobel(rotated_gray, cv2.CV_64F, 1, 0, ksize=ksize)
+        row_gradient_sums = np.sum(np.abs(rotated_grad_x), axis=1)
+        gradient_y_center_rotated = int(np.argmax(row_gradient_sums))
+        
+        # Method 3: Row with maximum intensity (original method, less reliable)
+        row_intensity_sums = np.sum(rotated_gray, axis=1)
+        intensity_y_center = int(np.argmax(row_intensity_sums))
+        
+        # Pick the gradient-based Y center (more reliable for spectrum stripes)
+        # Use the rotated gradient analysis since that's where we'll extract from
+        optimal_y_center = gradient_y_center_rotated
+        
+        print(f"[AutoLevel] Y candidates: gradient={gradient_y_center}, "
+              f"rotated_gradient={gradient_y_center_rotated}, intensity={intensity_y_center}")
+        print(f"[AutoLevel] Selected Y center: {optimal_y_center}")
         
         vis_image = None
         if visualize:

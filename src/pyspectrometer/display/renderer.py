@@ -91,7 +91,8 @@ class DisplayManager:
         )
         
         # Slider panel for gain/exposure (positioned on right side of graph area)
-        slider_x = config.camera.frame_width - 60
+        # Need room for two sliders side by side: ~110 pixels total
+        slider_x = config.camera.frame_width - 115
         slider_y = config.display.message_height + config.display.preview_height + 10
         slider_height = config.display.graph_height - 30
         self._slider_panel = SliderPanel(
@@ -113,20 +114,26 @@ class DisplayManager:
         self._mouse_down = False
     
     def setup_windows(self) -> None:
-        """Create and configure OpenCV windows."""
+        """Create and configure OpenCV windows.
+        
+        Uses WINDOW_GUI_NORMAL to disable Qt/GTK toolbar and statusbar.
+        If toolbar still appears, OpenCV was built with Qt and ignores this flag.
+        In that case, rebuild OpenCV with -DWITH_QT=OFF or use GTK backend.
+        """
         if self._windows_created:
             return
         
         title1 = self.config.spectrograph_title
         title2 = self.config.waterfall_title
         
-        if self.config.display.waterfall_enabled:
-            cv2.namedWindow(title2, cv2.WINDOW_AUTOSIZE)
-            cv2.moveWindow(title2, 200, 200)
-        
         # WINDOW_GUI_NORMAL (0x10 = 16) disables the Qt/GTK toolbar and statusbar
-        # Use explicit value for compatibility with older OpenCV versions
+        # WINDOW_GUI_EXPANDED (0x00) shows toolbar (default)
+        # We want NORMAL (no toolbar)
         WINDOW_GUI_NORMAL = getattr(cv2, 'WINDOW_GUI_NORMAL', 0x00000010)
+        
+        if self.config.display.waterfall_enabled:
+            cv2.namedWindow(title2, cv2.WINDOW_AUTOSIZE | WINDOW_GUI_NORMAL)
+            cv2.moveWindow(title2, 200, 200)
         
         if self.config.display.fullscreen:
             # True fullscreen - fills entire screen, no toolbar
@@ -209,6 +216,7 @@ class DisplayManager:
         extraction_method: str = "Weighted Sum",
         rotation_angle: float = 0.0,
         perp_width: int = 20,
+        spectrum_y_center: int = 0,
     ) -> None:
         """Render the complete spectrum display.
         
@@ -221,7 +229,9 @@ class DisplayManager:
             extraction_method: Current extraction method name
             rotation_angle: Spectrum rotation angle in degrees
             perp_width: Perpendicular sampling width
+            spectrum_y_center: Y coordinate of spectrum center (for full view indicator)
         """
+        self._spectrum_y_center = spectrum_y_center
         width = self.config.camera.frame_width
         graph_height = self.config.display.graph_height
         
@@ -278,12 +288,13 @@ class DisplayManager:
                 spectrum_vertical = np.vstack((messages, graph))
             case "window":
                 # Windowed preview (cropped) above spectrum graph
-                self._draw_sampling_lines(cropped, rotation_angle, perp_width)
+                # NO lines drawn - just show the clean cropped spectrum image
                 # Draw status on preview strip
                 self._draw_status_overlay(cropped, status_text)
                 spectrum_vertical = np.vstack((messages, cropped, graph))
             case "full":
                 # Full camera view REPLACES the spectrum graph entirely
+                # Show UNROTATED frame with a ROTATED crop box
                 raw_frame = data.raw_frame
                 if raw_frame is not None:
                     # Convert raw frame to displayable BGR
@@ -297,24 +308,29 @@ class DisplayManager:
                     else:
                         display = raw_frame.copy()
                     
+                    original_height = display.shape[0]
+                    original_width = display.shape[1]
+                    
                     # Scale to fill the area below control bar (preview + graph height)
                     camera_area_height = preview_height + graph_height
                     display = cv2.resize(display, (width, camera_area_height))
                     
-                    # Draw sampling lines on full camera view
-                    self._draw_sampling_lines_full(display, rotation_angle, perp_width)
+                    # Draw rotated crop box on the UNROTATED display
+                    # The crop box shows where extraction happens in the rotated space
+                    self._draw_rotated_crop_box(
+                        display, rotation_angle, perp_width,
+                        self._spectrum_y_center, original_width, original_height
+                    )
                     # Draw status at bottom of camera view
                     self._draw_status_bar(display, status_text)
                     
                     spectrum_vertical = np.vstack((messages, display))
                 else:
                     # No raw frame available, fall back to windowed
-                    self._draw_sampling_lines(cropped, rotation_angle, perp_width)
                     self._draw_status_overlay(cropped, status_text)
                     spectrum_vertical = np.vstack((messages, cropped, graph))
             case _:
-                # Default to windowed
-                self._draw_sampling_lines(cropped, rotation_angle, perp_width)
+                # Default to windowed - no lines, just clean preview
                 self._draw_status_overlay(cropped, status_text)
                 spectrum_vertical = np.vstack((messages, cropped, graph))
         
@@ -539,25 +555,146 @@ class DisplayManager:
         cv2.line(cropped, (0, y_top), (width, y_top), (0, 255, 255), 1)
         cv2.line(cropped, (0, y_bottom), (width, y_bottom), (0, 255, 255), 1)
     
+    def _draw_rotated_crop_box(
+        self,
+        frame: np.ndarray,
+        rotation_angle: float,
+        perp_width: int,
+        spectrum_y_center: int,
+        original_width: int,
+        original_height: int,
+    ) -> None:
+        """Draw a rotated crop box on the UNROTATED full camera view.
+        
+        This shows where the extraction region is in the original camera frame.
+        The box is rotated by rotation_angle and positioned at spectrum_y_center
+        (which is in rotated coordinates).
+        
+        Args:
+            frame: Display frame (already scaled for display)
+            rotation_angle: Rotation angle in degrees
+            perp_width: Height of sampling region (in original coordinates)
+            spectrum_y_center: Y center in ROTATED frame coordinates
+            original_width: Original frame width before scaling
+            original_height: Original frame height before scaling
+        """
+        display_height, display_width = frame.shape[:2]
+        
+        # Protect against division by zero
+        if original_width <= 0 or original_height <= 0:
+            return
+        
+        # Scale factors
+        scale_x = display_width / original_width
+        scale_y = display_height / original_height
+        
+        # The crop box in ROTATED coordinates is:
+        # - Full width of frame
+        # - Centered at spectrum_y_center with height matching the preview crop
+        # Use the preview_height from config to match what's shown in windowed preview
+        crop_height = self.config.display.preview_height
+        half_height = crop_height // 2
+        
+        # Define crop box corners in ROTATED frame coordinates
+        # (0, y_center - half) to (width, y_center + half)
+        y_top_rot = spectrum_y_center - half_height
+        y_bottom_rot = spectrum_y_center + half_height
+        
+        # Corners in rotated coordinates (clockwise from top-left)
+        corners_rotated = np.array([
+            [0, y_top_rot],
+            [original_width, y_top_rot],
+            [original_width, y_bottom_rot],
+            [0, y_bottom_rot],
+        ], dtype=np.float32)
+        
+        # To get corners in ORIGINAL coordinates, we need to apply the
+        # INVERSE rotation. The extraction uses cv2.getRotationMatrix2D(center, -angle, 1.0)
+        # which rotates the image COUNTER-CLOCKWISE by `angle` (OpenCV uses positive = CCW).
+        # Wait, cv2 uses positive angle = CCW, so -angle means CLOCKWISE.
+        # So extraction rotates CLOCKWISE by `rotation_angle`.
+        # The inverse is COUNTER-CLOCKWISE by `rotation_angle`.
+        #
+        # But we're transforming POINTS, not the image. When an image is rotated CW,
+        # the points in the new image map back to original by rotating them CCW.
+        # Counter-clockwise rotation of a point by θ:
+        # x' = x*cos(θ) - y*sin(θ)
+        # y' = x*sin(θ) + y*cos(θ)
+        center = (original_width / 2, original_height / 2)
+        angle_rad = np.radians(rotation_angle)
+        cos_a = np.cos(angle_rad)
+        sin_a = np.sin(angle_rad)
+        
+        corners_original = []
+        for x, y in corners_rotated:
+            # Translate to origin (rotation center)
+            x_c = x - center[0]
+            y_c = y - center[1]
+            # Counter-clockwise rotation by rotation_angle
+            # (inverse of the CW rotation applied during extraction)
+            x_r = x_c * cos_a - y_c * sin_a
+            y_r = x_c * sin_a + y_c * cos_a
+            # Translate back
+            x_orig = x_r + center[0]
+            y_orig = y_r + center[1]
+            corners_original.append([x_orig, y_orig])
+        
+        # Scale corners to display coordinates
+        corners_display = np.array([
+            [int(x * scale_x), int(y * scale_y)]
+            for x, y in corners_original
+        ], dtype=np.int32)
+        
+        # Draw the rotated box
+        cv2.polylines(frame, [corners_display], True, (0, 255, 255), 2)
+        
+        # Also draw center line (transformed)
+        center_line_rot = np.array([
+            [0, spectrum_y_center],
+            [original_width, spectrum_y_center],
+        ], dtype=np.float32)
+        
+        center_line_orig = []
+        for x, y in center_line_rot:
+            x_c = x - center[0]
+            y_c = y - center[1]
+            x_r = x_c * cos_a - y_c * sin_a
+            y_r = x_c * sin_a + y_c * cos_a
+            x_orig = x_r + center[0]
+            y_orig = y_r + center[1]
+            center_line_orig.append([int(x_orig * scale_x), int(y_orig * scale_y)])
+        
+        cv2.line(frame, tuple(center_line_orig[0]), tuple(center_line_orig[1]), (255, 255, 0), 1)
+    
     def _draw_sampling_lines_full(
         self,
         frame: np.ndarray,
         rotation_angle: float = 0.0,
         perp_width: int = 20,
+        spectrum_y_center: int = 0,
+        original_height: int = 0,
     ) -> None:
         """Draw sampling region indicator lines on full camera view.
         
-        Shows the sampling region in the center of the full frame.
+        DEPRECATED: Use _draw_rotated_crop_box instead.
+        
+        Shows the sampling region at the spectrum Y center position.
+        The spectrum_y_center is in original frame coordinates and gets
+        scaled to the current display frame size.
         """
         width = frame.shape[1]
         height = frame.shape[0]
         
-        # Get spectrum Y center from config (or use frame center)
-        spectrum_y = self.config.extraction.spectrum_y_center
-        if spectrum_y == 0:
-            spectrum_y = height // 2
+        # Scale Y center from original frame coordinates to display coordinates
+        if original_height > 0 and spectrum_y_center > 0:
+            scale_y = height / original_height
+            spectrum_y = int(spectrum_y_center * scale_y)
+            scaled_perp = int(perp_width * scale_y)
+        else:
+            spectrum_y = spectrum_y_center if spectrum_y_center > 0 else height // 2
+            scaled_perp = perp_width
         
-        half_perp = perp_width // 2
+        half_perp = scaled_perp // 2
         
         # Draw horizontal lines at sampling bounds
         y_top = max(0, spectrum_y - half_perp)
