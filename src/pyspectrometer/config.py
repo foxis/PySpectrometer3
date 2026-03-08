@@ -15,6 +15,10 @@ class CameraConfig:
     gain_min: float = 0.0
     gain_max: float = 50.0
     fps: int = 30
+    
+    # Monochrome camera support (default: True for spectrometer use)
+    monochrome: bool = True
+    bit_depth: int = 10  # 8, 10, or 16 (for monochrome cameras)
 
 
 @dataclass
@@ -131,6 +135,8 @@ class Config:
         gain: Optional[float] = None,
         width: Optional[int] = None,
         height: Optional[int] = None,
+        monochrome: bool = False,
+        bit_depth: int = 10,
     ) -> "Config":
         """Create configuration from command-line arguments."""
         config = cls()
@@ -144,6 +150,9 @@ class Config:
             config.camera.frame_width = width
         if height is not None:
             config.camera.frame_height = height
+        
+        config.camera.monochrome = monochrome
+        config.camera.bit_depth = bit_depth
         
         if waveshare:
             config.apply_waveshare_preset()

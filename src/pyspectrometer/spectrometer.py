@@ -19,6 +19,8 @@ from .processing.extraction import SpectrumExtractor, ExtractionMethod
 from .display.renderer import DisplayManager
 from .export.csv_exporter import CSVExporter
 from .input.keyboard import KeyboardHandler, Action
+from .modes.calibration import CalibrationMode
+from .data.reference_spectra import ReferenceSource
 
 
 class Spectrometer:
@@ -55,6 +57,8 @@ class Spectrometer:
             height=self.config.camera.frame_height,
             gain=self.config.camera.gain,
             fps=self.config.camera.fps,
+            monochrome=self.config.camera.monochrome,
+            bit_depth=self.config.camera.bit_depth,
         )
         
         self._calibration = Calibration(
@@ -111,14 +115,20 @@ class Spectrometer:
             self._peak_detector,
         ])
         
-        self._display = DisplayManager(self.config, self._calibration)
+        self._display = DisplayManager(self.config, self._calibration, mode=mode)
         self._exporter = CSVExporter(output_dir=self.config.export.output_dir)
         self._keyboard = KeyboardHandler()
         self._reference_manager = ReferenceSpectrumManager()
         
+        # Mode-specific handler
+        self._calibration_mode: Optional[CalibrationMode] = None
+        if mode == "calibration":
+            self._calibration_mode = CalibrationMode()
+        
         self._held_intensity: Optional[np.ndarray] = None
         self._running = False
         self._last_frame: Optional[np.ndarray] = None
+        self._frozen_spectrum: bool = False
         
         self._register_key_callbacks()
         self._register_button_callbacks()
@@ -151,15 +161,26 @@ class Spectrometer:
         """Register callbacks for control bar buttons."""
         display = self._display
         
+        # Common buttons
         display.register_button_callback("quit", self._on_quit)
-        display.register_button_callback("save", self._on_button_save)
+        display.register_button_callback("gain_up", self._on_gain_up)
+        display.register_button_callback("gain_down", self._on_gain_down)
         display.register_button_callback("capture_peak", self._on_toggle_hold)
+        
+        if self.mode == "calibration":
+            self._register_calibration_callbacks()
+        else:
+            self._register_measurement_callbacks()
+    
+    def _register_measurement_callbacks(self) -> None:
+        """Register callbacks for measurement mode buttons."""
+        display = self._display
+        
+        display.register_button_callback("save", self._on_button_save)
         display.register_button_callback("capture_current", self._on_capture_current)
         display.register_button_callback("load_reference", self._on_load_reference)
         display.register_button_callback("use_as_reference", self._on_use_as_reference)
         display.register_button_callback("capture_dark", self._on_capture_dark)
-        display.register_button_callback("gain_up", self._on_gain_up)
-        display.register_button_callback("gain_down", self._on_gain_down)
         display.register_button_callback("auto_gain", self._on_toggle_auto_gain)
         display.register_button_callback("light_toggle", self._on_toggle_light)
         display.register_button_callback("fit_xyz", self._on_fit_xyz)
@@ -169,6 +190,35 @@ class Spectrometer:
         display.register_button_callback("clear_clicks", self._on_clear_clicks)
         display.register_button_callback("cycle_extraction", self._on_cycle_extraction)
         display.register_button_callback("auto_detect_angle", self._on_auto_detect_angle)
+    
+    def _register_calibration_callbacks(self) -> None:
+        """Register callbacks for calibration mode buttons."""
+        display = self._display
+        
+        # Source selection
+        display.register_button_callback("source_fl", lambda: self._on_select_source(ReferenceSource.FL))
+        display.register_button_callback("source_hg", lambda: self._on_select_source(ReferenceSource.HG))
+        display.register_button_callback("source_sun", lambda: self._on_select_source(ReferenceSource.SUN))
+        display.register_button_callback("source_led", lambda: self._on_select_source(ReferenceSource.LED))
+        
+        # Calibration actions
+        display.register_button_callback("toggle_overlay", self._on_toggle_overlay)
+        display.register_button_callback("auto_level", self._on_toggle_auto_level)
+        display.register_button_callback("auto_calibrate", self._on_auto_calibrate)
+        display.register_button_callback("save_cal", self._on_save_calibration)
+        display.register_button_callback("load_cal", self._on_load_calibration)
+        
+        # Display and control
+        display.register_button_callback("freeze", self._on_toggle_freeze)
+        display.register_button_callback("toggle_averaging", self._on_toggle_averaging)
+        display.register_button_callback("auto_gain", self._on_toggle_auto_gain_cal)
+        display.register_button_callback("clear_points", self._on_clear_cal_points)
+        
+        # Set initial button states
+        if self._calibration_mode is not None:
+            display.set_button_active("toggle_overlay", self._calibration_mode.cal_state.overlay_visible)
+            display.set_button_active("auto_level", self._calibration_mode.cal_state.auto_level_enabled)
+            display.set_button_active("auto_gain", self._calibration_mode.state.auto_gain_enabled)
     
     def _on_button_save(self) -> None:
         """Handle save button click."""
@@ -209,6 +259,133 @@ class Spectrometer:
     def _on_fit_xyz(self) -> None:
         """Handle XYZ curve fitting."""
         print("[XYZ] Fit XYZ curves (not implemented yet)")
+    
+    # Calibration mode specific handlers
+    
+    def _on_select_source(self, source: ReferenceSource) -> None:
+        """Handle reference source selection."""
+        if self._calibration_mode is None:
+            return
+        
+        self._calibration_mode.select_source(source)
+        
+        # Update button active states (show which source is selected)
+        self._display.set_button_active("source_fl", source == ReferenceSource.FL)
+        self._display.set_button_active("source_hg", source == ReferenceSource.HG)
+        self._display.set_button_active("source_sun", source == ReferenceSource.SUN)
+        self._display.set_button_active("source_led", source == ReferenceSource.LED)
+    
+    def _on_toggle_overlay(self) -> None:
+        """Handle toggle reference overlay."""
+        if self._calibration_mode is None:
+            return
+        
+        visible = self._calibration_mode.toggle_overlay()
+        self._display.set_button_active("toggle_overlay", visible)
+    
+    def _on_toggle_auto_level(self) -> None:
+        """Handle toggle auto-level."""
+        if self._calibration_mode is None:
+            return
+        
+        enabled = self._calibration_mode.toggle_auto_level()
+        self._display.set_button_active("auto_level", enabled)
+    
+    def _on_toggle_freeze(self) -> None:
+        """Handle toggle spectrum freeze."""
+        if self._calibration_mode is None:
+            return
+        
+        frozen = self._calibration_mode.toggle_freeze()
+        self._frozen_spectrum = frozen
+        self._display.set_button_active("freeze", frozen)
+        print(f"[FREEZE] Spectrum {'FROZEN' if frozen else 'LIVE'}")
+    
+    def _on_toggle_averaging(self) -> None:
+        """Handle toggle averaging."""
+        if self._calibration_mode is None:
+            return
+        
+        enabled = self._calibration_mode.toggle_averaging()
+        self._display.set_button_active("toggle_averaging", enabled)
+        print(f"[AVG] Averaging {'ON' if enabled else 'OFF'}")
+    
+    def _on_toggle_auto_gain_cal(self) -> None:
+        """Handle toggle auto gain in calibration mode."""
+        if self._calibration_mode is None:
+            return
+        
+        self._calibration_mode.state.auto_gain_enabled = not self._calibration_mode.state.auto_gain_enabled
+        enabled = self._calibration_mode.state.auto_gain_enabled
+        self._display.set_button_active("auto_gain", enabled)
+        print(f"[AUTO_GAIN] {'ON' if enabled else 'OFF'}")
+    
+    def _on_auto_calibrate(self) -> None:
+        """Handle auto-calibrate action."""
+        if self._calibration_mode is None or self._last_data is None:
+            print("[CAL] No data available for calibration")
+            return
+        
+        # Get detected peaks from current spectrum
+        peak_indices = self._last_data.peaks
+        if len(peak_indices) < 4:
+            print(f"[CAL] Need at least 4 peaks, found {len(peak_indices)}")
+            print("[CAL] Try adjusting peak detection parameters")
+            return
+        
+        # Run auto-calibration
+        cal_points = self._calibration_mode.auto_calibrate(
+            measured_intensity=self._last_data.intensity,
+            wavelengths=self._last_data.wavelengths,
+            peak_indices=peak_indices,
+        )
+        
+        if len(cal_points) >= 4:
+            print(f"[CAL] Auto-calibration found {len(cal_points)} points")
+            print("[CAL] Click 'SaveCal' to save, or adjust and recalibrate")
+            
+            # Apply calibration to see result
+            pixels = [p for p, w in cal_points]
+            wavelengths = [w for p, w in cal_points]
+            self._calibration.recalibrate(pixels, wavelengths)
+        else:
+            print("[CAL] Auto-calibration failed to find enough matches")
+    
+    def _on_save_calibration(self) -> None:
+        """Handle save calibration."""
+        if self._calibration_mode is None:
+            return
+        
+        cal_points = self._calibration_mode.get_calibration_points()
+        if len(cal_points) < 4:
+            # Use current calibration data if no auto-cal points
+            pixels = self._calibration.cal_pixels
+            wavelengths = self._calibration.cal_wavelengths
+        else:
+            pixels = [p for p, w in cal_points]
+            wavelengths = [w for p, w in cal_points]
+        
+        if len(pixels) >= 4:
+            if self._calibration.save(pixels, wavelengths):
+                print("[CAL] Calibration saved!")
+            else:
+                print("[CAL] Failed to save calibration")
+        else:
+            print("[CAL] Need at least 4 calibration points to save")
+    
+    def _on_load_calibration(self) -> None:
+        """Handle load calibration."""
+        if self._calibration.load():
+            print("[CAL] Calibration loaded")
+        else:
+            print("[CAL] Failed to load calibration (file may not exist)")
+    
+    def _on_clear_cal_points(self) -> None:
+        """Handle clear calibration points."""
+        if self._calibration_mode is not None:
+            self._calibration_mode.clear_calibration_points()
+        self._display.state.click_points.clear()
+        print("[CAL] Points cleared")
     
     def _on_quit(self) -> None:
         """Handle quit action."""
@@ -391,6 +568,10 @@ class Spectrometer:
         self._running = True
         self._last_data: Optional[SpectrumData] = None
         
+        # Calibration mode: select FL by default
+        if self._calibration_mode is not None:
+            self._on_select_source(ReferenceSource.FL)
+        
         try:
             while self._running:
                 frame = self._camera.capture()
@@ -399,6 +580,11 @@ class Spectrometer:
                 extraction_result = self._extractor.extract(frame)
                 cropped = extraction_result.cropped_frame
                 intensity = extraction_result.intensity
+                
+                # Handle calibration mode freeze
+                if self._calibration_mode is not None and self._frozen_spectrum:
+                    if self._last_data is not None:
+                        intensity = self._last_data.intensity
                 
                 if self._display.state.hold_peaks:
                     if self._held_intensity is None:
@@ -409,6 +595,10 @@ class Spectrometer:
                     self._savgol_filter.enabled = False
                 else:
                     self._savgol_filter.enabled = True
+                
+                # Calibration mode spectrum averaging
+                if self._calibration_mode is not None:
+                    intensity = self._calibration_mode.accumulate_spectrum(intensity)
                 
                 data = SpectrumData(
                     intensity=intensity,
@@ -421,12 +611,40 @@ class Spectrometer:
                 
                 self._last_data = processed
                 
-                # Update reference spectrum overlay
-                ref_intensity = self._reference_manager.get_interpolated(
-                    processed.wavelengths,
-                    processed.intensity,
-                )
-                self._display.state.reference_spectrum = ref_intensity
+                # Handle calibration mode auto-gain
+                if self._calibration_mode is not None and self._calibration_mode.state.auto_gain_enabled:
+                    current_max = float(np.max(processed.intensity))
+                    new_gain = self._calibration_mode.calculate_auto_gain_adjustment(
+                        current_max,
+                        self._camera.gain,
+                    )
+                    if new_gain != self._camera.gain:
+                        self._camera.gain = new_gain
+                
+                # Update mode overlay (calibration reference)
+                if self._calibration_mode is not None:
+                    overlay = self._calibration_mode.get_overlay(
+                        processed.wavelengths,
+                        self.config.display.graph_height,
+                    )
+                    self._display.set_mode_overlay(overlay)
+                    
+                    # Update status display
+                    self._display._control_bar.set_status("Ref", self._calibration_mode.get_current_source_name())
+                    self._display._control_bar.set_status("Pts", str(len(self._calibration_mode.cal_state.calibration_points)))
+                    if self._frozen_spectrum:
+                        self._display._control_bar.set_status("Status", "FROZEN")
+                    elif self._calibration_mode.state.averaging_enabled:
+                        self._display._control_bar.set_status("Status", f"AVG:{self._calibration_mode.state.accumulated_frames}")
+                    else:
+                        self._display._control_bar.set_status("Status", "LIVE")
+                else:
+                    # Update reference spectrum overlay for other modes
+                    ref_intensity = self._reference_manager.get_interpolated(
+                        processed.wavelengths,
+                        processed.intensity,
+                    )
+                    self._display.state.reference_spectrum = ref_intensity
                 
                 self._display.render(
                     processed,

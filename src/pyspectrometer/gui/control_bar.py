@@ -25,6 +25,65 @@ class ControlBarConfig:
     font_thickness: int = 1
 
 
+@dataclass
+class ButtonDef:
+    """Button definition for control bar setup."""
+    
+    label: str
+    action_name: str
+    is_toggle: bool = False
+    shortcut: str = ""
+    row: int = 1
+
+
+# Default buttons for measurement mode
+DEFAULT_BUTTONS = [
+    # Row 1
+    ButtonDef("Capture", "capture_current", row=1),
+    ButtonDef("Peak", "capture_peak", is_toggle=True, shortcut="h", row=1),
+    ButtonDef("Save", "save", shortcut="s", row=1),
+    ButtonDef("Load", "load_reference", row=1),
+    ButtonDef("Ref", "use_as_reference", row=1),
+    ButtonDef("Dark", "capture_dark", is_toggle=True, row=1),
+    ButtonDef("Gain+", "gain_up", shortcut="t", row=1),
+    ButtonDef("Gain-", "gain_down", shortcut="g", row=1),
+    ButtonDef("AutoG", "auto_gain", is_toggle=True, row=1),
+    # Row 2
+    ButtonDef("Light", "light_toggle", is_toggle=True, row=2),
+    ButtonDef("XYZ", "fit_xyz", row=2),
+    ButtonDef("PixMode", "toggle_pixel_mode", is_toggle=True, shortcut="p", row=2),
+    ButtonDef("Measure", "toggle_measure", is_toggle=True, shortcut="m", row=2),
+    ButtonDef("Cal", "calibrate", shortcut="c", row=2),
+    ButtonDef("ClearPts", "clear_clicks", shortcut="x", row=2),
+    ButtonDef("Ext", "cycle_extraction", shortcut="e", row=2),
+    ButtonDef("AutoAng", "auto_detect_angle", shortcut="a", row=2),
+    ButtonDef("Quit", "quit", shortcut="q", row=2),
+]
+
+# Calibration mode buttons
+CALIBRATION_BUTTONS = [
+    # Row 1: Source selection and calibration actions
+    ButtonDef("FL", "source_fl", row=1),
+    ButtonDef("Hg", "source_hg", row=1),
+    ButtonDef("Sun", "source_sun", row=1),
+    ButtonDef("LED", "source_led", row=1),
+    ButtonDef("Overlay", "toggle_overlay", is_toggle=True, row=1),
+    ButtonDef("AutoLvl", "auto_level", is_toggle=True, row=1),
+    ButtonDef("AutoCal", "auto_calibrate", row=1),
+    ButtonDef("SaveCal", "save_cal", shortcut="w", row=1),
+    ButtonDef("LoadCal", "load_cal", row=1),
+    # Row 2: Display and control
+    ButtonDef("Freeze", "freeze", is_toggle=True, shortcut="f", row=2),
+    ButtonDef("Peak", "capture_peak", is_toggle=True, shortcut="h", row=2),
+    ButtonDef("Avg", "toggle_averaging", is_toggle=True, row=2),
+    ButtonDef("AutoG", "auto_gain", is_toggle=True, row=2),
+    ButtonDef("Gain+", "gain_up", shortcut="t", row=2),
+    ButtonDef("Gain-", "gain_down", shortcut="g", row=2),
+    ButtonDef("Clear", "clear_points", shortcut="x", row=2),
+    ButtonDef("Quit", "quit", shortcut="q", row=2),
+]
+
+
 class ControlBar:
     """Two-row control bar with clickable buttons.
     
@@ -35,27 +94,31 @@ class ControlBar:
         self,
         width: int = 800,
         config: Optional[ControlBarConfig] = None,
+        mode: str = "measurement",
     ):
         """Initialize control bar.
         
         Args:
             width: Width of the control bar
             config: Configuration (uses defaults if None)
+            mode: Operating mode (affects button layout)
         """
         self.width = width
         self.config = config or ControlBarConfig()
+        self.mode = mode
         
         self._row1: Optional[ButtonBar] = None
         self._row2: Optional[ButtonBar] = None
         self._status_values: dict[str, str] = {}
+        self._button_style: Optional[ButtonStyle] = None
         
-        self._setup_buttons()
+        self._setup_buttons_for_mode(mode)
     
-    def _setup_buttons(self) -> None:
-        """Create the button rows."""
+    def _setup_buttons_for_mode(self, mode: str) -> None:
+        """Set up buttons based on operating mode."""
         cfg = self.config
         
-        style = ButtonStyle(
+        self._button_style = ButtonStyle(
             font_scale=cfg.font_scale,
             font_thickness=cfg.font_thickness,
             padding_x=5,
@@ -70,7 +133,7 @@ class ControlBar:
             y=row1_y,
             height=cfg.row_height,
             spacing=cfg.button_spacing,
-            style=style,
+            style=self._button_style,
         )
         
         self._row2 = ButtonBar(
@@ -78,32 +141,30 @@ class ControlBar:
             y=row2_y,
             height=cfg.row_height,
             spacing=cfg.button_spacing,
-            style=style,
+            style=self._button_style,
         )
         
-        self._row1.add_button("Capture", "capture_current", shortcut="")
-        self._row1.add_button("Peak", "capture_peak", shortcut="h", is_toggle=True)
-        self._row1.add_button("Save", "save", shortcut="s")
-        self._row1.add_button("Load", "load_reference", shortcut="")
-        self._row1.add_separator(8)
-        self._row1.add_button("Ref", "use_as_reference", shortcut="")
-        self._row1.add_button("Dark", "capture_dark", shortcut="", is_toggle=True)
-        self._row1.add_separator(8)
-        self._row1.add_button("Gain+", "gain_up", shortcut="t")
-        self._row1.add_button("Gain-", "gain_down", shortcut="g")
-        self._row1.add_button("AutoG", "auto_gain", shortcut="", is_toggle=True)
+        # Select button set based on mode
+        buttons = CALIBRATION_BUTTONS if mode == "calibration" else DEFAULT_BUTTONS
         
-        self._row2.add_button("Light", "light_toggle", shortcut="", is_toggle=True)
-        self._row2.add_button("XYZ", "fit_xyz", shortcut="")
-        self._row2.add_separator(8)
-        self._row2.add_button("PixMode", "toggle_pixel_mode", shortcut="p", is_toggle=True)
-        self._row2.add_button("Measure", "toggle_measure", shortcut="m", is_toggle=True)
-        self._row2.add_button("Cal", "calibrate", shortcut="c")
-        self._row2.add_button("ClearPts", "clear_clicks", shortcut="x")
-        self._row2.add_separator(8)
-        self._row2.add_button("Ext", "cycle_extraction", shortcut="e")
-        self._row2.add_button("AutoAng", "auto_detect_angle", shortcut="a")
-        self._row2.add_button("Quit", "quit", shortcut="q")
+        for btn_def in buttons:
+            bar = self._row1 if btn_def.row == 1 else self._row2
+            bar.add_button(
+                btn_def.label,
+                btn_def.action_name,
+                is_toggle=btn_def.is_toggle,
+                shortcut=btn_def.shortcut,
+            )
+    
+    def set_mode(self, mode: str) -> None:
+        """Change operating mode (rebuilds buttons).
+        
+        Args:
+            mode: New operating mode
+        """
+        self.mode = mode
+        self._status_values.clear()
+        self._setup_buttons_for_mode(mode)
     
     def register_callback(self, action_name: str, callback: Callable[[], None]) -> bool:
         """Register a callback for a button action.

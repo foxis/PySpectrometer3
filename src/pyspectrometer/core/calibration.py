@@ -79,6 +79,10 @@ class Calibration:
         self._rotation_angle: float = 0.0
         self._spectrum_y_center: int = height // 2
         self._perpendicular_width: int = 20
+        
+        # Store current calibration data points
+        self._cal_pixels: list[int] = list(default_pixels)
+        self._cal_wavelengths: list[float] = list(default_wavelengths)
     
     @property
     def wavelengths(self) -> np.ndarray:
@@ -228,6 +232,48 @@ class Calibration:
         """Get perpendicular sampling width."""
         return self._perpendicular_width
     
+    @property
+    def cal_pixels(self) -> list[int]:
+        """Get current calibration pixel positions."""
+        return self._cal_pixels.copy()
+    
+    @property
+    def cal_wavelengths(self) -> list[float]:
+        """Get current calibration wavelengths."""
+        return self._cal_wavelengths.copy()
+    
+    def recalibrate(
+        self,
+        pixel_data: list[int],
+        wavelength_data: list[float],
+    ) -> bool:
+        """Apply new calibration without saving to file.
+        
+        Useful for previewing calibration before committing.
+        
+        Args:
+            pixel_data: List of pixel positions
+            wavelength_data: List of corresponding wavelengths
+            
+        Returns:
+            True if calibration was applied successfully
+        """
+        if len(pixel_data) < 3:
+            print("Need at least 3 calibration points!")
+            return False
+        
+        if len(pixel_data) != len(wavelength_data):
+            print("Pixel and wavelength arrays must have same length!")
+            return False
+        
+        self._cal_pixels = list(pixel_data)
+        self._cal_wavelengths = list(wavelength_data)
+        
+        self._result = self._compute_calibration(pixel_data, wavelength_data, has_errors=False)
+        self._graticule = None
+        
+        return True
+    
     def _read_cal_file(self) -> tuple[list[int], list[float], bool]:
         """Read calibration data from file."""
         errors = False
@@ -249,6 +295,10 @@ class Calibration:
                 errors = True
             if len(pixels) < 3 or len(wavelengths) < 3:
                 errors = True
+            
+            if not errors:
+                self._cal_pixels = pixels
+                self._cal_wavelengths = wavelengths
             
             if len(lines) >= 3:
                 line2 = lines[2].strip()

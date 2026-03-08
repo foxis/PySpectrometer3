@@ -122,6 +122,21 @@ Examples:
     )
     
     parser.add_argument(
+        "--color",
+        action="store_true",
+        help="Use color camera mode (RGB888, 8-bit) instead of monochrome",
+    )
+    
+    parser.add_argument(
+        "--bit-depth",
+        type=int,
+        default=10,
+        choices=[8, 10, 16],
+        metavar="BITS",
+        help="Bit depth for monochrome mode (8, 10, or 16, default: 10)",
+    )
+    
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s 3.0.0",
@@ -152,6 +167,13 @@ def main() -> int:
     if args.mode == "raman":
         print(f"Raman laser wavelength: {args.laser} nm")
     
+    # Monochrome is default, --color disables it
+    monochrome = not args.color
+    if monochrome:
+        print(f"Monochrome camera mode ({args.bit_depth}-bit)")
+    else:
+        print("Color camera mode (RGB888, 8-bit)")
+    
     config = Config.from_args(
         fullscreen=args.fullscreen,
         waterfall=args.waterfall,
@@ -159,6 +181,8 @@ def main() -> int:
         gain=args.gain,
         width=args.width,
         height=args.height,
+        monochrome=monochrome,
+        bit_depth=args.bit_depth,
     )
     
     try:

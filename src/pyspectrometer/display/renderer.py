@@ -55,16 +55,19 @@ class DisplayManager:
         self,
         config: Config,
         calibration: Calibration,
+        mode: str = "measurement",
     ):
         """Initialize display manager.
         
         Args:
             config: Application configuration
             calibration: Wavelength calibration data
+            mode: Operating mode (calibration, measurement, raman, colorscience)
         """
         self.config = config
         self.calibration = calibration
         self.state = DisplayState()
+        self.mode = mode
         
         self._graticule = GraticuleRenderer()
         self._waterfall: Optional[WaterfallDisplay] = None
@@ -83,7 +86,11 @@ class DisplayManager:
                 height=config.display.message_height,
                 font_scale=config.display.font_scale,
             ),
+            mode=mode,
         )
+        
+        # Mode overlay (intensity array, color)
+        self._mode_overlay: Optional[tuple[np.ndarray, tuple[int, int, int]]] = None
         
         self._font = cv2.FONT_HERSHEY_SIMPLEX
         self._windows_created = False
@@ -170,6 +177,7 @@ class DisplayManager:
         self._graticule.render_horizontal_lines(graph)
         
         self._render_reference_spectrum(graph, data)
+        self._render_mode_overlay(graph)
         self._render_spectrum(graph, data)
         self._render_peaks(graph, data)
         self._render_cursor(graph, data)
@@ -230,6 +238,35 @@ class DisplayManager:
             self._render_waterfall_status(waterfall_vertical, camera_gain)
             
             cv2.imshow(self.config.waterfall_title, waterfall_vertical)
+    
+    def set_mode_overlay(
+        self,
+        overlay: Optional[tuple[np.ndarray, tuple[int, int, int]]],
+    ) -> None:
+        """Set mode-specific overlay to render on graph.
+        
+        Args:
+            overlay: Tuple of (intensity array, BGR color) or None to clear
+        """
+        self._mode_overlay = overlay
+    
+    def _render_mode_overlay(self, graph: np.ndarray) -> None:
+        """Render mode-specific overlay (e.g., reference spectrum for calibration)."""
+        if self._mode_overlay is None:
+            return
+        
+        intensity, color = self._mode_overlay
+        height = graph.shape[0]
+        
+        # Draw connected line for overlay
+        points = []
+        for i, val in enumerate(intensity):
+            y = height - int(min(val, height - 1))
+            points.append((i, max(0, y)))
+        
+        if len(points) > 1:
+            pts = np.array(points, dtype=np.int32)
+            cv2.polylines(graph, [pts], isClosed=False, color=color, thickness=2, lineType=cv2.LINE_AA)
     
     def _render_reference_spectrum(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render the reference spectrum overlay line."""

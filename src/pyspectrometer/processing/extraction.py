@@ -116,7 +116,10 @@ class SpectrumExtractor:
         """Extract spectrum intensity from frame.
         
         Args:
-            frame: Input frame as BGR numpy array (height, width, 3)
+            frame: Input frame as numpy array:
+                   - BGR color: (height, width, 3) uint8
+                   - Monochrome 8-bit: (height, width) uint8
+                   - Monochrome 10/16-bit: (height, width) uint16
             
         Returns:
             ExtractionResult with intensity array and cropped frame
@@ -124,7 +127,8 @@ class SpectrumExtractor:
         # Rotate frame to straighten spectrum lines
         rotated_frame = self._rotate_frame(frame)
         
-        gray = cv2.cvtColor(rotated_frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        # Convert to grayscale float for processing
+        gray = self._frame_to_gray(rotated_frame)
         
         intensity = self._extract_with_method(gray)
         
@@ -138,6 +142,45 @@ class SpectrumExtractor:
             rotation_angle=self.rotation_angle,
             perpendicular_width=self.perpendicular_width,
         )
+    
+    def _frame_to_gray(self, frame: np.ndarray) -> np.ndarray:
+        """Convert frame to grayscale float32.
+        
+        Handles:
+        - BGR color (3D uint8) -> grayscale
+        - Monochrome (2D uint8 or uint16) -> float32, scaled to 0-255 range
+        
+        Args:
+            frame: Input frame (2D or 3D)
+            
+        Returns:
+            Grayscale float32 array scaled to 0-255 range
+        """
+        if frame.ndim == 3:
+            # Color frame: convert BGR to grayscale
+            return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        
+        # Monochrome frame
+        if frame.dtype == np.uint16:
+            # High bit-depth: scale to 0-255 range
+            # Detect actual bit depth from max value
+            max_val = frame.max()
+            if max_val > 4095:
+                # 16-bit: 0-65535
+                scale = 255.0 / 65535.0
+            elif max_val > 1023:
+                # 12-bit: 0-4095
+                scale = 255.0 / 4095.0
+            elif max_val > 255:
+                # 10-bit: 0-1023
+                scale = 255.0 / 1023.0
+            else:
+                # Already in 8-bit range
+                scale = 1.0
+            return (frame.astype(np.float32) * scale)
+        
+        # 8-bit monochrome
+        return frame.astype(np.float32)
     
     def _extract_with_method(self, gray: np.ndarray) -> np.ndarray:
         """Apply selected extraction method."""
@@ -246,12 +289,36 @@ class SpectrumExtractor:
         return amplitude * np.exp(-0.5 * ((x - center) / sigma) ** 2) + background
     
     def _create_cropped_preview(self, frame: np.ndarray) -> np.ndarray:
-        """Create cropped preview region centered on spectrum."""
+        """Create cropped preview region centered on spectrum.
+        
+        Handles both color (3D) and monochrome (2D) frames.
+        Monochrome frames are converted to 3-channel grayscale for display.
+        """
         half_crop = self.crop_height // 2
         y_start = max(0, self.spectrum_y_center - half_crop)
         y_end = min(frame.shape[0], self.spectrum_y_center + half_crop)
         
-        return frame[y_start:y_end, :].copy()
+        cropped = frame[y_start:y_end, :].copy()
+        
+        # Convert monochrome to 3-channel for display
+        if cropped.ndim == 2:
+            # Scale to 8-bit if high bit-depth
+            if cropped.dtype == np.uint16:
+                max_val = cropped.max()
+                if max_val > 255:
+                    if max_val > 4095:
+                        scale = 255.0 / 65535.0
+                    elif max_val > 1023:
+                        scale = 255.0 / 4095.0
+                    else:
+                        scale = 255.0 / 1023.0
+                    cropped = (cropped.astype(np.float32) * scale).astype(np.uint8)
+                else:
+                    cropped = cropped.astype(np.uint8)
+            # Convert grayscale to BGR for display
+            cropped = cv2.cvtColor(cropped, cv2.COLOR_GRAY2BGR)
+        
+        return cropped
     
     def detect_angle(self, frame: np.ndarray, visualize: bool = False) -> tuple[float, int, Optional[np.ndarray]]:
         """Auto-detect spectrum rotation angle and Y center using gradient analysis.
@@ -261,13 +328,24 @@ class SpectrumExtractor:
         on the ROTATED frame to ensure proper centering after correction.
         
         Args:
-            frame: Input frame as BGR numpy array
+            frame: Input frame (BGR color or monochrome)
             visualize: If True, return visualization image
             
         Returns:
             Tuple of (detected_angle_degrees, optimal_y_center, visualization_image_or_None)
         """
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # Convert to grayscale uint8
+        if frame.ndim == 3:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        elif frame.dtype == np.uint16:
+            # Scale high bit-depth to 8-bit
+            max_val = max(frame.max(), 1)
+            if max_val > 255:
+                gray = (frame.astype(np.float32) * 255 / max_val).astype(np.uint8)
+            else:
+                gray = frame.astype(np.uint8)
+        else:
+            gray = frame
         height, width = gray.shape
         
         # Compute horizontal gradient (detects vertical edges/stripes)

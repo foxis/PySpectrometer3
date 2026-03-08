@@ -418,6 +418,65 @@ cd /home/pi/PySpectrometer3
 
 ---
 
-*Document Version: 1.0*
-*Created: 2026-03-08*
+## Implementation Status
+
+### ✅ Calibration Mode - IMPLEMENTED
+
+**Files Created/Modified**:
+- `src/pyspectrometer/modes/__init__.py` - Mode module exports
+- `src/pyspectrometer/modes/base.py` - Base mode class with common functionality
+- `src/pyspectrometer/modes/calibration.py` - Calibration mode implementation
+- `src/pyspectrometer/data/__init__.py` - Data module exports
+- `src/pyspectrometer/data/reference_spectra.py` - Reference spectra (FL, Hg, Sun, LED)
+- `src/pyspectrometer/gui/control_bar.py` - Mode-specific button layouts
+- `src/pyspectrometer/display/renderer.py` - Mode overlay rendering
+- `src/pyspectrometer/core/calibration.py` - Added recalibrate(), cal_pixels, cal_wavelengths
+- `src/pyspectrometer/spectrometer.py` - Calibration mode integration
+
+**GUI Controls**:
+| Button | Action | Description |
+|--------|--------|-------------|
+| FL | source_fl | Select Fluorescent reference |
+| Hg | source_hg | Select Mercury reference |
+| Sun | source_sun | Select Solar reference |
+| LED | source_led | Select White LED reference |
+| Overlay | toggle_overlay | Toggle reference overlay visibility |
+| AutoLvl | auto_level | Toggle auto-level (gain adjustment) |
+| AutoCal | auto_calibrate | Automatic peak matching calibration |
+| SaveCal | save_cal | Save calibration to file |
+| LoadCal | load_cal | Load calibration from file |
+| Freeze | freeze | Freeze spectrum for calibration |
+| Peak | capture_peak | Peak hold mode |
+| Avg | toggle_averaging | Toggle frame averaging |
+| AutoG | auto_gain | Toggle automatic gain control |
+| Gain+/- | gain_up/down | Manual gain adjustment |
+| Clear | clear_points | Clear calibration points |
+| Quit | quit | Exit application |
+
+**Calibration Workflow**:
+1. `make calibrate` to start calibration mode
+2. FL source is selected by default with overlay visible
+3. Point spectrometer at matching light source
+4. AutoGain is enabled by default - spectrum should auto-scale
+5. Click `Freeze` to lock the current spectrum
+6. Click `AutoCal` to match peaks and compute calibration
+7. Verify overlay aligns with measured peaks
+8. Click `SaveCal` to save, or clear and retry
+
+**Technical Notes**:
+- 4-point minimum for cubic polynomial fit
+- Calibration saved as pixel→wavelength pairs (human-editable)
+- Reference sources include characteristic spectral lines
+- White LED has blue peak (~450nm) and broad phosphor (~550nm)
+
+### ⏳ Measurement Mode - PENDING
+
+### ⏳ Raman Mode - PENDING
+
+### ⏳ Color Science Mode - PENDING
+
+---
+
+*Document Version: 1.1*
+*Updated: 2026-03-08*
 *Author: AI Assistant*
