@@ -137,6 +137,10 @@ class Spectrometer:
         self._frozen_spectrum: bool = False
         self._frozen_intensity: Optional[np.ndarray] = None  # Stored frozen spectrum
         
+        # Auto-gain/exposure state
+        self._auto_gain_enabled: bool = False
+        self._auto_exposure_enabled: bool = False
+        
         self._register_key_callbacks()
         self._register_button_callbacks()
     
@@ -170,10 +174,22 @@ class Spectrometer:
         
         # Common buttons
         display.register_button_callback("quit", self._on_quit)
-        display.register_button_callback("gain_up", self._on_gain_up)
-        display.register_button_callback("gain_down", self._on_gain_down)
         display.register_button_callback("capture_peak", self._on_toggle_hold)
         display.register_button_callback("cycle_preview", self._on_cycle_preview)
+        
+        # Gain/Exposure slider toggles
+        display.register_button_callback("show_gain_slider", self._on_toggle_gain_slider)
+        display.register_button_callback("show_exposure_slider", self._on_toggle_exposure_slider)
+        display.register_button_callback("auto_gain", self._on_toggle_auto_gain)
+        display.register_button_callback("auto_exposure", self._on_toggle_auto_exposure)
+        
+        # Set up slider change callbacks
+        self._display.slider_panel.gain_slider.on_change = self._on_gain_slider_change
+        self._display.slider_panel.exposure_slider.on_change = self._on_exposure_slider_change
+        
+        # Initialize slider values from camera
+        self._display.set_gain_value(self._camera.gain)
+        self._display.set_exposure_value(self._camera.exposure)
         
         if self.mode == "calibration":
             self._register_calibration_callbacks()
@@ -196,7 +212,6 @@ class Spectrometer:
         # Display and control
         display.register_button_callback("show_reference", self._on_toggle_show_reference)
         display.register_button_callback("normalize", self._on_toggle_normalize)
-        display.register_button_callback("auto_gain", self._on_toggle_auto_gain_meas)
         display.register_button_callback("lamp_toggle", self._on_toggle_light)
     
     def _register_calibration_callbacks(self) -> None:
@@ -211,7 +226,7 @@ class Spectrometer:
         
         # Calibration actions
         display.register_button_callback("toggle_overlay", self._on_toggle_overlay)
-        display.register_button_callback("auto_level", self._on_toggle_auto_level)
+        display.register_button_callback("auto_level", self._on_auto_level)
         display.register_button_callback("auto_calibrate", self._on_auto_calibrate)
         display.register_button_callback("save_cal", self._on_save_calibration)
         display.register_button_callback("load_cal", self._on_load_calibration)
@@ -219,14 +234,11 @@ class Spectrometer:
         # Display and control
         display.register_button_callback("freeze", self._on_toggle_freeze)
         display.register_button_callback("toggle_averaging", self._on_toggle_averaging)
-        display.register_button_callback("auto_gain", self._on_toggle_auto_gain_cal)
         display.register_button_callback("clear_points", self._on_clear_cal_points)
         
         # Set initial button states
         if self._calibration_mode is not None:
             display.set_button_active("toggle_overlay", self._calibration_mode.cal_state.overlay_visible)
-            display.set_button_active("auto_level", self._calibration_mode.cal_state.auto_level_enabled)
-            display.set_button_active("auto_gain", self._calibration_mode.state.auto_gain_enabled)
     
     def _on_button_save(self) -> None:
         """Handle save button click."""
@@ -273,7 +285,89 @@ class Spectrometer:
     
     def _on_toggle_auto_gain(self) -> None:
         """Handle toggle auto gain."""
-        print("[AUTO_GAIN] Toggle auto gain (not implemented yet)")
+        self._auto_gain_enabled = not getattr(self, "_auto_gain_enabled", False)
+        self._display.set_button_active("auto_gain", self._auto_gain_enabled)
+        print(f"[AUTO_GAIN] Auto gain: {'ON' if self._auto_gain_enabled else 'OFF'}")
+    
+    def _on_toggle_auto_exposure(self) -> None:
+        """Handle toggle auto exposure."""
+        self._auto_exposure_enabled = not getattr(self, "_auto_exposure_enabled", False)
+        self._display.set_button_active("auto_exposure", self._auto_exposure_enabled)
+        print(f"[AUTO_EXPOSURE] Auto exposure: {'ON' if self._auto_exposure_enabled else 'OFF'}")
+    
+    def _on_toggle_gain_slider(self) -> None:
+        """Handle toggle gain slider visibility."""
+        slider = self._display.slider_panel.gain_slider
+        slider.visible = not slider.visible
+        self._display.set_button_active("show_gain_slider", slider.visible)
+        print(f"[GAIN] Gain slider: {'VISIBLE' if slider.visible else 'HIDDEN'}")
+    
+    def _on_toggle_exposure_slider(self) -> None:
+        """Handle toggle exposure slider visibility."""
+        slider = self._display.slider_panel.exposure_slider
+        slider.visible = not slider.visible
+        self._display.set_button_active("show_exposure_slider", slider.visible)
+        print(f"[EXPOSURE] Exposure slider: {'VISIBLE' if slider.visible else 'HIDDEN'}")
+    
+    def _on_gain_slider_change(self, value: float) -> None:
+        """Handle gain slider value change."""
+        self._camera.gain = value
+    
+    def _on_exposure_slider_change(self, value: float) -> None:
+        """Handle exposure slider value change."""
+        self._camera.exposure = int(value)
+    
+    def _handle_auto_gain_exposure(self, data) -> None:
+        """Handle auto-gain and auto-exposure based on spectrum peak.
+        
+        Algorithm: If peak exceeds 95% of max, reduce gain/exposure.
+        Otherwise, try to increase to bring peak to target (around 80%).
+        """
+        if data is None or len(data.intensity) == 0:
+            return
+        
+        auto_gain = getattr(self, "_auto_gain_enabled", False)
+        auto_exposure = getattr(self, "_auto_exposure_enabled", False)
+        
+        if not auto_gain and not auto_exposure:
+            return
+        
+        current_max = float(np.max(data.intensity))
+        graph_height = self.config.display.graph_height
+        threshold_high = graph_height * 0.95  # 95% - need to reduce
+        threshold_target = graph_height * 0.80  # 80% - optimal level
+        threshold_low = graph_height * 0.50  # 50% - need to increase
+        
+        # Calculate adjustment ratio
+        if current_max < 1:
+            return  # No signal
+        
+        if current_max > threshold_high:
+            # Peak is too high - reduce
+            ratio = threshold_target / current_max
+        elif current_max < threshold_low:
+            # Peak is too low - increase
+            ratio = threshold_target / current_max
+        else:
+            # Peak is in acceptable range
+            return
+        
+        # Limit adjustment speed (don't change too fast)
+        ratio = max(0.8, min(1.25, ratio))
+        
+        if auto_gain:
+            new_gain = self._camera.gain * ratio
+            new_gain = max(1.0, min(50.0, new_gain))
+            if abs(new_gain - self._camera.gain) > 0.1:
+                self._camera.gain = new_gain
+                self._display.set_gain_value(new_gain)
+        
+        if auto_exposure:
+            new_exposure = self._camera.exposure * ratio
+            new_exposure = max(100, min(100000, int(new_exposure)))
+            if abs(new_exposure - self._camera.exposure) > 10:
+                self._camera.exposure = new_exposure
+                self._display.set_exposure_value(new_exposure)
     
     def _on_toggle_light(self) -> None:
         """Handle toggle light control."""
@@ -371,13 +465,22 @@ class Spectrometer:
         visible = self._calibration_mode.toggle_overlay()
         self._display.set_button_active("toggle_overlay", visible)
     
-    def _on_toggle_auto_level(self) -> None:
-        """Handle toggle auto-level."""
+    def _on_auto_level(self) -> None:
+        """Handle auto-level button - runs auto-level algorithm once."""
         if self._calibration_mode is None:
             return
         
-        enabled = self._calibration_mode.toggle_auto_level()
-        self._display.set_button_active("auto_level", enabled)
+        if self._last_data is None:
+            print("[AutoLevel] No spectrum data available")
+            return
+        
+        new_gain = self._calibration_mode.run_auto_level(
+            self._last_data.intensity,
+            self._camera.gain,
+        )
+        
+        if new_gain != self._camera.gain:
+            self._camera.gain = new_gain
     
     def _on_toggle_freeze(self) -> None:
         """Handle toggle spectrum freeze."""
@@ -716,23 +819,8 @@ class Spectrometer:
                 
                 self._last_data = processed
                 
-                # Handle mode-specific auto-gain
-                if self._calibration_mode is not None and self._calibration_mode.state.auto_gain_enabled:
-                    current_max = float(np.max(processed.intensity))
-                    new_gain = self._calibration_mode.calculate_auto_gain_adjustment(
-                        current_max,
-                        self._camera.gain,
-                    )
-                    if new_gain != self._camera.gain:
-                        self._camera.gain = new_gain
-                elif self._measurement_mode is not None and self._measurement_mode.state.auto_gain_enabled:
-                    current_max = float(np.max(processed.intensity))
-                    new_gain = self._measurement_mode.calculate_auto_gain_adjustment(
-                        current_max,
-                        self._camera.gain,
-                    )
-                    if new_gain != self._camera.gain:
-                        self._camera.gain = new_gain
+                # Handle auto-gain/auto-exposure (95% threshold algorithm)
+                self._handle_auto_gain_exposure(processed)
                 
                 # Update mode overlay
                 if self._calibration_mode is not None:

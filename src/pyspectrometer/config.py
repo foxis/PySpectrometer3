@@ -167,8 +167,6 @@ class Config:
         - preview_height: 60 (camera preview window)
         - graph_height: 280 (spectrum graph)
         Total: 400px
-        
-        Uses fullscreen mode to remove window decorations.
         """
         self.camera.frame_width = 640
         self.camera.frame_height = 400
@@ -178,9 +176,6 @@ class Config:
         self.display.graph_height = 280
         self.display.preview_height = 60
         self.display.message_height = 60
-        
-        # Fullscreen removes window decorations (title bar, buttons)
-        self.display.fullscreen = True
         
         self.display.font_scale = 0.35
         self.display.text_thickness = 1

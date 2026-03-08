@@ -10,6 +10,7 @@ from ..core.spectrum import SpectrumData
 from ..core.calibration import Calibration
 from ..utils.color import wavelength_to_rgb, rgb_to_bgr
 from ..gui.control_bar import ControlBar, ControlBarConfig
+from ..gui.sliders import SliderPanel
 from .graticule import GraticuleRenderer
 from .waterfall import WaterfallDisplay
 
@@ -89,6 +90,16 @@ class DisplayManager:
             mode=mode,
         )
         
+        # Slider panel for gain/exposure (positioned on right side of graph area)
+        slider_x = config.camera.frame_width - 60
+        slider_y = config.display.message_height + config.display.preview_height + 10
+        slider_height = config.display.graph_height - 30
+        self._slider_panel = SliderPanel(
+            x=slider_x,
+            y=slider_y,
+            height=slider_height,
+        )
+        
         # Mode overlay (intensity array, color)
         self._mode_overlay: Optional[tuple[np.ndarray, tuple[int, int, int]]] = None
         
@@ -97,6 +108,9 @@ class DisplayManager:
         
         # Preview display mode: "full", "window", "none"
         self._preview_mode = "window"
+        
+        # Track mouse button state for slider dragging
+        self._mouse_down = False
     
     def setup_windows(self) -> None:
         """Create and configure OpenCV windows."""
@@ -111,15 +125,16 @@ class DisplayManager:
             cv2.moveWindow(title2, 200, 200)
         
         if self.config.display.fullscreen:
-            cv2.namedWindow(title1, cv2.WND_PROP_FULLSCREEN)
+            # True fullscreen - fills entire screen
+            cv2.namedWindow(title1, cv2.WINDOW_NORMAL)
             cv2.setWindowProperty(
                 title1,
                 cv2.WND_PROP_FULLSCREEN,
                 cv2.WINDOW_FULLSCREEN,
             )
         else:
-            # Use WINDOW_AUTOSIZE for no resize controls, WINDOW_GUI_NORMAL for no toolbar
-            cv2.namedWindow(title1, cv2.WINDOW_AUTOSIZE | cv2.WINDOW_GUI_NORMAL)
+            # Windowed mode - auto-size to content, minimal GUI
+            cv2.namedWindow(title1, cv2.WINDOW_AUTOSIZE)
             cv2.moveWindow(title1, 0, 0)
         
         cv2.setMouseCallback(title1, self._handle_mouse)
@@ -160,13 +175,25 @@ class DisplayManager:
             
             if y < control_bar_height:
                 self._control_bar.handle_mouse_move(x, y)
+            
+            # Handle slider dragging
+            if self._mouse_down:
+                self._slider_panel.handle_mouse_move(x, y)
         
         elif event == cv2.EVENT_LBUTTONDOWN:
+            self._mouse_down = True
+            
             if y < control_bar_height:
                 self._control_bar.handle_click(x, y)
+            elif self._slider_panel.handle_mouse_down(x, y):
+                pass  # Slider handled it
             else:
                 mouse_y = y - mouse_y_offset
                 self.state.click_points.append((x, mouse_y))
+        
+        elif event == cv2.EVENT_LBUTTONUP:
+            self._mouse_down = False
+            self._slider_panel.handle_mouse_up()
     
     def render(
         self,
@@ -207,6 +234,10 @@ class DisplayManager:
         self._render_cursor(graph, data)
         self._render_click_points(graph)
         
+        # Render sliders directly on graph (if any are visible)
+        if self._slider_panel.any_visible():
+            self._render_sliders_on_graph(graph)
+        
         message_height = self.config.display.message_height
         preview_height = self.config.display.preview_height
         
@@ -222,28 +253,36 @@ class DisplayManager:
         )
         messages = self._control_bar.render()
         
-        # Handle preview mode - ensure cropped is always correct height
+        # Handle preview mode
         cropped = data.cropped_frame
         
-        # Ensure cropped frame is exactly preview_height
+        # Ensure cropped frame is exactly preview_height for windowed mode
         if cropped is not None:
             if cropped.shape[0] != preview_height:
                 cropped = cv2.resize(cropped, (width, preview_height))
         else:
             cropped = np.zeros([preview_height, width, 3], dtype=np.uint8)
         
+        # Get status text for overlay
+        status_text = self._control_bar.get_status_text()
+        
         match self._preview_mode:
             case "none":
-                # No preview - just graph with messages
+                # No preview - just control bar with spectrum graph
+                # Draw status at bottom of graph
+                self._draw_status_bar(graph, status_text)
                 spectrum_vertical = np.vstack((messages, graph))
             case "window":
-                # Windowed preview (cropped)
+                # Windowed preview (cropped) above spectrum graph
                 self._draw_sampling_lines(cropped, rotation_angle, perp_width)
+                # Draw status on preview strip
+                self._draw_status_overlay(cropped, status_text)
                 spectrum_vertical = np.vstack((messages, cropped, graph))
             case "full":
-                # Full camera view (raw frame scaled to preview_height)
+                # Full camera view REPLACES the spectrum graph entirely
                 raw_frame = data.raw_frame
                 if raw_frame is not None:
+                    # Convert raw frame to displayable BGR
                     if raw_frame.ndim == 2:
                         # Monochrome - convert to BGR
                         if raw_frame.dtype == np.uint16:
@@ -252,17 +291,30 @@ class DisplayManager:
                             display = raw_frame.astype(np.uint8)
                         display = cv2.cvtColor(display, cv2.COLOR_GRAY2BGR)
                     else:
-                        display = raw_frame
-                    # Scale to exact preview dimensions
-                    display = cv2.resize(display, (width, preview_height))
-                    spectrum_vertical = np.vstack((messages, display, graph))
+                        display = raw_frame.copy()
+                    
+                    # Scale to fill the area below control bar (preview + graph height)
+                    camera_area_height = preview_height + graph_height
+                    display = cv2.resize(display, (width, camera_area_height))
+                    
+                    # Draw sampling lines on full camera view
+                    self._draw_sampling_lines_full(display, rotation_angle, perp_width)
+                    # Draw status at bottom of camera view
+                    self._draw_status_bar(display, status_text)
+                    
+                    spectrum_vertical = np.vstack((messages, display))
                 else:
+                    # No raw frame available, fall back to windowed
+                    self._draw_sampling_lines(cropped, rotation_angle, perp_width)
+                    self._draw_status_overlay(cropped, status_text)
                     spectrum_vertical = np.vstack((messages, cropped, graph))
             case _:
                 # Default to windowed
                 self._draw_sampling_lines(cropped, rotation_angle, perp_width)
+                self._draw_status_overlay(cropped, status_text)
                 spectrum_vertical = np.vstack((messages, cropped, graph))
         
+        # Show the composed image
         cv2.imshow(self.config.spectrograph_title, spectrum_vertical)
         
         if self._waterfall is not None and self.config.display.waterfall_enabled:
@@ -464,6 +516,96 @@ class DisplayManager:
         cv2.line(cropped, (0, y_top), (width, y_top), (0, 255, 255), 1)
         cv2.line(cropped, (0, y_bottom), (width, y_bottom), (0, 255, 255), 1)
     
+    def _draw_sampling_lines_full(
+        self,
+        frame: np.ndarray,
+        rotation_angle: float = 0.0,
+        perp_width: int = 20,
+    ) -> None:
+        """Draw sampling region indicator lines on full camera view.
+        
+        Shows the sampling region in the center of the full frame.
+        """
+        width = frame.shape[1]
+        height = frame.shape[0]
+        
+        # Get spectrum Y center from config (or use frame center)
+        spectrum_y = self.config.extraction.spectrum_y_center
+        if spectrum_y == 0:
+            spectrum_y = height // 2
+        
+        half_perp = perp_width // 2
+        
+        # Draw horizontal lines at sampling bounds
+        y_top = max(0, spectrum_y - half_perp)
+        y_bottom = min(height - 1, spectrum_y + half_perp)
+        
+        # Draw with thicker lines for visibility on full view
+        cv2.line(frame, (0, y_top), (width, y_top), (0, 255, 255), 2)
+        cv2.line(frame, (0, y_bottom), (width, y_bottom), (0, 255, 255), 2)
+        
+        # Draw center line (thinner, different color)
+        cv2.line(frame, (0, spectrum_y), (width, spectrum_y), (255, 255, 0), 1)
+    
+    def _draw_status_overlay(self, image: np.ndarray, status_text: str) -> None:
+        """Draw status text overlaid on the preview strip (semi-transparent background)."""
+        if not status_text:
+            return
+        
+        font = self._font
+        font_scale = self.config.display.font_scale
+        thickness = 1
+        
+        # Get text size
+        (text_width, text_height), baseline = cv2.getTextSize(
+            status_text, font, font_scale, thickness
+        )
+        
+        # Position at bottom-left with small padding
+        padding = 3
+        x = padding
+        y = image.shape[0] - padding
+        
+        # Draw semi-transparent background rectangle
+        bg_x1 = x - padding
+        bg_y1 = y - text_height - padding
+        bg_x2 = x + text_width + padding
+        bg_y2 = y + baseline + padding
+        
+        # Create overlay for transparency effect
+        overlay = image.copy()
+        cv2.rectangle(overlay, (bg_x1, bg_y1), (bg_x2, bg_y2), (0, 0, 0), -1)
+        cv2.addWeighted(overlay, 0.5, image, 0.5, 0, image)
+        
+        # Draw text
+        cv2.putText(
+            image, status_text, (x, y),
+            font, font_scale, (0, 255, 255), thickness, cv2.LINE_AA
+        )
+    
+    def _draw_status_bar(self, image: np.ndarray, status_text: str) -> None:
+        """Draw status text at the bottom of the image."""
+        if not status_text:
+            return
+        
+        font = self._font
+        font_scale = self.config.display.font_scale
+        thickness = 1
+        
+        # Position at bottom-left
+        x = 5
+        y = image.shape[0] - 5
+        
+        # Draw with shadow for readability
+        cv2.putText(
+            image, status_text, (x + 1, y + 1),
+            font, font_scale, (0, 0, 0), thickness, cv2.LINE_AA
+        )
+        cv2.putText(
+            image, status_text, (x, y),
+            font, font_scale, (0, 255, 255), thickness, cv2.LINE_AA
+        )
+    
     def get_waterfall_image(self) -> Optional[np.ndarray]:
         """Get the current waterfall display image."""
         if self._waterfall is not None:
@@ -525,6 +667,54 @@ class DisplayManager:
     def control_bar(self) -> ControlBar:
         """Get the control bar instance."""
         return self._control_bar
+    
+    @property
+    def slider_panel(self) -> SliderPanel:
+        """Get the slider panel instance."""
+        return self._slider_panel
+    
+    def show_gain_slider(self, visible: bool) -> None:
+        """Show or hide the gain slider."""
+        self._slider_panel.gain_slider.visible = visible
+    
+    def show_exposure_slider(self, visible: bool) -> None:
+        """Show or hide the exposure slider."""
+        self._slider_panel.exposure_slider.visible = visible
+    
+    def set_gain_value(self, value: float) -> None:
+        """Set the gain slider value."""
+        self._slider_panel.gain_slider.value = value
+    
+    def set_exposure_value(self, value: float) -> None:
+        """Set the exposure slider value."""
+        self._slider_panel.exposure_slider.value = value
+    
+    def _render_sliders_on_graph(self, graph: np.ndarray) -> None:
+        """Render sliders directly on the graph area."""
+        # Sliders are positioned relative to the full window, but we render
+        # them on the graph portion. Adjust slider coordinates temporarily.
+        panel = self._slider_panel
+        
+        # Calculate offset from slider position to graph-relative position
+        message_height = self.config.display.message_height
+        preview_height = self.config.display.preview_height
+        
+        # Sliders render directly on graph, so we adjust their Y positions
+        # to be graph-relative (subtract the offset above graph)
+        offset_y = message_height + preview_height
+        
+        # Temporarily adjust slider positions for graph rendering
+        original_gain_y = panel.gain_slider.y
+        original_exp_y = panel.exposure_slider.y
+        
+        panel.gain_slider.y = panel.gain_slider.y - offset_y
+        panel.exposure_slider.y = panel.exposure_slider.y - offset_y
+        
+        panel.render(graph)
+        
+        # Restore original positions for mouse handling
+        panel.gain_slider.y = original_gain_y
+        panel.exposure_slider.y = original_exp_y
     
     def destroy(self) -> None:
         """Destroy all OpenCV windows."""

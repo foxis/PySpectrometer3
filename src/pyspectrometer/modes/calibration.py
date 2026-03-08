@@ -40,8 +40,7 @@ class CalibrationState:
     # Matched calibration points (pixel, wavelength)
     calibration_points: list[tuple[int, float]] = field(default_factory=list)
     
-    # Auto-level settings
-    auto_level_enabled: bool = True
+    # Auto-level target settings
     target_intensity_min: int = 200
     target_intensity_max: int = 240
     
@@ -176,11 +175,36 @@ class CalibrationMode(BaseMode):
         print(f"[Calibration] Overlay: {'ON' if self.cal_state.overlay_visible else 'OFF'}")
         return self.cal_state.overlay_visible
     
-    def toggle_auto_level(self) -> bool:
-        """Toggle auto-level mode."""
-        self.cal_state.auto_level_enabled = not self.cal_state.auto_level_enabled
-        print(f"[Calibration] Auto-level: {'ON' if self.cal_state.auto_level_enabled else 'OFF'}")
-        return self.cal_state.auto_level_enabled
+    def run_auto_level(self, current_intensity: np.ndarray, current_gain: float) -> float:
+        """Run auto-level algorithm once to find optimal gain.
+        
+        Adjusts gain to bring spectrum peak into target range (200-240).
+        
+        Args:
+            current_intensity: Current spectrum intensity values
+            current_gain: Current camera gain setting
+            
+        Returns:
+            New gain value to apply (or same if already optimal)
+        """
+        current_max = float(np.max(current_intensity))
+        target_mid = (self.cal_state.target_intensity_min + self.cal_state.target_intensity_max) / 2
+        
+        if current_max < 1:
+            print("[AutoLevel] No signal detected")
+            return current_gain
+        
+        # Calculate required gain ratio
+        ratio = target_mid / current_max
+        new_gain = current_gain * ratio
+        
+        # Clamp to reasonable range
+        new_gain = max(1.0, min(50.0, new_gain))
+        
+        print(f"[AutoLevel] Current max: {current_max:.0f}, Target: {target_mid:.0f}")
+        print(f"[AutoLevel] Gain: {current_gain:.1f} -> {new_gain:.1f}")
+        
+        return new_gain
     
     def auto_calibrate(
         self,

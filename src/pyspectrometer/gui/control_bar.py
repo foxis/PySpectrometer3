@@ -61,9 +61,10 @@ MEASUREMENT_BUTTONS = [
     # Row 2: Display and control
     ButtonDef("ShowRef", "show_reference", is_toggle=True, row=2),
     ButtonDef("Norm", "normalize", is_toggle=True, row=2),
-    ButtonDef("AutoG", "auto_gain", is_toggle=True, row=2),
-    ButtonDef("Gain+", "gain_up", shortcut="t", row=2),
-    ButtonDef("Gain-", "gain_down", shortcut="g", row=2),
+    ButtonDef("G", "show_gain_slider", is_toggle=True, row=2),
+    ButtonDef("E", "show_exposure_slider", is_toggle=True, row=2),
+    ButtonDef("AG", "auto_gain", is_toggle=True, row=2),
+    ButtonDef("AE", "auto_exposure", is_toggle=True, row=2),
     ButtonDef("Prev", "cycle_preview", shortcut="v", row=2),
     ButtonDef("Lamp", "lamp_toggle", is_toggle=True, row=2),
     ButtonDef("Quit", "quit", shortcut="q", row=2),
@@ -80,17 +81,18 @@ CALIBRATION_BUTTONS = [
     ButtonDef("Sun", "source_sun", row=1),
     ButtonDef("LED", "source_led", row=1),
     ButtonDef("Overlay", "toggle_overlay", is_toggle=True, row=1),
-    ButtonDef("AutoLvl", "auto_level", is_toggle=True, row=1),
-    ButtonDef("AutoCal", "auto_calibrate", row=1),
+    ButtonDef("AutoLvl", "auto_level", shortcut="a", row=1),  # Action: run auto-level
+    ButtonDef("AutoCal", "auto_calibrate", row=1),  # Action: run auto-calibration
     ButtonDef("SaveCal", "save_cal", shortcut="w", row=1),
     ButtonDef("LoadCal", "load_cal", row=1),
     # Row 2: Display and control
     ButtonDef("Freeze", "freeze", is_toggle=True, shortcut="f", row=2),
     ButtonDef("Peak", "capture_peak", is_toggle=True, shortcut="h", row=2),
     ButtonDef("Avg", "toggle_averaging", is_toggle=True, row=2),
-    ButtonDef("AutoG", "auto_gain", is_toggle=True, row=2),
-    ButtonDef("Gain+", "gain_up", shortcut="t", row=2),
-    ButtonDef("Gain-", "gain_down", shortcut="g", row=2),
+    ButtonDef("G", "show_gain_slider", is_toggle=True, row=2),
+    ButtonDef("E", "show_exposure_slider", is_toggle=True, row=2),
+    ButtonDef("AG", "auto_gain", is_toggle=True, row=2),
+    ButtonDef("AE", "auto_exposure", is_toggle=True, row=2),
     ButtonDef("Prev", "cycle_preview", shortcut="v", row=2),
     ButtonDef("Clear", "clear_points", shortcut="x", row=2),
     ButtonDef("Quit", "quit", shortcut="q", row=2),
@@ -233,7 +235,7 @@ class ControlBar:
         self._status_values[key] = value
     
     def render(self) -> np.ndarray:
-        """Render the control bar.
+        """Render the control bar (buttons only, no status).
         
         Returns:
             Image of the control bar
@@ -248,40 +250,16 @@ class ControlBar:
         if self._row2 is not None:
             self._row2.render(image)
         
-        self._render_status(image)
-        
         return image
     
-    def _render_status(self, image: np.ndarray) -> None:
-        """Render status values on the right side, respecting height limits."""
-        cfg = self.config
-        font = cv2.FONT_HERSHEY_SIMPLEX
+    def get_status_text(self) -> str:
+        """Get formatted status text for display elsewhere.
         
-        status_x = self.width - 120
-        line_height = int(12 * (cfg.font_scale / 0.35))
-        line_height = max(10, min(line_height, 14))
-        
-        # Start after margin, limit to available height
-        y = cfg.margin_y + line_height
-        max_y = cfg.height - cfg.margin_y
-        
-        color = (0, 200, 200)
-        
-        for key, value in self._status_values.items():
-            if y > max_y:
-                break
-            text = f"{key}:{value}"
-            cv2.putText(
-                image,
-                text,
-                (status_x, y),
-                font,
-                cfg.font_scale,
-                color,
-                cfg.font_thickness,
-                cv2.LINE_AA,
-            )
-            y += line_height
+        Returns:
+            Compact status string like "Gain:10 Cal:OK Avg:5"
+        """
+        parts = [f"{k}:{v}" for k, v in self._status_values.items()]
+        return "  ".join(parts)
     
     def handle_mouse_move(self, px: int, py: int) -> Optional[Button]:
         """Handle mouse move event.

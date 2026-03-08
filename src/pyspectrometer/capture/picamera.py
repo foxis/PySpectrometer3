@@ -39,6 +39,7 @@ class PicameraCapture(CameraInterface):
         self._width = width
         self._height = height
         self._gain = gain
+        self._exposure = 10000  # Default exposure in microseconds
         self._fps = fps
         self._monochrome = monochrome
         self._bit_depth = bit_depth if bit_depth in (10, 16) else 10
@@ -63,6 +64,18 @@ class PicameraCapture(CameraInterface):
         self._gain = max(0.0, min(50.0, value))
         if self._camera is not None and self._running:
             self._camera.set_controls({"AnalogueGain": self._gain})
+    
+    @property
+    def exposure(self) -> int:
+        """Get exposure time in microseconds."""
+        return self._exposure
+    
+    @exposure.setter
+    def exposure(self, value: int) -> None:
+        """Set exposure time in microseconds."""
+        self._exposure = max(100, min(100000, value))
+        if self._camera is not None and self._running:
+            self._camera.set_controls({"ExposureTime": self._exposure})
     
     @property
     def is_running(self) -> bool:
@@ -275,32 +288,125 @@ class PicameraCapture(CameraInterface):
         Returns:
             Processed monochrome frame as uint16
         """
-        # Already uint16 - use directly
+        # Log raw frame info on first call for debugging
+        if not hasattr(self, '_raw_logged'):
+            self._raw_logged = True
+            print(f"[RAW] Frame shape: {raw_frame.shape}, dtype: {raw_frame.dtype}")
+            print(f"[RAW] Expected: {self._height}x{self._width}, {self._actual_bit_depth}-bit")
+        
+        # Already uint16 - use directly (driver unpacked for us)
         if raw_frame.dtype == np.uint16:
+            # Crop to expected dimensions (remove stride padding)
+            h, w = raw_frame.shape[:2]
+            if w > self._width or h > self._height:
+                raw_frame = raw_frame[:self._height, :self._width]
             return raw_frame
         
         # uint8 data needs processing
         if raw_frame.dtype == np.uint8:
             if raw_frame.ndim == 2:
-                # 2D array - either packed or already grayscale
-                # For 10-bit CSI2 packed (R10_CSI2P): 4 pixels in 5 bytes
-                # But Picamera2 may return it as a wider uint8 array
-                # that can be viewed as uint16
-                height, width = raw_frame.shape
+                height, byte_width = raw_frame.shape
                 
-                # Check if width suggests packed format (5/4 ratio for 10-bit)
-                # For packed 10-bit: actual_width * 5 / 4 = byte_width
-                # So if we see this ratio, we need to unpack
-                # However, for simplicity and reliability, treat as 8-bit
-                # and scale to 10-bit range
-                return raw_frame.astype(np.uint16) * 4  # Scale 8-bit to 10-bit
+                # Calculate expected packed width for 10-bit MIPI CSI-2
+                # 4 pixels = 5 bytes, so width/4*5, rounded up
+                groups = (self._width + 3) // 4
+                min_packed_width = groups * 5
+                
+                # Log packing detection once
+                if not hasattr(self, '_pack_logged'):
+                    self._pack_logged = True
+                    print(f"[RAW] byte_width={byte_width}, min_packed={min_packed_width}")
+                
+                # Detect packed format: width is significantly larger than pixel width
+                # but not exactly 2x (which would indicate simple uint16)
+                if byte_width >= min_packed_width and byte_width < self._width * 2:
+                    # This is packed 10-bit data - unpack it
+                    return self._unpack_raw10(raw_frame, self._width, self._height)
+                elif byte_width >= self._width * 2:
+                    # Might be uint16 stored as uint8 pairs
+                    # View as uint16
+                    reshaped = raw_frame.view(np.uint16)
+                    if reshaped.shape[1] > self._width:
+                        reshaped = reshaped[:self._height, :self._width]
+                    return reshaped
+                else:
+                    # Simple 8-bit grayscale - scale up
+                    return raw_frame[:self._height, :self._width].astype(np.uint16) * 4
             
             if raw_frame.ndim == 3:
                 # 3D array - take first channel
-                return raw_frame[:, :, 0].astype(np.uint16) * 4
+                frame = raw_frame[:, :, 0]
+                if frame.shape[1] > self._width:
+                    frame = frame[:self._height, :self._width]
+                return frame.astype(np.uint16) * 4
         
         # Unknown format - convert and hope for the best
         return np.asarray(raw_frame, dtype=np.uint16)
+    
+    def _unpack_raw10(
+        self,
+        packed: np.ndarray,
+        width: int,
+        height: int,
+    ) -> np.ndarray:
+        """Unpack 10-bit packed raw data (MIPI CSI-2 format) using vectorized NumPy.
+        
+        In packed format, 4 pixels occupy 5 bytes:
+        - Byte 0: P0[9:2] (high 8 bits of pixel 0)
+        - Byte 1: P1[9:2] (high 8 bits of pixel 1)
+        - Byte 2: P2[9:2] (high 8 bits of pixel 2)
+        - Byte 3: P3[9:2] (high 8 bits of pixel 3)
+        - Byte 4: P3[1:0] | P2[1:0] | P1[1:0] | P0[1:0] (low 2 bits of each)
+        
+        Args:
+            packed: Packed uint8 array from sensor
+            width: Expected output width in pixels
+            height: Expected output height in pixels
+            
+        Returns:
+            Unpacked uint16 array with 10-bit values
+        """
+        # Number of 4-pixel groups
+        groups = width // 4
+        bytes_per_row = groups * 5
+        
+        # Trim packed array to needed data (remove stride padding)
+        packed_height = min(height, packed.shape[0])
+        packed = packed[:packed_height, :bytes_per_row]
+        
+        # Reshape to groups of 5 bytes: (height, groups, 5)
+        packed = packed.reshape(packed_height, groups, 5)
+        
+        # Extract high 8 bits of each pixel (first 4 bytes)
+        high_bits = packed[:, :, :4].astype(np.uint16)  # (H, G, 4)
+        
+        # Extract low 2 bits from byte 4
+        low_byte = packed[:, :, 4]  # (H, G)
+        
+        # Create low bits array (H, G, 4) - extract 2 bits for each pixel
+        low_bits = np.zeros((packed_height, groups, 4), dtype=np.uint16)
+        low_bits[:, :, 0] = (low_byte >> 0) & 0x03
+        low_bits[:, :, 1] = (low_byte >> 2) & 0x03
+        low_bits[:, :, 2] = (low_byte >> 4) & 0x03
+        low_bits[:, :, 3] = (low_byte >> 6) & 0x03
+        
+        # Combine: pixel = (high << 2) | low
+        pixels = (high_bits << 2) | low_bits  # (H, G, 4)
+        
+        # Reshape to final image (H, W) - flatten groups
+        output = pixels.reshape(packed_height, groups * 4)
+        
+        # Pad width if needed (when width % 4 != 0)
+        if output.shape[1] < width:
+            pad_width = width - output.shape[1]
+            output = np.pad(output, ((0, 0), (0, pad_width)), mode='constant')
+        
+        # Pad height if needed
+        if output.shape[0] < height:
+            pad_height = height - output.shape[0]
+            output = np.pad(output, ((0, pad_height), (0, 0)), mode='constant')
+        
+        return output
     
     def capture_normalized(self) -> np.ndarray:
         """Capture a frame normalized to 0-255 range.
