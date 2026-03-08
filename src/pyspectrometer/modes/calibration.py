@@ -227,6 +227,20 @@ class CalibrationMode(BaseMode):
         
         return calibration_points
     
+    def _linearity_score(self, points: list[tuple[int, float]]) -> float:
+        """R² of linear fit pixel→wavelength. Higher = more linear."""
+        if len(points) < 2:
+            return 1.0
+        px = np.array([p[0] for p in points], dtype=np.float64)
+        wl = np.array([p[1] for p in points], dtype=np.float64)
+        ss_tot = np.sum((wl - wl.mean()) ** 2)
+        if ss_tot < 1e-12:
+            return 1.0
+        slope, intercept = np.polyfit(px, wl, 1)
+        y_pred = slope * px + intercept
+        ss_res = np.sum((wl - y_pred) ** 2)
+        return 1.0 - ss_res / ss_tot
+
     def _match_peaks_to_reference(
         self,
         peak_pixels: list[int],
@@ -234,55 +248,53 @@ class CalibrationMode(BaseMode):
         reference_peaks: list[SpectralLine],
     ) -> list[tuple[int, float, float]]:
         """Match detected peaks to reference spectral lines.
-        
-        Uses a greedy nearest-neighbor approach with consistency checking.
-        
+
+        Prefers matches that yield the most linear pixel→wavelength fit
+        (spectrometers have roughly linear dispersion).
+
         Args:
-            peak_pixels: Detected peak pixel positions
+            peak_pixels: Detected peak pixel positions (sorted by pixel)
             peak_wavelengths: Approximate wavelengths from current calibration
             reference_peaks: Known reference spectral lines
-            
+
         Returns:
             List of (pixel, reference_wavelength, error) tuples
         """
-        matches = []
-        used_refs = set()
-        
-        # Sort reference peaks by wavelength
+        # Sort by pixel so we process left-to-right
+        order = np.argsort(peak_pixels)
+        peak_pixels = [peak_pixels[i] for i in order]
+        peak_wavelengths = [peak_wavelengths[i] for i in order]
+
         ref_sorted = sorted(reference_peaks, key=lambda p: p.wavelength)
-        
-        # For each detected peak, find nearest reference
+        tolerance_nm = 35  # nm; tighter than before
+
+        matches: list[tuple[int, float, float]] = []
+        used_refs: set[float] = set()
+
         for pixel, approx_wl in zip(peak_pixels, peak_wavelengths):
             best_match = None
-            best_error = float('inf')
-            
+            best_r2 = -1.0
+
             for ref in ref_sorted:
                 if ref.wavelength in used_refs:
                     continue
-                
                 error = abs(approx_wl - ref.wavelength)
-                
-                # Allow larger error tolerance (up to 50nm for uncalibrated)
-                if error < best_error and error < 50:
-                    best_error = error
+                if error > tolerance_nm:
+                    continue
+
+                pts = [(p, w) for p, w, _ in matches] + [(pixel, ref.wavelength)]
+                r2 = self._linearity_score(pts)
+                if r2 > best_r2:
+                    best_r2 = r2
                     best_match = ref
-            
+
             if best_match is not None:
-                matches.append((pixel, best_match.wavelength, best_error))
+                err = abs(approx_wl - best_match.wavelength)
+                matches.append((pixel, best_match.wavelength, err))
                 used_refs.add(best_match.wavelength)
-        
-        # Sort by pixel position for consistency
+
         matches.sort(key=lambda m: m[0])
-        
-        # Verify monotonicity (wavelengths should increase with pixels)
-        valid_matches = []
-        last_wl = 0
-        for pixel, wl, err in matches:
-            if wl > last_wl:
-                valid_matches.append((pixel, wl, err))
-                last_wl = wl
-        
-        return valid_matches
+        return matches
     
     def get_calibration_points(self) -> list[tuple[int, float]]:
         """Get current calibration points for saving.
