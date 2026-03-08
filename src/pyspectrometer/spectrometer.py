@@ -14,6 +14,7 @@ from .capture.picamera import PicameraCapture
 from .processing.pipeline import ProcessingPipeline
 from .processing.filters import SavitzkyGolayFilter
 from .processing.peak_detection import PeakDetector
+from .processing.extraction import SpectrumExtractor, ExtractionMethod
 from .display.renderer import DisplayManager
 from .export.csv_exporter import CSVExporter
 from .input.keyboard import KeyboardHandler, Action
@@ -48,9 +49,35 @@ class Spectrometer:
         
         self._calibration = Calibration(
             width=self.config.camera.frame_width,
+            height=self.config.camera.frame_height,
             cal_file=self.config.calibration.data_file,
             default_pixels=self.config.calibration.default_pixels,
             default_wavelengths=self.config.calibration.default_wavelengths,
+        )
+        
+        method_map = {
+            "median": ExtractionMethod.MEDIAN,
+            "weighted_sum": ExtractionMethod.WEIGHTED_SUM,
+            "gaussian": ExtractionMethod.GAUSSIAN,
+        }
+        extraction_method = method_map.get(
+            self.config.extraction.method,
+            ExtractionMethod.WEIGHTED_SUM
+        )
+        
+        spectrum_y = self.config.extraction.spectrum_y_center
+        if spectrum_y == 0:
+            spectrum_y = self.config.camera.frame_height // 2
+        
+        self._extractor = SpectrumExtractor(
+            frame_width=self.config.camera.frame_width,
+            frame_height=self.config.camera.frame_height,
+            method=extraction_method,
+            rotation_angle=self.config.extraction.rotation_angle,
+            perpendicular_width=self.config.extraction.perpendicular_width,
+            spectrum_y_center=spectrum_y,
+            crop_height=self.config.display.preview_height,
+            background_percentile=self.config.extraction.background_percentile,
         )
         
         self._savgol_filter = SavitzkyGolayFilter(
@@ -80,6 +107,7 @@ class Spectrometer:
         
         self._held_intensity: Optional[np.ndarray] = None
         self._running = False
+        self._last_frame: Optional[np.ndarray] = None
         
         self._register_key_callbacks()
     
@@ -100,6 +128,11 @@ class Spectrometer:
         self._keyboard.register(Action.THRESHOLD_DOWN, self._on_threshold_down)
         self._keyboard.register(Action.GAIN_UP, self._on_gain_up)
         self._keyboard.register(Action.GAIN_DOWN, self._on_gain_down)
+        self._keyboard.register(Action.CYCLE_EXTRACTION_METHOD, self._on_cycle_extraction)
+        self._keyboard.register(Action.AUTO_DETECT_ANGLE, self._on_auto_detect_angle)
+        self._keyboard.register(Action.PERP_WIDTH_UP, self._on_perp_width_up)
+        self._keyboard.register(Action.PERP_WIDTH_DOWN, self._on_perp_width_down)
+        self._keyboard.register(Action.SAVE_EXTRACTION_PARAMS, self._on_save_extraction)
     
     def _on_quit(self) -> None:
         """Handle quit action."""
@@ -190,6 +223,46 @@ class Spectrometer:
         self._camera.gain = self._camera.gain - 1
         print(f"Camera Gain: {self._camera.gain}")
     
+    def _on_cycle_extraction(self) -> None:
+        """Handle extraction method cycling."""
+        new_method = self._extractor.cycle_method()
+        print(f"Extraction Method: {new_method}")
+    
+    def _on_auto_detect_angle(self) -> None:
+        """Handle auto-detect rotation angle."""
+        if self._last_frame is None:
+            print("No frame available for angle detection")
+            return
+        
+        print("Detecting spectrum rotation angle...")
+        angle, vis_image = self._extractor.detect_angle(self._last_frame, visualize=True)
+        
+        if vis_image is not None:
+            cv2.imshow("Angle Detection", vis_image)
+            cv2.waitKey(2000)
+            cv2.destroyWindow("Angle Detection")
+        
+        self._extractor.set_rotation_angle(angle)
+        print(f"Rotation Angle: {angle:.2f}°")
+    
+    def _on_perp_width_up(self) -> None:
+        """Handle perpendicular width increase."""
+        width = self._extractor.increase_perpendicular_width()
+        print(f"Perpendicular Width: {width}")
+    
+    def _on_perp_width_down(self) -> None:
+        """Handle perpendicular width decrease."""
+        width = self._extractor.decrease_perpendicular_width()
+        print(f"Perpendicular Width: {width}")
+    
+    def _on_save_extraction(self) -> None:
+        """Handle saving extraction parameters."""
+        self._calibration.save_extraction_params(
+            rotation_angle=self._extractor.rotation_angle,
+            spectrum_y_center=self._extractor.spectrum_y_center,
+            perpendicular_width=self._extractor.perpendicular_width,
+        )
+    
     def run(self) -> None:
         """Run the main spectrometer application loop."""
         print("Starting PySpectrometer 3...")
@@ -197,6 +270,14 @@ class Spectrometer:
         print()
         
         self._calibration.load()
+        
+        if self._calibration.rotation_angle != 0.0:
+            self._extractor.set_rotation_angle(self._calibration.rotation_angle)
+        if self._calibration.spectrum_y_center != 0:
+            self._extractor.set_spectrum_y_center(self._calibration.spectrum_y_center)
+        if self._calibration.perpendicular_width != 20:
+            self._extractor.perpendicular_width = self._calibration.perpendicular_width
+            self._extractor._precompute_sampling_coords()
         
         self._camera.start()
         self._display.setup_windows()
@@ -207,12 +288,11 @@ class Spectrometer:
         try:
             while self._running:
                 frame = self._camera.capture()
+                self._last_frame = frame
                 
-                cropped, intensity = self._camera.extract_spectrum_region(
-                    frame,
-                    rows_to_average=self.config.processing.pixel_rows_to_average,
-                    crop_height=self.config.display.preview_height,
-                )
+                extraction_result = self._extractor.extract(frame)
+                cropped = extraction_result.cropped_frame
+                intensity = extraction_result.intensity
                 
                 if self._display.state.hold_peaks:
                     if self._held_intensity is None:
@@ -241,6 +321,9 @@ class Spectrometer:
                     savgol_poly=self._savgol_filter.poly_order,
                     peak_min_dist=self._peak_detector.min_distance,
                     peak_threshold=self._peak_detector.threshold,
+                    extraction_method=str(self._extractor.method),
+                    rotation_angle=self._extractor.rotation_angle,
+                    perp_width=self._extractor.perpendicular_width,
                 )
                 
                 action = self._keyboard.poll()

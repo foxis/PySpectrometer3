@@ -86,6 +86,19 @@ class WaterfallConfig:
 
 
 @dataclass
+class ExtractionConfig:
+    """Spectrum extraction configuration."""
+    
+    method: str = "weighted_sum"  # "median", "weighted_sum", "gaussian"
+    rotation_angle: float = 0.0  # degrees, loaded from calibration
+    perpendicular_width: int = 20  # pixels to sample perpendicular to axis
+    perpendicular_width_min: int = 5
+    perpendicular_width_max: int = 100
+    background_percentile: float = 10.0  # for background subtraction
+    spectrum_y_center: int = 0  # 0 = auto (frame center)
+
+
+@dataclass
 class Config:
     """Main configuration container for PySpectrometer3.
     
@@ -99,6 +112,7 @@ class Config:
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
     waterfall: WaterfallConfig = field(default_factory=WaterfallConfig)
+    extraction: ExtractionConfig = field(default_factory=ExtractionConfig)
     
     # Window titles
     spectrograph_title: str = "PySpectrometer 3 - Spectrograph"

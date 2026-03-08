@@ -25,6 +25,9 @@ This document describes the refactoring from the monolithic `PySpectrometer2-Pic
 | Keyboard shortcuts | ✅ | ✅ | `input/keyboard.py` |
 | Camera gain control | ✅ | ✅ | 't'/'g' keys |
 | Status messages | ✅ | ✅ | Rendered in display |
+| **Rotated spectrum extraction** | ❌ | ✅ | `processing/extraction.py` |
+| **Multiple extraction methods** | ❌ | ✅ | Median, Weighted Sum, Gaussian |
+| **Auto angle detection** | ❌ | ✅ | Hough transform based |
 
 ## New Architecture Benefits
 
@@ -152,7 +155,8 @@ pyspectrometer/
 │   ├── base.py          # ProcessorInterface ABC
 │   ├── pipeline.py      # ProcessingPipeline
 │   ├── filters.py       # SavitzkyGolayFilter
-│   └── peak_detection.py # PeakDetector
+│   ├── peak_detection.py # PeakDetector
+│   └── extraction.py    # SpectrumExtractor (rotation, methods)
 ├── display/
 │   ├── renderer.py      # DisplayManager
 │   ├── graticule.py     # GraticuleRenderer
@@ -187,6 +191,40 @@ spectrometer.run()
 1. **No global state**: All state is encapsulated in classes
 2. **Module structure**: Import paths changed (e.g., `from pyspectrometer.utils.color import wavelength_to_rgb`)
 3. **Entry point**: Now `python -m pyspectrometer` instead of running the script directly
+
+## Spectrum Extraction
+
+The new extraction system handles rotated spectra and vertical coupling structure.
+
+### Extraction Methods
+
+| Method | Key | Best For |
+|--------|-----|----------|
+| Weighted Sum | `e` (cycle) | General use, low-medium signals (default) |
+| Median | `e` (cycle) | Noisy conditions, high signals, hot pixels |
+| Gaussian | `e` (cycle) | Precision measurements, publication quality |
+
+### Extraction Controls
+
+| Key | Action |
+|-----|--------|
+| `e` | Cycle extraction method (Median → Weighted Sum → Gaussian) |
+| `E` (Shift+e) | Auto-detect rotation angle using Hough transform |
+| `]` | Increase perpendicular sampling width |
+| `[` | Decrease perpendicular sampling width |
+| `w` | Save extraction parameters to calibration file |
+
+### Calibration File Format (Extended)
+
+The calibration file now stores extraction parameters:
+
+```
+100,300,500,700          # pixel positions
+400.0,500.0,600.0,700.0  # wavelengths
+7.5                      # rotation angle (degrees)
+240                      # spectrum Y center (pixels)
+25                       # perpendicular width (pixels)
+```
 
 ## Future Extensions (Planned)
 

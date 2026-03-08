@@ -126,6 +126,9 @@ class DisplayManager:
         savgol_poly: int,
         peak_min_dist: int,
         peak_threshold: int,
+        extraction_method: str = "Weighted Sum",
+        rotation_angle: float = 0.0,
+        perp_width: int = 20,
     ) -> None:
         """Render the complete spectrum display.
         
@@ -135,6 +138,9 @@ class DisplayManager:
             savgol_poly: Current Savitzky-Golay polynomial order
             peak_min_dist: Current peak minimum distance
             peak_threshold: Current peak threshold
+            extraction_method: Current extraction method name
+            rotation_angle: Spectrum rotation angle in degrees
+            perp_width: Perpendicular sampling width
         """
         width = self.config.camera.frame_width
         graph_height = self.config.display.graph_height
@@ -154,7 +160,7 @@ class DisplayManager:
         
         cropped = data.cropped_frame
         if cropped is not None:
-            self._draw_sampling_lines(cropped)
+            self._draw_sampling_lines(cropped, rotation_angle, perp_width)
         else:
             cropped = np.zeros([80, width, 3], dtype=np.uint8)
         
@@ -169,6 +175,9 @@ class DisplayManager:
             savgol_poly,
             peak_min_dist,
             peak_threshold,
+            extraction_method,
+            rotation_angle,
+            perp_width,
         )
         
         cv2.imshow(self.config.spectrograph_title, spectrum_vertical)
@@ -350,14 +359,36 @@ class DisplayManager:
         
         return banner
     
-    def _draw_sampling_lines(self, cropped: np.ndarray) -> None:
+    def _draw_sampling_lines(
+        self,
+        cropped: np.ndarray,
+        rotation_angle: float = 0.0,
+        perp_width: int = 20,
+    ) -> None:
         """Draw sampling region indicator lines on cropped preview."""
         width = cropped.shape[1]
         rows = cropped.shape[0]
         halfway = rows // 2
         
-        cv2.line(cropped, (0, halfway - 2), (width, halfway - 2), (255, 255, 255), 1)
-        cv2.line(cropped, (0, halfway + 2), (width, halfway + 2), (255, 255, 255), 1)
+        if abs(rotation_angle) < 0.1:
+            half_perp = perp_width // 2
+            cv2.line(cropped, (0, halfway - half_perp), (width, halfway - half_perp), (255, 255, 255), 1)
+            cv2.line(cropped, (0, halfway + half_perp), (width, halfway + half_perp), (255, 255, 255), 1)
+        else:
+            import math
+            angle_rad = math.radians(rotation_angle)
+            tan_a = math.tan(angle_rad)
+            half_perp = perp_width // 2
+            
+            center_x = width // 2
+            
+            y1_left = int(halfway + (0 - center_x) * tan_a - half_perp)
+            y1_right = int(halfway + (width - center_x) * tan_a - half_perp)
+            y2_left = int(halfway + (0 - center_x) * tan_a + half_perp)
+            y2_right = int(halfway + (width - center_x) * tan_a + half_perp)
+            
+            cv2.line(cropped, (0, y1_left), (width, y1_right), (255, 255, 255), 1)
+            cv2.line(cropped, (0, y2_left), (width, y2_right), (255, 255, 255), 1)
     
     def _render_status_text(
         self,
@@ -366,6 +397,9 @@ class DisplayManager:
         savgol_poly: int,
         peak_min_dist: int,
         peak_threshold: int,
+        extraction_method: str = "Weighted Sum",
+        rotation_angle: float = 0.0,
+        perp_width: int = 20,
     ) -> None:
         """Render status text on the spectrum display."""
         cal_result = self.calibration.result
@@ -373,6 +407,9 @@ class DisplayManager:
         thickness = self.config.display.text_thickness
         col1_x = self.config.display.status_col1_x
         col2_x = self.config.display.status_col2_x
+        
+        width = self.config.camera.frame_width
+        col3_x = max(col2_x + 80, width - 120)
         
         line_height = int(18 * (font_scale / 0.4))
         
@@ -455,6 +492,38 @@ class DisplayManager:
             self._font,
             font_scale,
             (0, 255, 255),
+            thickness,
+            cv2.LINE_AA,
+        )
+        
+        method_short = extraction_method[:3].upper()
+        cv2.putText(
+            image,
+            f"Ext: {method_short}",
+            (col3_x, line_height),
+            self._font,
+            font_scale,
+            (0, 200, 200),
+            thickness,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            image,
+            f"Ang: {rotation_angle:.1f}",
+            (col3_x, line_height * 2),
+            self._font,
+            font_scale,
+            (0, 200, 200),
+            thickness,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            image,
+            f"Wid: {perp_width}",
+            (col3_x, line_height * 3),
+            self._font,
+            font_scale,
+            (0, 200, 200),
             thickness,
             cv2.LINE_AA,
         )

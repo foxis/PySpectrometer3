@@ -24,6 +24,11 @@ class Action(Enum):
     THRESHOLD_DOWN = auto()
     GAIN_UP = auto()
     GAIN_DOWN = auto()
+    CYCLE_EXTRACTION_METHOD = auto()
+    AUTO_DETECT_ANGLE = auto()
+    PERP_WIDTH_UP = auto()
+    PERP_WIDTH_DOWN = auto()
+    SAVE_EXTRACTION_PARAMS = auto()
 
 
 @dataclass
@@ -51,6 +56,11 @@ DEFAULT_BINDINGS: list[KeyBinding] = [
     KeyBinding("j", Action.THRESHOLD_DOWN, "Decrease threshold"),
     KeyBinding("t", Action.GAIN_UP, "Increase camera gain"),
     KeyBinding("g", Action.GAIN_DOWN, "Decrease camera gain"),
+    KeyBinding("e", Action.CYCLE_EXTRACTION_METHOD, "Cycle extraction method"),
+    KeyBinding("E", Action.AUTO_DETECT_ANGLE, "Auto-detect rotation angle"),
+    KeyBinding("]", Action.PERP_WIDTH_UP, "Increase perpendicular width"),
+    KeyBinding("[", Action.PERP_WIDTH_DOWN, "Decrease perpendicular width"),
+    KeyBinding("w", Action.SAVE_EXTRACTION_PARAMS, "Save extraction parameters"),
 ]
 
 

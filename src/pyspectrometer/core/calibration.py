@@ -14,6 +14,9 @@ class CalibrationResult:
     order: int
     coefficients: np.ndarray
     r_squared: Optional[float] = None
+    rotation_angle: float = 0.0
+    spectrum_y_center: int = 0
+    perpendicular_width: int = 20
     
     @property
     def is_accurate(self) -> bool:
@@ -59,17 +62,23 @@ class Calibration:
     def __init__(
         self,
         width: int,
+        height: int = 480,
         cal_file: Optional[Path] = None,
         default_pixels: tuple[int, ...] = (0, 400, 800),
         default_wavelengths: tuple[float, ...] = (380.0, 560.0, 750.0),
     ):
         self.width = width
+        self.height = height
         self.cal_file = cal_file or Path("caldata.txt")
         self.default_pixels = default_pixels
         self.default_wavelengths = default_wavelengths
         
         self._result: Optional[CalibrationResult] = None
         self._graticule: Optional[GraticuleData] = None
+        
+        self._rotation_angle: float = 0.0
+        self._spectrum_y_center: int = height // 2
+        self._perpendicular_width: int = 20
     
     @property
     def wavelengths(self) -> np.ndarray:
@@ -107,12 +116,22 @@ class Calibration:
         self._graticule = None
         return self._result
     
-    def save(self, pixel_data: list[int], wavelength_data: list[float]) -> bool:
+    def save(
+        self,
+        pixel_data: list[int],
+        wavelength_data: list[float],
+        rotation_angle: Optional[float] = None,
+        spectrum_y_center: Optional[int] = None,
+        perpendicular_width: Optional[int] = None,
+    ) -> bool:
         """Save calibration data to file.
         
         Args:
             pixel_data: List of pixel positions
             wavelength_data: List of corresponding wavelengths
+            rotation_angle: Spectrum rotation angle in degrees
+            spectrum_y_center: Y coordinate of spectrum center
+            perpendicular_width: Width of perpendicular sampling region
             
         Returns:
             True if calibration was saved successfully
@@ -125,6 +144,13 @@ class Calibration:
             print("Pixel and wavelength arrays must have same length!")
             return False
         
+        if rotation_angle is not None:
+            self._rotation_angle = rotation_angle
+        if spectrum_y_center is not None:
+            self._spectrum_y_center = spectrum_y_center
+        if perpendicular_width is not None:
+            self._perpendicular_width = perpendicular_width
+        
         try:
             pixels_str = ",".join(map(str, pixel_data))
             wavelengths_str = ",".join(map(str, wavelength_data))
@@ -132,6 +158,9 @@ class Calibration:
             with open(self.cal_file, "w") as f:
                 f.write(f"{pixels_str}\r\n")
                 f.write(f"{wavelengths_str}\r\n")
+                f.write(f"{self._rotation_angle}\r\n")
+                f.write(f"{self._spectrum_y_center}\r\n")
+                f.write(f"{self._perpendicular_width}\r\n")
             
             print("Calibration Data Written!")
             self.load()
@@ -140,6 +169,64 @@ class Calibration:
         except Exception as e:
             print(f"Failed to save calibration: {e}")
             return False
+    
+    def save_extraction_params(
+        self,
+        rotation_angle: float,
+        spectrum_y_center: int,
+        perpendicular_width: int,
+    ) -> bool:
+        """Save only extraction parameters (preserves wavelength calibration).
+        
+        Args:
+            rotation_angle: Spectrum rotation angle in degrees
+            spectrum_y_center: Y coordinate of spectrum center
+            perpendicular_width: Width of perpendicular sampling region
+            
+        Returns:
+            True if saved successfully
+        """
+        self._rotation_angle = rotation_angle
+        self._spectrum_y_center = spectrum_y_center
+        self._perpendicular_width = perpendicular_width
+        
+        try:
+            pixels, wavelengths, has_errors = self._read_cal_file()
+            if has_errors:
+                pixels = list(self.default_pixels)
+                wavelengths = list(self.default_wavelengths)
+            
+            pixels_str = ",".join(map(str, pixels))
+            wavelengths_str = ",".join(map(str, wavelengths))
+            
+            with open(self.cal_file, "w") as f:
+                f.write(f"{pixels_str}\r\n")
+                f.write(f"{wavelengths_str}\r\n")
+                f.write(f"{self._rotation_angle}\r\n")
+                f.write(f"{self._spectrum_y_center}\r\n")
+                f.write(f"{self._perpendicular_width}\r\n")
+            
+            print(f"Extraction params saved: angle={rotation_angle:.2f}°, y={spectrum_y_center}, width={perpendicular_width}")
+            return True
+            
+        except Exception as e:
+            print(f"Failed to save extraction params: {e}")
+            return False
+    
+    @property
+    def rotation_angle(self) -> float:
+        """Get spectrum rotation angle in degrees."""
+        return self._rotation_angle
+    
+    @property
+    def spectrum_y_center(self) -> int:
+        """Get spectrum Y center position."""
+        return self._spectrum_y_center
+    
+    @property
+    def perpendicular_width(self) -> int:
+        """Get perpendicular sampling width."""
+        return self._perpendicular_width
     
     def _read_cal_file(self) -> tuple[list[int], list[float], bool]:
         """Read calibration data from file."""
@@ -162,6 +249,21 @@ class Calibration:
                 errors = True
             if len(pixels) < 3 or len(wavelengths) < 3:
                 errors = True
+            
+            if len(lines) >= 3:
+                line2 = lines[2].strip()
+                self._rotation_angle = float(line2)
+                print(f"Loaded rotation angle: {self._rotation_angle:.2f} deg")
+            
+            if len(lines) >= 4:
+                line3 = lines[3].strip()
+                self._spectrum_y_center = int(line3)
+                print(f"Loaded spectrum Y center: {self._spectrum_y_center}")
+            
+            if len(lines) >= 5:
+                line4 = lines[4].strip()
+                self._perpendicular_width = int(line4)
+                print(f"Loaded perpendicular width: {self._perpendicular_width}")
                 
         except Exception:
             errors = True
@@ -193,6 +295,9 @@ class Calibration:
                 wavelengths=wavelength_data,
                 order=order,
                 coefficients=coefficients,
+                rotation_angle=self._rotation_angle,
+                spectrum_y_center=self._spectrum_y_center,
+                perpendicular_width=self._perpendicular_width,
             )
         
         print("Calculating third order polynomial...")
@@ -216,6 +321,9 @@ class Calibration:
             order=3,
             coefficients=coefficients,
             r_squared=r_squared,
+            rotation_angle=self._rotation_angle,
+            spectrum_y_center=self._spectrum_y_center,
+            perpendicular_width=self._perpendicular_width,
         )
     
     def _generate_graticule(self) -> GraticuleData:
