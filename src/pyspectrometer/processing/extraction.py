@@ -83,25 +83,34 @@ class SpectrumExtractor:
         self._precompute_sampling_coords()
     
     def _precompute_sampling_coords(self) -> None:
-        """Precompute sampling coordinates for current rotation angle."""
-        angle_rad = np.radians(self.rotation_angle)
+        """Precompute rotation matrix for current rotation angle."""
+        # Rotation center is frame center
+        self._rotation_center = (self.frame_width // 2, self.frame_height // 2)
         
-        cos_a = np.cos(angle_rad)
-        sin_a = np.sin(angle_rad)
+        # Rotation matrix to straighten the spectrum
+        # Negative angle because we want to correct/undo the tilt
+        self._rotation_matrix = cv2.getRotationMatrix2D(
+            self._rotation_center, -self.rotation_angle, 1.0
+        )
+    
+    def _rotate_frame(self, frame: np.ndarray) -> np.ndarray:
+        """Rotate frame to straighten spectrum lines.
         
-        perp_cos = -sin_a
-        perp_sin = cos_a
+        Args:
+            frame: Input frame (BGR or grayscale)
+            
+        Returns:
+            Rotated frame with straightened spectrum
+        """
+        if abs(self.rotation_angle) < 0.01:
+            return frame
         
-        half_perp = self.perpendicular_width // 2
-        perp_offsets = np.arange(-half_perp, half_perp + 1)
-        
-        self._perp_dy = perp_offsets * perp_cos
-        self._perp_dx = perp_offsets * perp_sin
-        
-        x_positions = np.arange(self.frame_width)
-        
-        x_offset_from_center = x_positions - (self.frame_width // 2)
-        self._base_y = self.spectrum_y_center + x_offset_from_center * np.tan(angle_rad)
+        return cv2.warpAffine(
+            frame, self._rotation_matrix,
+            (self.frame_width, self.frame_height),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REPLICATE
+        )
     
     def extract(self, frame: np.ndarray) -> ExtractionResult:
         """Extract spectrum intensity from frame.
@@ -112,11 +121,15 @@ class SpectrumExtractor:
         Returns:
             ExtractionResult with intensity array and cropped frame
         """
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        # Rotate frame to straighten spectrum lines
+        rotated_frame = self._rotate_frame(frame)
+        
+        gray = cv2.cvtColor(rotated_frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
         
         intensity = self._extract_with_method(gray)
         
-        cropped = self._create_cropped_preview(frame)
+        # Use rotated frame for preview so lines appear straight
+        cropped = self._create_cropped_preview(rotated_frame)
         
         return ExtractionResult(
             intensity=intensity,
@@ -136,71 +149,60 @@ class SpectrumExtractor:
             case ExtractionMethod.GAUSSIAN:
                 return self._extract_gaussian(gray)
     
-    def _sample_perpendicular(self, gray: np.ndarray, x: int) -> np.ndarray:
-        """Sample pixels perpendicular to spectrum axis at given x position.
-        
-        Args:
-            gray: Grayscale image as float32
-            x: X position to sample at
-            
-        Returns:
-            Array of sampled intensity values
-        """
-        base_y = self._base_y[x]
-        
-        y_coords = base_y + self._perp_dy
-        x_coords = x + self._perp_dx
-        
-        y_coords = np.clip(y_coords, 0, gray.shape[0] - 1).astype(np.int32)
-        x_coords = np.clip(x_coords, 0, gray.shape[1] - 1).astype(np.int32)
-        
-        return gray[y_coords, x_coords]
-    
     def _extract_median(self, gray: np.ndarray) -> np.ndarray:
-        """Extract using median along perpendicular slices."""
-        intensity = np.zeros(self.frame_width, dtype=np.float32)
+        """Extract using median along vertical slices."""
+        half_perp = self.perpendicular_width // 2
+        y_start = max(0, self.spectrum_y_center - half_perp)
+        y_end = min(gray.shape[0], self.spectrum_y_center + half_perp + 1)
         
-        for x in range(self.frame_width):
-            samples = self._sample_perpendicular(gray, x)
-            intensity[x] = np.median(samples)
+        # Extract the ROI and compute median along vertical axis
+        roi = gray[y_start:y_end, :]
+        intensity = np.median(roi, axis=0)
         
         return np.clip(intensity, 0, 255).astype(np.uint8)
     
     def _extract_weighted_sum(self, gray: np.ndarray) -> np.ndarray:
-        """Extract using intensity-weighted sum along perpendicular slices."""
-        intensity = np.zeros(self.frame_width, dtype=np.float32)
+        """Extract using intensity-weighted sum along vertical slices."""
+        half_perp = self.perpendicular_width // 2
+        y_start = max(0, self.spectrum_y_center - half_perp)
+        y_end = min(gray.shape[0], self.spectrum_y_center + half_perp + 1)
         
-        for x in range(self.frame_width):
-            samples = self._sample_perpendicular(gray, x)
-            
-            bg = np.percentile(samples, self.background_percentile)
-            samples_bg = np.maximum(samples - bg, 0)
-            
-            total = np.sum(samples_bg)
-            if total > 0:
-                weights = samples_bg / total
-                intensity[x] = np.sum(samples * weights)
-            else:
-                intensity[x] = np.mean(samples)
+        # Extract the ROI
+        roi = gray[y_start:y_end, :]
+        
+        # Compute background per column
+        bg = np.percentile(roi, self.background_percentile, axis=0)
+        roi_bg = np.maximum(roi - bg, 0)
+        
+        # Weighted sum per column
+        total = np.sum(roi_bg, axis=0)
+        total = np.maximum(total, 1e-6)  # Avoid division by zero
+        weights = roi_bg / total
+        intensity = np.sum(roi * weights, axis=0)
         
         return np.clip(intensity, 0, 255).astype(np.uint8)
     
     def _extract_gaussian(self, gray: np.ndarray) -> np.ndarray:
-        """Extract by fitting Gaussian to each perpendicular slice."""
+        """Extract by fitting Gaussian to each vertical slice."""
         from scipy.optimize import curve_fit
         
         intensity = np.zeros(self.frame_width, dtype=np.float32)
         
         half_perp = self.perpendicular_width // 2
-        x_fit = np.arange(-half_perp, half_perp + 1, dtype=np.float32)
+        y_start = max(0, self.spectrum_y_center - half_perp)
+        y_end = min(gray.shape[0], self.spectrum_y_center + half_perp + 1)
+        
+        roi = gray[y_start:y_end, :]
+        n_samples = roi.shape[0]
+        y_fit = np.arange(n_samples, dtype=np.float32) - n_samples // 2
         
         for x in range(self.frame_width):
-            samples = self._sample_perpendicular(gray, x)
+            samples = roi[:, x]
             
             try:
                 bg = np.percentile(samples, self.background_percentile)
                 amplitude = np.max(samples) - bg
-                center = x_fit[np.argmax(samples)]
+                center = y_fit[np.argmax(samples)]
                 sigma = 3.0
                 
                 if self._last_gaussian_params is not None:
@@ -211,13 +213,13 @@ class SpectrumExtractor:
                 p0 = [amplitude, center, sigma, bg]
                 
                 bounds = (
-                    [0, -half_perp, 0.5, 0],
-                    [300, half_perp, half_perp, 255]
+                    [0, -n_samples // 2, 0.5, 0],
+                    [300, n_samples // 2, n_samples // 2, 255]
                 )
                 
                 popt, _ = curve_fit(
                     self._gaussian,
-                    x_fit,
+                    y_fit,
                     samples,
                     p0=p0,
                     bounds=bounds,
