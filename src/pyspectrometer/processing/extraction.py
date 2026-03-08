@@ -334,19 +334,18 @@ class SpectrumExtractor:
         Returns:
             Tuple of (detected_angle_degrees, optimal_y_center, visualization_image_or_None)
         """
-        # Convert to grayscale uint8 (required for Sobel and display)
+        # Convert to grayscale, preserving bit depth for thresholding precision
+        # 10-bit/16-bit: keep full range as float32 (no 8-bit scaling before Sobel)
         if frame.ndim == 3:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
         elif frame.dtype == np.uint16:
-            # Scale high bit-depth to 8-bit
-            max_val = max(frame.max(), 1)
-            print(f"[AutoLevel] uint16 frame: max_val={max_val}")
-            if max_val > 255:
-                gray = (frame.astype(np.float32) * 255 / max_val).astype(np.uint8)
-            else:
-                gray = frame.astype(np.uint8)
+            # Preserve 10/16-bit range - don't scale to 8-bit before thresholding
+            gray = frame.astype(np.float32)
+            print(f"[AutoLevel] uint16 frame: max_val={gray.max():.0f} (preserving bit depth)")
+        elif frame.dtype == np.uint8:
+            gray = frame.astype(np.float32)
         else:
-            gray = frame
+            gray = np.asarray(frame, dtype=np.float32)
         height, width = gray.shape
         print(f"[AutoLevel] gray shape={gray.shape}, dtype={gray.dtype}, range=[{gray.min()},{gray.max()}]")
         
@@ -363,10 +362,11 @@ class SpectrumExtractor:
         # Compute gradient magnitude
         magnitude = np.sqrt(grad_x**2 + grad_y**2)
         
-        # Threshold: split at midpoint between min and max (avoids noise sensitivity)
-        mag_min = float(magnitude.min())
-        mag_max = float(magnitude.max())
-        mag_thresh = (mag_min + mag_max) / 2.0 if mag_max > mag_min else mag_max
+        # Threshold: sample first 20 rows for noise, use 3x max as threshold
+        n_rows = min(20, height)
+        noise_region = magnitude[:n_rows, :]
+        noise_max = float(noise_region.max()) if noise_region.size > 0 else 0.0
+        mag_thresh = max(noise_max * 3.0, magnitude.min() * 1.1)
         strong_mask = magnitude > mag_thresh
         
         # Get coordinates of strong gradient points

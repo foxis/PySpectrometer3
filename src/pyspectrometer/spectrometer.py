@@ -221,14 +221,22 @@ class Spectrometer:
         
         # Source selection
         display.register_button_callback("source_fl", lambda: self._on_select_source(ReferenceSource.FL))
+        display.register_button_callback("source_fl2", lambda: self._on_select_source(ReferenceSource.FL2))
+        display.register_button_callback("source_fl3", lambda: self._on_select_source(ReferenceSource.FL3))
+        display.register_button_callback("source_fl4", lambda: self._on_select_source(ReferenceSource.FL4))
+        display.register_button_callback("source_fl5", lambda: self._on_select_source(ReferenceSource.FL5))
+        display.register_button_callback("source_a", lambda: self._on_select_source(ReferenceSource.A))
         display.register_button_callback("source_hg", lambda: self._on_select_source(ReferenceSource.HG))
         display.register_button_callback("source_sun", lambda: self._on_select_source(ReferenceSource.SUN))
         display.register_button_callback("source_led", lambda: self._on_select_source(ReferenceSource.LED))
         
         # Calibration actions
         display.register_button_callback("toggle_overlay", self._on_toggle_overlay)
+        display.register_button_callback("toggle_sensitivity", self._on_toggle_sensitivity)
+        display.register_button_callback("correct_sensitivity", self._on_correct_sensitivity)
         display.register_button_callback("auto_level", self._on_auto_level)
         display.register_button_callback("auto_calibrate", self._on_auto_calibrate)
+        display.register_button_callback("reset_calibration", self._on_reset_calibration)
         display.register_button_callback("save_cal", self._on_save_calibration)
         display.register_button_callback("load_cal", self._on_load_calibration)
         
@@ -240,6 +248,22 @@ class Spectrometer:
         # Set initial button states
         if self._calibration_mode is not None:
             display.set_button_active("toggle_overlay", self._calibration_mode.cal_state.overlay_visible)
+            display.set_button_active("toggle_sensitivity", self._calibration_mode.cal_state.sensitivity_correction_enabled)
+
+    def _on_correct_sensitivity(self) -> None:
+        """Handle CORR button - placeholder for future sensitivity curve correction."""
+        print("[CORR] Correct sensitivity curve (placeholder, noop)")
+
+    def _on_reset_calibration(self) -> None:
+        """Handle R button - reset calibration to linear 1:1 pixels to spectrum."""
+        n = self._calibration.width
+        wl_min, wl_max = 380.0, 750.0
+        pixels = [0, n // 4, n // 2, 3 * n // 4, n - 1]
+        wavelengths = [wl_min + (wl_max - wl_min) * p / max(n - 1, 1) for p in pixels]
+        self._calibration.recalibrate(pixels, wavelengths)
+        if self._calibration_mode is not None:
+            self._calibration_mode.cal_state.calibration_points = list(zip(pixels, wavelengths))
+        print(f"[R] Calibration reset to linear 1:1: {wl_min:.0f}-{wl_max:.0f} nm over {n} pixels")
     
     def _on_button_save(self) -> None:
         """Handle save button click."""
@@ -322,12 +346,11 @@ class Spectrometer:
         """Handle auto-gain and auto-exposure based on spectrum peak.
         
         Algorithm: Iteratively adjust gain/exposure to maximize dynamic range.
-        - Target: 80% of max intensity
+        - Target: 95% of max intensity
         - Reduce if > 95% (saturating)
         - Increase if < 50% (too dark)
         
-        Note: Intensity is currently scaled to 0-255 in extraction.py
-        TODO: Keep full 10-bit precision (0-1023) throughout pipeline
+        Uses config.camera.bit_depth for target max (10-bit: 1023, 8-bit: 255).
         
         Exposure limits:
         - Continuous: max 1 second (1,000,000 us)
@@ -347,20 +370,20 @@ class Spectrometer:
             return
         
         # Detect actual intensity range from data
-        # Extraction now preserves original bit depth as float32
-        # 10-bit: 0-1023, 8-bit: 0-255
         current_max = float(np.max(data.intensity))
         
-        # Determine max possible value based on actual data range
-        if current_max > 255:
-            # 10-bit or higher data
+        # Use config bit depth for target scaling (not inferred from data)
+        # 10-bit: 0-1023, 8-bit: 0-255, 16-bit: 0-65535
+        bit_depth = getattr(self.config.camera, "bit_depth", 10)
+        if bit_depth >= 16:
+            max_intensity = 65535.0
+        elif bit_depth >= 10:
             max_intensity = 1023.0
         else:
-            # 8-bit data
             max_intensity = 255.0
         
         threshold_high = max_intensity * 0.95  # Saturating, need to reduce
-        threshold_target = max_intensity * 0.80  # Optimal level
+        threshold_target = max_intensity * 0.95  # Optimal level
         threshold_low = max_intensity * 0.50  # Too dark, need to increase
         
         if current_max < max_intensity * 0.02:
@@ -482,10 +505,9 @@ class Spectrometer:
         self._calibration_mode.select_source(source)
         
         # Update button active states (show which source is selected)
-        self._display.set_button_active("source_fl", source == ReferenceSource.FL)
-        self._display.set_button_active("source_hg", source == ReferenceSource.HG)
-        self._display.set_button_active("source_sun", source == ReferenceSource.SUN)
-        self._display.set_button_active("source_led", source == ReferenceSource.LED)
+        for s in ReferenceSource:
+            action_name = f"source_{s.name.lower()}"
+            self._display.set_button_active(action_name, source == s)
     
     def _on_toggle_overlay(self) -> None:
         """Handle toggle reference overlay."""
@@ -494,6 +516,14 @@ class Spectrometer:
         
         visible = self._calibration_mode.toggle_overlay()
         self._display.set_button_active("toggle_overlay", visible)
+    
+    def _on_toggle_sensitivity(self) -> None:
+        """Handle toggle CMOS sensitivity correction."""
+        if self._calibration_mode is None:
+            return
+        
+        enabled = self._calibration_mode.toggle_sensitivity_correction()
+        self._display.set_button_active("toggle_sensitivity", enabled)
     
     def _on_auto_level(self) -> None:
         """Handle auto-level button - detects rotation, shift, centers spectrum."""
@@ -515,7 +545,8 @@ class Spectrometer:
             # Clear frozen spectrum when unfreezing
             self._frozen_intensity = None
         
-        self._display.set_button_active("freeze", frozen)
+        # Playback icon: active=red (live), inactive=stop (frozen)
+        self._display.set_button_active("freeze", not frozen)
         print(f"[FREEZE] Spectrum {'FROZEN' if frozen else 'LIVE'}")
     
     def _on_toggle_averaging(self) -> None:
@@ -784,13 +815,11 @@ class Spectrometer:
         
         self._calibration.load()
         
-        if self._calibration.rotation_angle != 0.0:
-            self._extractor.set_rotation_angle(self._calibration.rotation_angle)
-        if self._calibration.spectrum_y_center != 0:
-            self._extractor.set_spectrum_y_center(self._calibration.spectrum_y_center)
-        if self._calibration.perpendicular_width != 20:
-            self._extractor.perpendicular_width = self._calibration.perpendicular_width
-            self._extractor._precompute_sampling_coords()
+        # Always apply extraction params from calibration file
+        self._extractor.set_rotation_angle(self._calibration.rotation_angle)
+        self._extractor.set_spectrum_y_center(self._calibration.spectrum_y_center)
+        self._extractor.perpendicular_width = self._calibration.perpendicular_width
+        self._extractor._precompute_sampling_coords()
         
         self._camera.start()
         self._display.setup_windows()
@@ -835,6 +864,13 @@ class Spectrometer:
                         self._calibration.wavelengths,
                     )
                 
+                # Apply CMOS sensitivity correction if enabled (calibration mode)
+                if self._calibration_mode is not None:
+                    intensity = self._calibration_mode.apply_sensitivity_correction(
+                        intensity,
+                        self._calibration.wavelengths,
+                    )
+                
                 data = SpectrumData(
                     intensity=intensity,
                     wavelengths=self._calibration.wavelengths,
@@ -856,6 +892,16 @@ class Spectrometer:
                         self.config.display.graph_height,
                     )
                     self._display.set_mode_overlay(overlay)
+                    
+                    # Add sensitivity curve overlay if enabled
+                    sensitivity_overlay = self._calibration_mode.get_sensitivity_curve(
+                        processed.wavelengths,
+                        self.config.display.graph_height,
+                    )
+                    if sensitivity_overlay is not None:
+                        self._display.set_sensitivity_overlay(sensitivity_overlay)
+                    else:
+                        self._display.set_sensitivity_overlay(None)
                     
                     # Update status display
                     self._display._control_bar.set_status("Ref", self._calibration_mode.get_current_source_name())

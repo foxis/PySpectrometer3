@@ -1,7 +1,8 @@
 """Reference spectra for calibration.
 
 Contains spectral line data for common calibration sources:
-- FL: CIE fluorescent illuminant (from CIE_illum_FLs_1nm.csv)
+- FL, FL2, FL3, FL4, FL5: CIE fluorescent illuminants (CIE_illum_FLs_1nm.csv)
+- A: CIE Standard Illuminant A (incandescent)
 - Hg: Low-pressure Mercury lamp
 - Sun: Solar spectrum (Fraunhofer absorption lines)
 - LED: Typical white phosphor-converted LED
@@ -20,7 +21,12 @@ _DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 class ReferenceSource(Enum):
     """Available reference light sources for calibration."""
     
-    FL = auto()      # Compact Fluorescent Lamp
+    FL = auto()      # CIE FL1 - Daylight fluorescent
+    FL2 = auto()     # CIE FL2 - Cool white fluorescent
+    FL3 = auto()     # CIE FL3 - White fluorescent
+    FL4 = auto()     # CIE FL4 - Warm white fluorescent
+    FL5 = auto()     # CIE FL5 - Daylight fluorescent (alternative)
+    A = auto()       # CIE Standard Illuminant A (incandescent)
     HG = auto()      # Mercury low-pressure lamp
     SUN = auto()     # Solar spectrum
     LED = auto()     # White phosphor-converted LED
@@ -103,10 +109,11 @@ LED_LINES = [
 ]
 
 
-def _load_cie_fluorescent_spectrum() -> Optional[tuple[np.ndarray, np.ndarray]]:
+def _load_cie_fluorescent_spectrum(column: int = 1) -> Optional[tuple[np.ndarray, np.ndarray]]:
     """Load CIE fluorescent illuminant from CIE_illum_FLs_1nm.csv.
     
-    Uses FL1 (column 1) - CIE Standard Illuminant FL1, Daylight fluorescent.
+    Args:
+        column: Column index (1=FL1, 2=FL2, 3=FL3, 4=FL4, 5=FL5)
     
     Returns:
         (wavelengths, intensity) or None if file not found
@@ -125,10 +132,46 @@ def _load_cie_fluorescent_spectrum() -> Optional[tuple[np.ndarray, np.ndarray]]:
                 if not line:
                     continue
                 parts = line.split(",")
+                if len(parts) > column:
+                    try:
+                        wl = float(parts[0])
+                        inten = float(parts[column])
+                        wavelengths.append(wl)
+                        intensity.append(inten)
+                    except ValueError:
+                        continue
+        
+        if not wavelengths:
+            return None
+        
+        wl_arr = np.array(wavelengths, dtype=np.float64)
+        int_arr = np.array(intensity, dtype=np.float64)
+        if int_arr.max() > 0:
+            int_arr = int_arr / int_arr.max()
+        return (wl_arr, int_arr)
+    except Exception:
+        return None
+
+
+def _load_cie_illum_a() -> Optional[tuple[np.ndarray, np.ndarray]]:
+    """Load CIE Standard Illuminant A from CIE_std_illum_A_1nm.csv."""
+    path = _DATA_DIR / "CIE_std_illum_A_1nm.csv"
+    if not path.exists():
+        return None
+    
+    try:
+        wavelengths: list[float] = []
+        intensity: list[float] = []
+        
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split(",")
                 if len(parts) >= 2:
                     try:
                         wl = float(parts[0])
-                        # FL1 = column index 1 (column 0 is wavelength)
                         inten = float(parts[1])
                         wavelengths.append(wl)
                         intensity.append(inten)
@@ -140,7 +183,6 @@ def _load_cie_fluorescent_spectrum() -> Optional[tuple[np.ndarray, np.ndarray]]:
         
         wl_arr = np.array(wavelengths, dtype=np.float64)
         int_arr = np.array(intensity, dtype=np.float64)
-        # Normalize to 0-1
         if int_arr.max() > 0:
             int_arr = int_arr / int_arr.max()
         return (wl_arr, int_arr)
@@ -247,10 +289,40 @@ REFERENCE_SPECTRA: dict[ReferenceSource, ReferenceSpectrum] = {
         description="Low-pressure mercury vapor lamp emission lines",
     ),
     ReferenceSource.FL: ReferenceSpectrum(
-        name="Fluorescent (FL)",
+        name="FL1",
         source=ReferenceSource.FL,
         peaks=FL_LINES,
-        description="CIE fluorescent illuminant FL1 from CIE_illum_FLs_1nm.csv",
+        description="CIE fluorescent illuminant FL1, Daylight fluorescent",
+    ),
+    ReferenceSource.FL2: ReferenceSpectrum(
+        name="FL2",
+        source=ReferenceSource.FL2,
+        peaks=FL_LINES,
+        description="CIE fluorescent illuminant FL2, Cool white fluorescent",
+    ),
+    ReferenceSource.FL3: ReferenceSpectrum(
+        name="FL3",
+        source=ReferenceSource.FL3,
+        peaks=FL_LINES,
+        description="CIE fluorescent illuminant FL3, White fluorescent",
+    ),
+    ReferenceSource.FL4: ReferenceSpectrum(
+        name="FL4",
+        source=ReferenceSource.FL4,
+        peaks=FL_LINES,
+        description="CIE fluorescent illuminant FL4, Warm white fluorescent",
+    ),
+    ReferenceSource.FL5: ReferenceSpectrum(
+        name="FL5",
+        source=ReferenceSource.FL5,
+        peaks=FL_LINES,
+        description="CIE fluorescent illuminant FL5, Daylight fluorescent",
+    ),
+    ReferenceSource.A: ReferenceSpectrum(
+        name="Illum A",
+        source=ReferenceSource.A,
+        peaks=[],  # Incandescent - continuous spectrum
+        description="CIE Standard Illuminant A (incandescent)",
     ),
     ReferenceSource.SUN: ReferenceSpectrum(
         name="Solar (Sun)",
@@ -286,21 +358,38 @@ def get_reference_spectrum(
     
     match source:
         case ReferenceSource.FL:
-            # Use CIE fluorescent illuminant from CIE_illum_FLs_1nm.csv
-            cie = _load_cie_fluorescent_spectrum()
-            if cie is not None:
-                wl_ref, int_ref = cie
-                interpolated = np.interp(
-                    wavelengths,
-                    wl_ref,
-                    int_ref,
-                    left=0.0,
-                    right=0.0,
-                )
-                if interpolated.max() > 0:
-                    interpolated = interpolated / interpolated.max()
-                return interpolated
-            # Fallback to synthetic if CSV not found
+            cie = _load_cie_fluorescent_spectrum(1)
+        case ReferenceSource.FL2:
+            cie = _load_cie_fluorescent_spectrum(2)
+        case ReferenceSource.FL3:
+            cie = _load_cie_fluorescent_spectrum(3)
+        case ReferenceSource.FL4:
+            cie = _load_cie_fluorescent_spectrum(4)
+        case ReferenceSource.FL5:
+            cie = _load_cie_fluorescent_spectrum(5)
+        case ReferenceSource.A:
+            cie = _load_cie_illum_a()
+        case _:
+            cie = None
+
+    if cie is not None and source in (
+        ReferenceSource.FL, ReferenceSource.FL2, ReferenceSource.FL3,
+        ReferenceSource.FL4, ReferenceSource.FL5, ReferenceSource.A,
+    ):
+        wl_ref, int_ref = cie
+        interpolated = np.interp(
+            wavelengths,
+            wl_ref,
+            int_ref,
+            left=0.0,
+            right=0.0,
+        )
+        if interpolated.max() > 0:
+            interpolated = interpolated / interpolated.max()
+        return interpolated
+
+    match source:
+        case ReferenceSource.FL | ReferenceSource.FL2 | ReferenceSource.FL3 | ReferenceSource.FL4 | ReferenceSource.FL5:
             return _generate_gaussian_spectrum(wavelengths, ref.peaks, 12.0)
         case ReferenceSource.LED:
             return _generate_led_spectrum(wavelengths)

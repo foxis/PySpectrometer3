@@ -14,6 +14,7 @@ Manual calibration (peak matching) via calibrate_from_peaks() for later use.
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional, Callable
 import numpy as np
 from scipy.optimize import minimize
@@ -27,6 +28,9 @@ from ..data.reference_spectra import (
     SpectralLine,
 )
 
+# Data directory for CMOS sensitivity curve (up 3 levels from modes/calibration.py)
+_DATA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data"
+
 
 @dataclass
 class CalibrationState:
@@ -37,6 +41,9 @@ class CalibrationState:
     
     # Overlay visibility
     overlay_visible: bool = True
+    
+    # Sensitivity correction enabled
+    sensitivity_correction_enabled: bool = False
     
     # Detected peaks from measured spectrum
     detected_peaks: list[int] = field(default_factory=list)  # pixel positions
@@ -57,6 +64,11 @@ class CalibrationMode(BaseMode):
     # Reference sources in cycle order
     SOURCES = [
         ReferenceSource.FL,
+        ReferenceSource.FL2,
+        ReferenceSource.FL3,
+        ReferenceSource.FL4,
+        ReferenceSource.FL5,
+        ReferenceSource.A,
         ReferenceSource.HG,
         ReferenceSource.SUN,
         ReferenceSource.LED,
@@ -69,6 +81,11 @@ class CalibrationMode(BaseMode):
         
         # Enable auto-gain by default
         self.state.auto_gain_enabled = True
+        
+        # Load CMOS sensitivity curve
+        self._cmos_sensitivity_wl: Optional[np.ndarray] = None
+        self._cmos_sensitivity_val: Optional[np.ndarray] = None
+        self._load_cmos_sensitivity()
         
         # Callbacks to be set by spectrometer
         self._on_save_calibration: Optional[Callable[[], None]] = None
@@ -399,3 +416,93 @@ class CalibrationMode(BaseMode):
     def get_current_source_name(self) -> str:
         """Get name of current reference source."""
         return get_reference_name(self.cal_state.current_source)
+    
+    def _load_cmos_sensitivity(self) -> None:
+        """Load CMOS spectral sensitivity curve from CSV."""
+        csv_path = _DATA_DIR / "silicon_CMOS_spectral_sensitivity.csv"
+        if not csv_path.exists():
+            print(f"[Calibration] CMOS sensitivity file not found: {csv_path}")
+            return
+        
+        try:
+            data = np.loadtxt(csv_path, delimiter=",", skiprows=2)
+            self._cmos_sensitivity_wl = data[:, 0]
+            self._cmos_sensitivity_val = data[:, 1]
+            print(f"[Calibration] Loaded CMOS sensitivity: {len(self._cmos_sensitivity_wl)} points, {self._cmos_sensitivity_wl[0]:.0f}-{self._cmos_sensitivity_wl[-1]:.0f} nm")
+        except Exception as e:
+            print(f"[Calibration] Failed to load CMOS sensitivity: {e}")
+            self._cmos_sensitivity_wl = None
+            self._cmos_sensitivity_val = None
+    
+    def toggle_sensitivity_correction(self) -> bool:
+        """Toggle CMOS sensitivity correction."""
+        self.cal_state.sensitivity_correction_enabled = not self.cal_state.sensitivity_correction_enabled
+        print(f"[Calibration] Sensitivity correction: {'ON' if self.cal_state.sensitivity_correction_enabled else 'OFF'}")
+        return self.cal_state.sensitivity_correction_enabled
+    
+    def get_sensitivity_curve(
+        self,
+        wavelengths: np.ndarray,
+        graph_height: int,
+    ) -> Optional[tuple[np.ndarray, tuple[int, int, int]]]:
+        """Get CMOS sensitivity curve for overlay.
+        
+        Args:
+            wavelengths: Wavelength array (per pixel)
+            graph_height: Height of graph in pixels
+            
+        Returns:
+            Tuple of (scaled_sensitivity, color) or None if not available
+        """
+        if self._cmos_sensitivity_wl is None or self._cmos_sensitivity_val is None:
+            return None
+        
+        if not self.cal_state.sensitivity_correction_enabled:
+            return None
+        
+        sensitivity = np.interp(
+            wavelengths,
+            self._cmos_sensitivity_wl,
+            self._cmos_sensitivity_val,
+            left=0.0,
+            right=0.0,
+        )
+        
+        scaled = sensitivity * (graph_height - 10)
+        color = (100, 255, 100)  # Green
+        
+        return (scaled, color)
+    
+    def apply_sensitivity_correction(
+        self,
+        intensity: np.ndarray,
+        wavelengths: np.ndarray,
+    ) -> np.ndarray:
+        """Apply CMOS sensitivity correction to linearize spectrum.
+        
+        Args:
+            intensity: Measured spectrum intensity
+            wavelengths: Wavelength array (per pixel)
+            
+        Returns:
+            Corrected intensity (linearized)
+        """
+        if not self.cal_state.sensitivity_correction_enabled:
+            return intensity
+        
+        if self._cmos_sensitivity_wl is None or self._cmos_sensitivity_val is None:
+            return intensity
+        
+        sensitivity = np.interp(
+            wavelengths,
+            self._cmos_sensitivity_wl,
+            self._cmos_sensitivity_val,
+            left=0.0,
+            right=0.0,
+        )
+        
+        corrected = np.zeros_like(intensity, dtype=np.float32)
+        mask = sensitivity > 1e-6
+        corrected[mask] = intensity[mask] / sensitivity[mask]
+        
+        return corrected

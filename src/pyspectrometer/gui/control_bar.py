@@ -14,7 +14,7 @@ class ControlBarConfig:
     
     height: int = 80
     row_height: int = 24
-    row_spacing: int = 4
+    row_spacing: int = 6  # 4 + 2px vertical separation between rows
     button_spacing: int = 4
     margin_x: int = 5
     margin_y: int = 8
@@ -45,6 +45,7 @@ class ButtonDef:
     is_toggle: bool = False
     shortcut: str = ""
     row: int = 1
+    icon_type: str = ""  # "playback" = red circle when active, gray square when stopped
 
 
 # Measurement mode buttons
@@ -74,20 +75,30 @@ MEASUREMENT_BUTTONS = [
 DEFAULT_BUTTONS = MEASUREMENT_BUTTONS
 
 # Calibration mode buttons
+# LEVEL and CALIB are pushed right via spacer (far from other buttons)
 CALIBRATION_BUTTONS = [
-    # Row 1: Source selection and calibration actions
+    # Row 1: Source selection, Save/Load, then spacer, SENS, LEVEL, CALIB
     ButtonDef("FL", "source_fl", row=1),
     ButtonDef("Hg", "source_hg", row=1),
     ButtonDef("Sun", "source_sun", row=1),
     ButtonDef("LED", "source_led", row=1),
+    ButtonDef("FL2", "source_fl2", row=1),
+    ButtonDef("FL3", "source_fl3", row=1),
+    ButtonDef("FL4", "source_fl4", row=1),
+    ButtonDef("FL5", "source_fl5", row=1),
+    ButtonDef("A", "source_a", row=1),
     ButtonDef("Overlay", "toggle_overlay", is_toggle=True, row=1),
-    ButtonDef("AutoLvl", "auto_level", shortcut="a", row=1),  # Action: run auto-level
-    ButtonDef("AutoCal", "auto_calibrate", row=1),  # Action: run auto-calibration
     ButtonDef("Save", "save_cal", shortcut="w", row=1),
     ButtonDef("Load", "load_cal", row=1),
-    # Row 2: Display and control
-    ButtonDef("Freeze", "freeze", is_toggle=True, shortcut="f", row=2),
-    ButtonDef("Peak", "capture_peak", is_toggle=True, shortcut="h", row=2),
+    ButtonDef("__spacer__", "__spacer_left__", row=1),  # Pushes S/CORR/LEVEL/CALIB/R right
+    ButtonDef("S", "toggle_sensitivity", is_toggle=True, row=1),
+    ButtonDef("CORR", "correct_sensitivity", row=1),
+    ButtonDef("LEVEL", "auto_level", is_toggle=True, row=1),
+    ButtonDef("CALIB", "auto_calibrate", row=1),
+    ButtonDef("R", "reset_calibration", row=1),
+    # Row 2: Playback icon (freeze), Peak, Avg, etc.
+    ButtonDef("Play", "freeze", is_toggle=True, row=2, icon_type="playback"),
+    ButtonDef("Peak", "capture_peak", is_toggle=True, row=2),  # No shortcut
     ButtonDef("Avg", "toggle_averaging", is_toggle=True, row=2),
     ButtonDef("G", "show_gain_slider", is_toggle=True, row=2),
     ButtonDef("E", "show_exposure_slider", is_toggle=True, row=2),
@@ -170,11 +181,15 @@ class ControlBar:
         
         for btn_def in buttons:
             bar = self._row1 if btn_def.row == 1 else self._row2
+            if btn_def.action_name.startswith("__spacer"):
+                bar.add_separator(width=150)  # Push LEVEL/CALIB to the right
+                continue
             bar.add_button(
                 btn_def.label,
                 btn_def.action_name,
                 is_toggle=btn_def.is_toggle,
                 shortcut=btn_def.shortcut,
+                icon_type=getattr(btn_def, "icon_type", ""),
             )
     
     def set_mode(self, mode: str) -> None:

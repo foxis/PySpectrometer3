@@ -307,12 +307,12 @@ class Calibration:
             
             if len(lines) >= 4:
                 line3 = lines[3].strip()
-                self._spectrum_y_center = int(line3)
+                self._spectrum_y_center = int(float(line3))
                 print(f"Loaded spectrum Y center: {self._spectrum_y_center}")
             
             if len(lines) >= 5:
                 line4 = lines[4].strip()
-                self._perpendicular_width = int(line4)
+                self._perpendicular_width = int(float(line4))
                 print(f"Loaded perpendicular width: {self._perpendicular_width}")
                 
         except Exception:

@@ -65,6 +65,8 @@ class Button:
     
     # Keyboard shortcut hint (displayed in button)
     shortcut: str = ""
+    # Icon type: "playback" = red circle when active, gray square when stopped
+    icon_type: str = ""
     
     def contains(self, px: int, py: int) -> bool:
         """Check if point is inside button bounds."""
@@ -110,28 +112,42 @@ class Button:
         cv2.rectangle(image, (x1, y1), (x2, y2), bg, -1)
         cv2.rectangle(image, (x1, y1), (x2, y2), border, style.border_width)
         
-        display_text = self.label
-        if self.shortcut:
-            display_text = f"[{self.shortcut}] {self.label}"
-        
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        (text_w, text_h), baseline = cv2.getTextSize(
-            display_text, font, style.font_scale, style.font_thickness
-        )
-        
-        text_x = x1 + (self.width - text_w) // 2
-        text_y = y1 + (self.height + text_h) // 2
-        
-        cv2.putText(
-            image,
-            display_text,
-            (text_x, text_y),
-            font,
-            style.font_scale,
-            fg,
-            style.font_thickness,
-            cv2.LINE_AA,
-        )
+        if self.icon_type == "playback":
+            # Red circle when active (recording), gray square when stopped
+            cx = x1 + self.width // 2
+            cy = y1 + self.height // 2
+            r = min(self.width, self.height) // 4
+            if self.is_toggle and self.is_active:
+                cv2.circle(image, (cx, cy), max(2, r), (0, 0, 255), -1)
+            else:
+                sz = max(2, r - 1)
+                cv2.rectangle(
+                    image,
+                    (cx - sz, cy - sz),
+                    (cx + sz, cy + sz),
+                    (120, 120, 120),
+                    -1,
+                )
+        else:
+            display_text = self.label
+            if self.shortcut:
+                display_text = f"[{self.shortcut}] {self.label}"
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            (text_w, text_h), baseline = cv2.getTextSize(
+                display_text, font, style.font_scale, style.font_thickness
+            )
+            text_x = x1 + (self.width - text_w) // 2
+            text_y = y1 + (self.height + text_h) // 2
+            cv2.putText(
+                image,
+                display_text,
+                (text_x, text_y),
+                font,
+                style.font_scale,
+                fg,
+                style.font_thickness,
+                cv2.LINE_AA,
+            )
     
     def on_click(self) -> bool:
         """Handle click event. Returns True if handled."""
@@ -191,6 +207,7 @@ class ButtonBar:
         width: Optional[int] = None,
         is_toggle: bool = False,
         shortcut: str = "",
+        icon_type: str = "",
     ) -> Button:
         """Add a button to the bar.
         
@@ -227,6 +244,7 @@ class ButtonBar:
             is_toggle=is_toggle,
             style=self.style,
             shortcut=shortcut,
+            icon_type=icon_type,
         )
         
         self._buttons.append(button)

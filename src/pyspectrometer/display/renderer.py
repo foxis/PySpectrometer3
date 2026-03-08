@@ -103,6 +103,8 @@ class DisplayManager:
         
         # Mode overlay (intensity array, color)
         self._mode_overlay: Optional[tuple[np.ndarray, tuple[int, int, int]]] = None
+        # Sensitivity curve overlay (intensity array, color)
+        self._sensitivity_overlay: Optional[tuple[np.ndarray, tuple[int, int, int]]] = None
         # Autolevel non-blocking overlay
         self._autolevel_overlay: Optional[np.ndarray] = None
         self._on_autolevel_click: Optional[Callable[[], None]] = None
@@ -256,6 +258,7 @@ class DisplayManager:
         
         self._render_reference_spectrum(graph, data)
         self._render_mode_overlay(graph)
+        self._render_sensitivity_overlay(graph)
         self._render_spectrum(graph, data)
         self._render_peaks(graph, data)
         self._render_cursor(graph, data)
@@ -387,6 +390,17 @@ class DisplayManager:
         """
         self._mode_overlay = overlay
     
+    def set_sensitivity_overlay(
+        self,
+        overlay: Optional[tuple[np.ndarray, tuple[int, int, int]]],
+    ) -> None:
+        """Set CMOS sensitivity curve overlay to render on graph.
+        
+        Args:
+            overlay: Tuple of (intensity array, BGR color) or None to clear
+        """
+        self._sensitivity_overlay = overlay
+    
     def _render_mode_overlay(self, graph: np.ndarray) -> None:
         """Render mode-specific overlay (e.g., reference spectrum for calibration)."""
         if self._mode_overlay is None:
@@ -404,6 +418,23 @@ class DisplayManager:
         if len(points) > 1:
             pts = np.array(points, dtype=np.int32)
             cv2.polylines(graph, [pts], isClosed=False, color=color, thickness=2, lineType=cv2.LINE_AA)
+    
+    def _render_sensitivity_overlay(self, graph: np.ndarray) -> None:
+        """Render CMOS sensitivity curve overlay."""
+        if self._sensitivity_overlay is None:
+            return
+        
+        intensity, color = self._sensitivity_overlay
+        height = graph.shape[0]
+        
+        points = []
+        for i, val in enumerate(intensity):
+            y = height - int(min(val, height - 1))
+            points.append((i, max(0, y)))
+        
+        if len(points) > 1:
+            pts = np.array(points, dtype=np.int32)
+            cv2.polylines(graph, [pts], isClosed=False, color=color, thickness=1, lineType=cv2.LINE_AA)
     
     def _render_reference_spectrum(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render the reference spectrum overlay line."""

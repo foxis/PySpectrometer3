@@ -1,0 +1,1 @@
+"""PySpectrometer3 tests."""
