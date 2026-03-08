@@ -4,15 +4,19 @@ Workflow:
 1. Select reference source (FL, Hg, Sun, LED)
 2. Point spectrometer at light source
 3. Use auto-level and auto-shift to fit spectrum in view
-4. Freeze spectrum and click calibrate
-5. Algorithm matches peaks and computes 4-point polynomial fit
+4. Freeze spectrum and click AutoCal
+5. Correlation-based optimization finds polynomial that maximizes spectrum
+   correlation with reference, regularized for linearity (prism dispersion)
 6. Verify overlay aligns with measured spectrum
 7. Save calibration manually when satisfied
+
+Manual calibration (peak matching) via calibrate_from_peaks() for later use.
 """
 
 from dataclasses import dataclass, field
 from typing import Optional, Callable
 import numpy as np
+from scipy.optimize import minimize
 
 from .base import BaseMode, ModeType, ButtonDefinition
 from ..data.reference_spectra import (
@@ -177,54 +181,137 @@ class CalibrationMode(BaseMode):
         wavelengths: np.ndarray,
         peak_indices: list[int],
     ) -> list[tuple[int, float]]:
-        """Perform automatic calibration by matching peaks.
-        
+        """Perform automatic calibration by optimizing spectrum correlation.
+
+        Uses gradient descent to find the polynomial calibration that maximizes
+        correlation between measured spectrum and reference, with linearity
+        regularization (prism dispersion is roughly linear).
+
+        Args:
+            measured_intensity: Measured spectrum intensity (per pixel)
+            wavelengths: Current wavelength calibration (unused for this method)
+            peak_indices: Detected peak pixel positions (unused; kept for API)
+
+        Returns:
+            List of (pixel, wavelength) calibration points for recalibrate
+        """
+        return self._auto_calibrate_correlation(measured_intensity)
+
+    def _auto_calibrate_correlation(
+        self,
+        measured_intensity: np.ndarray,
+    ) -> list[tuple[int, float]]:
+        """Optimize calibration polynomial to maximize spectrum correlation."""
+        n = len(measured_intensity)
+        if n < 10:
+            print("[Calibration] Need at least 10 pixels for correlation calibration")
+            return []
+
+        source = self.cal_state.current_source
+        # Initial guess: linear, 380-750 nm over pixel range
+        wl_min, wl_max = 380.0, 750.0
+        c1_init = (wl_max - wl_min) / max(n - 1, 1)
+        c0_init = wl_min
+        x0 = np.array([c0_init, c1_init, 0.0, 0.0])  # c0, c1, c2, c3
+
+        def loss(x: np.ndarray) -> float:
+            c0, c1, c2, c3 = x
+            wl = c0 + c1 * np.arange(n, dtype=np.float64)
+            wl += c2 * (np.arange(n, dtype=np.float64) ** 2) / (n * n)
+            wl += c3 * (np.arange(n, dtype=np.float64) ** 3) / (n * n * n)
+            ref = get_reference_spectrum(source, wl)
+            if ref.size < 2 or np.std(ref) < 1e-9 or np.std(measured_intensity) < 1e-9:
+                return 1e6
+            corr = np.corrcoef(measured_intensity, ref)[0, 1]
+            if np.isnan(corr):
+                return 1e6
+            # Maximize correlation = minimize -corr
+            # Linearity penalty: penalize c2, c3 (prism should be ~linear)
+            linearity_penalty = 0.1 * (c2 ** 2 + c3 ** 2)
+            return -corr + linearity_penalty
+
+        bounds = [
+            (350.0, 450.0),   # c0
+            (0.3, 1.5),       # c1 (nm/pixel)
+            (-50.0, 50.0),    # c2
+            (-50.0, 50.0),    # c3
+        ]
+        res = minimize(
+            loss,
+            x0,
+            method="L-BFGS-B",
+            bounds=bounds,
+            options={"maxiter": 200, "ftol": 1e-8},
+        )
+
+        if not res.success:
+            print(f"[Calibration] Correlation optimization failed: {res.message}")
+            return []
+
+        c0, c1, c2, c3 = res.x
+        pixels_arr = np.arange(n, dtype=np.float64)
+        wl_arr = c0 + c1 * pixels_arr + c2 * (pixels_arr ** 2) / (n * n) + c3 * (pixels_arr ** 3) / (n * n * n)
+
+        # Generate 5 points for 3rd-order poly fit (existing recalibrate expects points)
+        idx = [0, n // 4, n // 2, 3 * n // 4, n - 1]
+        calibration_points = [(int(i), float(wl_arr[int(i)])) for i in idx]
+        self.cal_state.calibration_points = calibration_points
+
+        ref_final = get_reference_spectrum(source, wl_arr)
+        corr_final = np.corrcoef(measured_intensity, ref_final)[0, 1] if np.std(ref_final) > 1e-9 else 0
+        print(f"[Calibration] Correlation calibration: r={corr_final:.4f}")
+        for pixel, wl in calibration_points:
+            print(f"  Pixel {pixel} -> {wl:.1f} nm")
+        return calibration_points
+
+    def calibrate_from_peaks(
+        self,
+        measured_intensity: np.ndarray,
+        wavelengths: np.ndarray,
+        peak_indices: list[int],
+    ) -> list[tuple[int, float]]:
+        """Manual calibration by matching detected peaks to reference lines.
+
+        Use this for manual calibration when peak matching is preferred.
+
         Args:
             measured_intensity: Measured spectrum intensity
             wavelengths: Current wavelength calibration
             peak_indices: Detected peak pixel positions
-            
+
         Returns:
-            List of (pixel, wavelength) calibration points (minimum 4)
+            List of (pixel, wavelength) calibration points
         """
         reference_peaks = get_reference_peaks(self.cal_state.current_source)
-        
+
         if len(peak_indices) < 4:
             print(f"[Calibration] Need at least 4 peaks, found {len(peak_indices)}")
             return []
-        
+
         if len(reference_peaks) < 4:
             print(f"[Calibration] Reference has only {len(reference_peaks)} peaks")
             return []
-        
-        # Convert peak pixel positions to approximate wavelengths
-        # peak_indices can be Peak objects or integers
+
         pixel_indices = [p.index if hasattr(p, 'index') else p for p in peak_indices]
-        peak_wavelengths = [wavelengths[min(idx, len(wavelengths)-1)] for idx in pixel_indices]
-        
-        # Match peaks to reference lines
+        peak_wavelengths = [wavelengths[min(idx, len(wavelengths) - 1)] for idx in pixel_indices]
+
         matches = self._match_peaks_to_reference(
             pixel_indices,
             peak_wavelengths,
             reference_peaks,
         )
-        
+
         if len(matches) < 4:
             print(f"[Calibration] Could only match {len(matches)} peaks, need 4")
             return []
-        
-        # Take best 4-6 matches
+
         matches = sorted(matches, key=lambda m: m[2])[:min(6, len(matches))]
-        
-        # Extract (pixel, wavelength) pairs
         calibration_points = [(m[0], m[1]) for m in matches]
-        
         self.cal_state.calibration_points = calibration_points
-        
-        print(f"[Calibration] Matched {len(calibration_points)} points:")
+
+        print(f"[Calibration] Peak-matched {len(calibration_points)} points:")
         for pixel, wl in calibration_points:
             print(f"  Pixel {pixel} -> {wl:.1f} nm")
-        
         return calibration_points
     
     def _linearity_score(self, points: list[tuple[int, float]]) -> float:

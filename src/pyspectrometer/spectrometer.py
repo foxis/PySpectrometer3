@@ -538,23 +538,15 @@ class Spectrometer:
         print(f"[AUTO_GAIN] {'ON' if enabled else 'OFF'}")
     
     def _on_auto_calibrate(self) -> None:
-        """Handle auto-calibrate action."""
+        """Handle auto-calibrate action (correlation-based optimization)."""
         if self._calibration_mode is None or self._last_data is None:
             print("[CAL] No data available for calibration")
             return
-        
-        # Get detected peaks from current spectrum
-        peak_indices = self._last_data.peaks
-        if len(peak_indices) < 4:
-            print(f"[CAL] Need at least 4 peaks, found {len(peak_indices)}")
-            print("[CAL] Try adjusting peak detection parameters")
-            return
-        
-        # Run auto-calibration
+
         cal_points = self._calibration_mode.auto_calibrate(
             measured_intensity=self._last_data.intensity,
             wavelengths=self._last_data.wavelengths,
-            peak_indices=peak_indices,
+            peak_indices=self._last_data.peaks,
         )
         
         if len(cal_points) >= 4:
