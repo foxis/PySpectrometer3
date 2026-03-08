@@ -5,6 +5,12 @@ from pathlib import Path
 from typing import Optional
 import numpy as np
 
+try:
+    from scipy.interpolate import PchipInterpolator
+    _SCIPY_AVAILABLE = True
+except ImportError:
+    _SCIPY_AVAILABLE = False
+
 
 @dataclass
 class CalibrationResult:
@@ -39,9 +45,9 @@ class CalibrationResult:
         if self.order == 0:
             return "Perform Calibration!"
         elif self.order == 2:
-            return "2nd Order Polyfit"
+            return "Monotonic (3 points)"
         else:
-            return "3rd Order Polyfit"
+            return "Cauchy (prism)"
 
 
 @dataclass
@@ -349,55 +355,90 @@ class Calibration:
         wavelengths: list[float],
         has_errors: bool,
     ) -> CalibrationResult:
-        """Compute wavelength calibration using polynomial fit."""
-        wavelength_data = np.zeros(self.width)
-        
-        if len(pixels) == 3:
-            print("Calculating second order polynomial...")
-            coefficients = np.polyfit(pixels, wavelengths, 2)
-            poly = np.poly1d(coefficients)
-            print(poly)
-            
-            for pixel in range(self.width):
-                wavelength_data[pixel] = round(poly(pixel), 6)
-            
-            print("Done! Note that calibration with only 3 wavelengths will not be accurate!")
-            order = 0 if has_errors else 2
-            
-            return CalibrationResult(
-                wavelengths=wavelength_data,
-                order=order,
-                coefficients=coefficients,
-                rotation_angle=self._rotation_angle,
-                spectrum_y_center=self._spectrum_y_center,
-                perpendicular_width=self._perpendicular_width,
-            )
-        
-        print("Calculating third order polynomial...")
-        coefficients = np.polyfit(pixels, wavelengths, 3)
-        poly = np.poly1d(coefficients)
-        print(poly)
-        
-        print("Generating Wavelength Data!\n")
-        for pixel in range(self.width):
-            wavelength_data[pixel] = round(poly(pixel), 6)
-        
-        predicted = [poly(px) for px in pixels]
-        corr_matrix = np.corrcoef(wavelengths, predicted)
-        corr = corr_matrix[0, 1]
-        r_squared = corr ** 2
-        
-        print(f"R-Squared={r_squared}")
-        
+        """Compute wavelength calibration using prism dispersion model.
+
+        Tries Cauchy-inverse fit first (1/λ² = poly(pixel)), physics-motivated for
+        prism spectrometers and strictly monotonic. Falls back to PCHIP or linear
+        if Cauchy fails (non-positive fit, non-monotonic, or <3 points).
+        """
+        # Sort by pixel
+        sorted_pairs = sorted(zip(pixels, wavelengths), key=lambda p: p[0])
+        px = np.array([p[0] for p in sorted_pairs], dtype=np.float64)
+        wl = np.array([p[1] for p in sorted_pairs], dtype=np.float64)
+
+        # Reject only if cal data has plateaus or reverses (allow strictly increasing or decreasing)
+        diff_wl = np.diff(wl)
+        if len(px) >= 2 and (np.any(diff_wl == 0) or (np.any(diff_wl > 0) and np.any(diff_wl < 0))):
+            print("Cal points not strictly monotonic; using linear interpolation.")
+            interp_wl = np.interp(np.arange(self.width), px, wl)
+            method = "linear"
+        else:
+            interp_wl, method = self._try_cauchy_fit(px, wl)
+            if method != "cauchy":
+                interp_wl = self._fallback_interp(px, wl, method)
+
+        wavelength_data = np.round(interp_wl, 6).astype(np.float64)
+        order = 0 if has_errors else (3 if len(px) >= 4 else 2)
+
+        pixel_grid = np.arange(self.width, dtype=np.float64)
+        predicted = np.interp(px, pixel_grid, wavelength_data)
+        corr_matrix = np.corrcoef(wl, predicted)
+        r_squared = float(corr_matrix[0, 1] ** 2) if not np.isnan(corr_matrix[0, 1]) else None
+
+        coefficients = np.array([], dtype=np.float64)
         return CalibrationResult(
             wavelengths=wavelength_data,
-            order=3,
+            order=order,
             coefficients=coefficients,
             r_squared=r_squared,
             rotation_angle=self._rotation_angle,
             spectrum_y_center=self._spectrum_y_center,
             perpendicular_width=self._perpendicular_width,
         )
+
+    def _try_cauchy_fit(self, px: np.ndarray, wl: np.ndarray) -> tuple[np.ndarray, str]:
+        """Try Cauchy-inverse fit: 1/λ² = poly(pixel) → λ = 1/√poly.
+        Returns (wavelength_array, method) where method is 'cauchy' or fallback name.
+        """
+        if len(px) < 3:
+            return np.zeros(self.width), "linear"
+
+        # 1/λ² in µm⁻² for numerical stability (nm→µm)
+        inv_wl_sq = 1.0 / ((wl * 1e-3) ** 2)
+        deg = min(2, len(px) - 1)
+        try:
+            coeffs = np.polyfit(px, inv_wl_sq, deg)
+            poly = np.poly1d(coeffs)
+        except np.linalg.LinAlgError:
+            return np.zeros(self.width), "linear"
+
+        # Evaluate over full pixel range
+        pred_inv = poly(np.arange(self.width))
+        eps = 1e-12
+        if np.any(pred_inv <= eps):
+            print("Cauchy fit produced non-positive values; falling back.")
+            return np.zeros(self.width), "pchip" if _SCIPY_AVAILABLE else "linear"
+
+        interp_wl = 1.0 / np.sqrt(pred_inv) * 1000.0  # µm⁻¹ → nm
+        d = np.diff(interp_wl)
+        if not (np.all(d > 0) or np.all(d < 0)):
+            print("Cauchy fit produced non-monotonic result; falling back.")
+            return np.zeros(self.width), "pchip" if _SCIPY_AVAILABLE else "linear"
+
+        print("Calculating Cauchy-inverse fit (prism dispersion)...")
+        return interp_wl, "cauchy"
+
+    def _fallback_interp(self, px: np.ndarray, wl: np.ndarray, method: str) -> np.ndarray:
+        """Fallback interpolation when Cauchy fails."""
+        if method == "pchip" and _SCIPY_AVAILABLE and len(px) >= 3:
+            print("Using PCHIP interpolation (strictly monotonic)...")
+            interp = PchipInterpolator(px, wl, extrapolate=True)
+            out = interp(np.arange(self.width))
+            d = np.diff(out)
+            if (np.all(d > 0) or np.all(d < 0)):
+                return out
+        print("Using linear interpolation (strictly monotonic)...")
+        return np.interp(np.arange(self.width), px, wl)
     
     def _generate_graticule(self) -> GraticuleData:
         """Generate graticule data for wavelength markers."""
