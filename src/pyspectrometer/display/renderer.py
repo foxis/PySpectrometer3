@@ -84,12 +84,9 @@ class DisplayManager:
         
         title1 = self.config.spectrograph_title
         title2 = self.config.waterfall_title
-        window_width = self.config.display.window_width
-        window_height = self.config.display.window_height
         
         if self.config.display.waterfall_enabled:
-            cv2.namedWindow(title2, cv2.WINDOW_GUI_NORMAL)
-            cv2.resizeWindow(title2, window_width, window_height)
+            cv2.namedWindow(title2, cv2.WINDOW_NORMAL)
             cv2.moveWindow(title2, 200, 200)
         
         if self.config.display.fullscreen:
@@ -100,8 +97,8 @@ class DisplayManager:
                 cv2.WINDOW_FULLSCREEN,
             )
         else:
-            cv2.namedWindow(title1, cv2.WINDOW_GUI_NORMAL)
-            cv2.resizeWindow(title1, window_width, window_height)
+            # Use WINDOW_NORMAL to allow window to resize and fit content
+            cv2.namedWindow(title1, cv2.WINDOW_NORMAL)
             cv2.moveWindow(title1, 0, 0)
         
         cv2.setMouseCallback(title1, self._handle_mouse)
@@ -180,18 +177,6 @@ class DisplayManager:
             perp_width,
         )
         
-        # Scale canvas to fit window if sizes differ
-        window_width = self.config.display.window_width
-        window_height = self.config.display.window_height
-        canvas_height, canvas_width = spectrum_vertical.shape[:2]
-        
-        if canvas_width != window_width or canvas_height != window_height:
-            spectrum_vertical = cv2.resize(
-                spectrum_vertical,
-                (window_width, window_height),
-                interpolation=cv2.INTER_LINEAR
-            )
-        
         cv2.imshow(self.config.spectrograph_title, spectrum_vertical)
         
         if self._waterfall is not None and self.config.display.waterfall_enabled:
@@ -209,15 +194,6 @@ class DisplayManager:
             )
             
             self._render_waterfall_status(waterfall_vertical, camera_gain)
-            
-            # Scale canvas to fit window if sizes differ
-            wf_height, wf_width = waterfall_vertical.shape[:2]
-            if wf_width != window_width or wf_height != window_height:
-                waterfall_vertical = cv2.resize(
-                    waterfall_vertical,
-                    (window_width, window_height),
-                    interpolation=cv2.INTER_LINEAR
-                )
             
             cv2.imshow(self.config.waterfall_title, waterfall_vertical)
     
@@ -386,30 +362,21 @@ class DisplayManager:
         rotation_angle: float = 0.0,
         perp_width: int = 20,
     ) -> None:
-        """Draw sampling region indicator lines on cropped preview."""
+        """Draw sampling region indicator lines on cropped preview.
+        
+        Since the image is already rotated to straighten the spectrum,
+        we only draw simple horizontal lines showing the sampling bounds.
+        """
         width = cropped.shape[1]
         rows = cropped.shape[0]
         halfway = rows // 2
+        half_perp = perp_width // 2
         
-        if abs(rotation_angle) < 0.1:
-            half_perp = perp_width // 2
-            cv2.line(cropped, (0, halfway - half_perp), (width, halfway - half_perp), (255, 255, 255), 1)
-            cv2.line(cropped, (0, halfway + half_perp), (width, halfway + half_perp), (255, 255, 255), 1)
-        else:
-            import math
-            angle_rad = math.radians(rotation_angle)
-            tan_a = math.tan(angle_rad)
-            half_perp = perp_width // 2
-            
-            center_x = width // 2
-            
-            y1_left = int(halfway + (0 - center_x) * tan_a - half_perp)
-            y1_right = int(halfway + (width - center_x) * tan_a - half_perp)
-            y2_left = int(halfway + (0 - center_x) * tan_a + half_perp)
-            y2_right = int(halfway + (width - center_x) * tan_a + half_perp)
-            
-            cv2.line(cropped, (0, y1_left), (width, y1_right), (255, 255, 255), 1)
-            cv2.line(cropped, (0, y2_left), (width, y2_right), (255, 255, 255), 1)
+        # Draw horizontal lines at sampling bounds (image is already rotated)
+        y_top = max(0, halfway - half_perp)
+        y_bottom = min(rows - 1, halfway + half_perp)
+        cv2.line(cropped, (0, y_top), (width, y_top), (0, 255, 255), 1)
+        cv2.line(cropped, (0, y_bottom), (width, y_bottom), (0, 255, 255), 1)
     
     def _render_status_text(
         self,

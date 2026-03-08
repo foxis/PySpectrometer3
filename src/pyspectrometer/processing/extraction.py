@@ -257,8 +257,8 @@ class SpectrumExtractor:
         """Auto-detect spectrum rotation angle and Y center using gradient analysis.
         
         Analyzes horizontal gradients (edges of vertical stripes) and uses
-        PCA to find the dominant orientation. Also computes the optimal
-        Y center based on the centroid of the spectrum.
+        PCA to find the dominant orientation. Computes the optimal Y center
+        on the ROTATED frame to ensure proper centering after correction.
         
         Args:
             frame: Input frame as BGR numpy array
@@ -332,39 +332,37 @@ class SpectrumExtractor:
             angle_from_vertical += 90
         
         detected_angle = float(angle_from_vertical)
-        optimal_y_center = int(round(cy))
+        
+        # Now rotate the frame and find Y center on the rotated image
+        rotation_center = (width // 2, height // 2)
+        rotation_matrix = cv2.getRotationMatrix2D(rotation_center, -detected_angle, 1.0)
+        rotated_gray = cv2.warpAffine(
+            gray, rotation_matrix, (width, height),
+            flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+        )
+        
+        # Find Y center on rotated image by finding the row with maximum intensity
+        row_sums = np.sum(rotated_gray, axis=1)
+        optimal_y_center = int(np.argmax(row_sums))
         
         vis_image = None
         if visualize:
-            vis_image = frame.copy()
+            # Show the ROTATED frame so user can see the corrected result
+            rotated_frame = cv2.warpAffine(
+                frame, rotation_matrix, (width, height),
+                flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+            )
+            vis_image = rotated_frame.copy()
             
-            # Draw gradient strength overlay
-            mag_normalized = (magnitude / magnitude.max() * 255).astype(np.uint8)
-            mag_colored = cv2.applyColorMap(mag_normalized, cv2.COLORMAP_JET)
-            vis_image = cv2.addWeighted(vis_image, 0.6, mag_colored, 0.4, 0)
+            # Draw horizontal line at optimal Y center (cyan)
+            cv2.line(vis_image, (0, optimal_y_center), (width, optimal_y_center), (255, 255, 0), 2)
             
-            # Draw centroid
-            cv2.circle(vis_image, (int(cx), int(cy)), 8, (255, 255, 255), 2)
-            
-            # Draw horizontal line at optimal Y center
-            cv2.line(vis_image, (0, optimal_y_center), (width, optimal_y_center), (255, 0, 255), 2)
-            
-            # Draw principal axis (should align with vertical stripes)
-            line_len = min(width, height) // 2
-            vx, vy = principal_vec
-            x1 = int(cx - line_len * vx)
-            y1 = int(cy - line_len * vy)
-            x2 = int(cx + line_len * vx)
-            y2 = int(cy + line_len * vy)
-            cv2.line(vis_image, (x1, y1), (x2, y2), (0, 255, 0), 3)
-            
-            # Draw what horizontal should be after correction
-            corr_angle_rad = np.radians(detected_angle)
-            hx1 = int(cx - line_len * np.cos(corr_angle_rad))
-            hy1 = int(cy - line_len * np.sin(corr_angle_rad))
-            hx2 = int(cx + line_len * np.cos(corr_angle_rad))
-            hy2 = int(cy + line_len * np.sin(corr_angle_rad))
-            cv2.line(vis_image, (hx1, hy1), (hx2, hy2), (0, 0, 255), 2)
+            # Draw sampling region bounds (yellow)
+            half_perp = self.perpendicular_width // 2
+            y_top = max(0, optimal_y_center - half_perp)
+            y_bottom = min(height - 1, optimal_y_center + half_perp)
+            cv2.line(vis_image, (0, y_top), (width, y_top), (0, 255, 255), 1)
+            cv2.line(vis_image, (0, y_bottom), (width, y_bottom), (0, 255, 255), 1)
             
             cv2.putText(
                 vis_image,
