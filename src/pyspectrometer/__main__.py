@@ -45,13 +45,20 @@ Keyboard Shortcuts:
   u/j   Increase/decrease threshold
   t/g   Increase/decrease camera gain
 
+Operating Modes:
+  calibration    - Wavelength calibration with reference spectra
+  measurement    - General spectrum measurement (default)
+  raman          - Raman spectroscopy with wavenumber display
+  colorscience   - Transmittance/reflectance/CRI analysis
+
 Examples:
-  pyspectrometer                    # Normal windowed mode (800x480)
-  pyspectrometer --fullscreen       # Fullscreen mode
-  pyspectrometer --waterfall        # With waterfall display
-  pyspectrometer --waveshare        # Waveshare 3.5" display (640x480)
-  pyspectrometer --waveshare --fullscreen  # Waveshare fullscreen
-  pyspectrometer --gain 15          # Custom camera gain
+  pyspectrometer                            # Measurement mode (default)
+  pyspectrometer --mode calibration         # Calibration mode
+  pyspectrometer --mode raman --laser 785   # Raman with 785nm laser
+  pyspectrometer --mode colorscience        # Color science mode
+  pyspectrometer --waveshare --mode measurement  # Waveshare display
+  pyspectrometer --fullscreen               # Fullscreen mode
+  pyspectrometer --gain 15                  # Custom camera gain
 """,
     )
     
@@ -98,6 +105,23 @@ Examples:
     )
     
     parser.add_argument(
+        "--mode",
+        type=str,
+        default="measurement",
+        choices=["calibration", "measurement", "raman", "colorscience"],
+        metavar="MODE",
+        help="Operating mode: calibration, measurement, raman, colorscience (default: measurement)",
+    )
+    
+    parser.add_argument(
+        "--laser",
+        type=float,
+        default=785.0,
+        metavar="NM",
+        help="Raman laser wavelength in nm (default: 785)",
+    )
+    
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s 3.0.0",
@@ -110,12 +134,23 @@ def main() -> int:
     """Main entry point for PySpectrometer 3."""
     args = parse_args()
     
+    mode_names = {
+        "calibration": "Calibration",
+        "measurement": "Measurement",
+        "raman": "Raman",
+        "colorscience": "Color Science",
+    }
+    
+    print(f"PySpectrometer 3 - {mode_names.get(args.mode, args.mode)} Mode")
+    
     if args.waveshare:
         print("Waveshare 3.5\" display mode (640x480)")
     if args.fullscreen:
         print("Fullscreen Spectrometer enabled")
     if args.waterfall:
         print("Waterfall display enabled")
+    if args.mode == "raman":
+        print(f"Raman laser wavelength: {args.laser} nm")
     
     config = Config.from_args(
         fullscreen=args.fullscreen,
@@ -127,7 +162,7 @@ def main() -> int:
     )
     
     try:
-        spectrometer = Spectrometer(config)
+        spectrometer = Spectrometer(config, mode=args.mode, laser_nm=args.laser)
         spectrometer.run()
         return 0
     except KeyboardInterrupt:
@@ -135,6 +170,8 @@ def main() -> int:
         return 130
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
         return 1
 
 

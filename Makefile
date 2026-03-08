@@ -20,7 +20,8 @@ endif
 .PHONY: all install install-deps install-system-deps install-desktop \
         install-waveshare install-waveshare-fullscreen \
         install-waveshare-link install-waveshare-fullscreen-link \
-        uninstall run run-fullscreen run-waterfall run-waveshare \
+        install-link uninstall run run-fullscreen run-waterfall run-waveshare \
+        run-calibration run-measurement run-raman run-colorscience \
         clean help venv
 
 all: help
@@ -108,6 +109,110 @@ install-waveshare-fullscreen-link: create-waveshare-fullscreen-script
 	@chmod +x $(DESKTOP_DIR)/PySpectrometer3-Waveshare-FS.sh
 	@echo "Desktop symlink created at $(DESKTOP_DIR)/PySpectrometer3-Waveshare-FS.sh"
 
+## Mode-specific installation (install-link)
+## Creates executable scripts and desktop files for each mode
+
+install-link: create-icon create-mode-scripts create-mode-desktop-files
+	@echo ""
+	@echo "=============================================="
+	@echo "Mode-specific launchers installed!"
+	@echo "=============================================="
+	@echo ""
+	@echo "Desktop shortcuts created:"
+	@echo "  - PySpec-Calibration"
+	@echo "  - PySpec-Measurement (default)"
+	@echo "  - PySpec-Raman"
+	@echo "  - PySpec-ColorScience"
+	@echo ""
+	@echo "Executable scripts in $(DESKTOP_DIR)/:"
+	@echo "  - pyspec-calibration.sh"
+	@echo "  - pyspec-measurement.sh"
+	@echo "  - pyspec-raman.sh"
+	@echo "  - pyspec-colorscience.sh"
+	@echo ""
+
+create-mode-scripts:
+	@echo "Creating mode-specific run scripts..."
+	@# Calibration mode
+	@echo '#!/bin/bash' > pyspec-calibration.sh
+	@echo '# PySpectrometer3 - Calibration Mode' >> pyspec-calibration.sh
+	@echo 'cd "$(shell pwd)"' >> pyspec-calibration.sh
+	@echo 'export DISPLAY=:0' >> pyspec-calibration.sh
+	@echo '$(PYTHON) -m $(PACKAGE) --waveshare --mode calibration "$$@"' >> pyspec-calibration.sh
+	@chmod +x pyspec-calibration.sh
+	@# Measurement mode
+	@echo '#!/bin/bash' > pyspec-measurement.sh
+	@echo '# PySpectrometer3 - Measurement Mode' >> pyspec-measurement.sh
+	@echo 'cd "$(shell pwd)"' >> pyspec-measurement.sh
+	@echo 'export DISPLAY=:0' >> pyspec-measurement.sh
+	@echo '$(PYTHON) -m $(PACKAGE) --waveshare --mode measurement "$$@"' >> pyspec-measurement.sh
+	@chmod +x pyspec-measurement.sh
+	@# Raman mode
+	@echo '#!/bin/bash' > pyspec-raman.sh
+	@echo '# PySpectrometer3 - Raman Mode' >> pyspec-raman.sh
+	@echo 'cd "$(shell pwd)"' >> pyspec-raman.sh
+	@echo 'export DISPLAY=:0' >> pyspec-raman.sh
+	@echo '$(PYTHON) -m $(PACKAGE) --waveshare --mode raman "$$@"' >> pyspec-raman.sh
+	@chmod +x pyspec-raman.sh
+	@# Color Science mode
+	@echo '#!/bin/bash' > pyspec-colorscience.sh
+	@echo '# PySpectrometer3 - Color Science Mode' >> pyspec-colorscience.sh
+	@echo 'cd "$(shell pwd)"' >> pyspec-colorscience.sh
+	@echo 'export DISPLAY=:0' >> pyspec-colorscience.sh
+	@echo '$(PYTHON) -m $(PACKAGE) --waveshare --mode colorscience "$$@"' >> pyspec-colorscience.sh
+	@chmod +x pyspec-colorscience.sh
+	@echo "Mode scripts created."
+
+create-mode-desktop-files:
+	@echo "Creating mode-specific desktop files..."
+	@mkdir -p $(DESKTOP_DIR)
+	@# Calibration desktop file
+	@echo "[Desktop Entry]" > $(DESKTOP_DIR)/PySpec-Calibration.desktop
+	@echo "Name=PySpec-Calibration" >> $(DESKTOP_DIR)/PySpec-Calibration.desktop
+	@echo "Comment=PySpectrometer3 Calibration Mode" >> $(DESKTOP_DIR)/PySpec-Calibration.desktop
+	@echo "Exec=$(shell pwd)/pyspec-calibration.sh" >> $(DESKTOP_DIR)/PySpec-Calibration.desktop
+	@echo "Icon=$(shell pwd)/$(SRC_DIR)/resources/$(ICON_FILE)" >> $(DESKTOP_DIR)/PySpec-Calibration.desktop
+	@echo "Terminal=false" >> $(DESKTOP_DIR)/PySpec-Calibration.desktop
+	@echo "Type=Application" >> $(DESKTOP_DIR)/PySpec-Calibration.desktop
+	@echo "Categories=Science;Education;" >> $(DESKTOP_DIR)/PySpec-Calibration.desktop
+	@chmod +x $(DESKTOP_DIR)/PySpec-Calibration.desktop
+	@# Measurement desktop file (default)
+	@echo "[Desktop Entry]" > $(DESKTOP_DIR)/PySpec-Measurement.desktop
+	@echo "Name=PySpec-Measurement" >> $(DESKTOP_DIR)/PySpec-Measurement.desktop
+	@echo "Comment=PySpectrometer3 Measurement Mode (Default)" >> $(DESKTOP_DIR)/PySpec-Measurement.desktop
+	@echo "Exec=$(shell pwd)/pyspec-measurement.sh" >> $(DESKTOP_DIR)/PySpec-Measurement.desktop
+	@echo "Icon=$(shell pwd)/$(SRC_DIR)/resources/$(ICON_FILE)" >> $(DESKTOP_DIR)/PySpec-Measurement.desktop
+	@echo "Terminal=false" >> $(DESKTOP_DIR)/PySpec-Measurement.desktop
+	@echo "Type=Application" >> $(DESKTOP_DIR)/PySpec-Measurement.desktop
+	@echo "Categories=Science;Education;" >> $(DESKTOP_DIR)/PySpec-Measurement.desktop
+	@chmod +x $(DESKTOP_DIR)/PySpec-Measurement.desktop
+	@# Raman desktop file
+	@echo "[Desktop Entry]" > $(DESKTOP_DIR)/PySpec-Raman.desktop
+	@echo "Name=PySpec-Raman" >> $(DESKTOP_DIR)/PySpec-Raman.desktop
+	@echo "Comment=PySpectrometer3 Raman Mode" >> $(DESKTOP_DIR)/PySpec-Raman.desktop
+	@echo "Exec=$(shell pwd)/pyspec-raman.sh" >> $(DESKTOP_DIR)/PySpec-Raman.desktop
+	@echo "Icon=$(shell pwd)/$(SRC_DIR)/resources/$(ICON_FILE)" >> $(DESKTOP_DIR)/PySpec-Raman.desktop
+	@echo "Terminal=false" >> $(DESKTOP_DIR)/PySpec-Raman.desktop
+	@echo "Type=Application" >> $(DESKTOP_DIR)/PySpec-Raman.desktop
+	@echo "Categories=Science;Education;" >> $(DESKTOP_DIR)/PySpec-Raman.desktop
+	@chmod +x $(DESKTOP_DIR)/PySpec-Raman.desktop
+	@# Color Science desktop file
+	@echo "[Desktop Entry]" > $(DESKTOP_DIR)/PySpec-ColorScience.desktop
+	@echo "Name=PySpec-ColorScience" >> $(DESKTOP_DIR)/PySpec-ColorScience.desktop
+	@echo "Comment=PySpectrometer3 Color Science Mode" >> $(DESKTOP_DIR)/PySpec-ColorScience.desktop
+	@echo "Exec=$(shell pwd)/pyspec-colorscience.sh" >> $(DESKTOP_DIR)/PySpec-ColorScience.desktop
+	@echo "Icon=$(shell pwd)/$(SRC_DIR)/resources/$(ICON_FILE)" >> $(DESKTOP_DIR)/PySpec-ColorScience.desktop
+	@echo "Terminal=false" >> $(DESKTOP_DIR)/PySpec-ColorScience.desktop
+	@echo "Type=Application" >> $(DESKTOP_DIR)/PySpec-ColorScience.desktop
+	@echo "Categories=Science;Education;" >> $(DESKTOP_DIR)/PySpec-ColorScience.desktop
+	@chmod +x $(DESKTOP_DIR)/PySpec-ColorScience.desktop
+	@# Copy scripts to desktop for easy access
+	@ln -sf $(shell pwd)/pyspec-calibration.sh $(DESKTOP_DIR)/pyspec-calibration.sh
+	@ln -sf $(shell pwd)/pyspec-measurement.sh $(DESKTOP_DIR)/pyspec-measurement.sh
+	@ln -sf $(shell pwd)/pyspec-raman.sh $(DESKTOP_DIR)/pyspec-raman.sh
+	@ln -sf $(shell pwd)/pyspec-colorscience.sh $(DESKTOP_DIR)/pyspec-colorscience.sh
+	@echo "Desktop files created."
+
 create-icon:
 	@echo "Creating application icon..."
 	@mkdir -p $(SRC_DIR)/resources
@@ -149,7 +254,16 @@ uninstall:
 	@rm -f $(DESKTOP_DIR)/PySpectrometer3-Waveshare-FS.desktop
 	@rm -f $(DESKTOP_DIR)/PySpectrometer3-Waveshare.sh
 	@rm -f $(DESKTOP_DIR)/PySpectrometer3-Waveshare-FS.sh
+	@rm -f $(DESKTOP_DIR)/PySpec-Calibration.desktop
+	@rm -f $(DESKTOP_DIR)/PySpec-Measurement.desktop
+	@rm -f $(DESKTOP_DIR)/PySpec-Raman.desktop
+	@rm -f $(DESKTOP_DIR)/PySpec-ColorScience.desktop
+	@rm -f $(DESKTOP_DIR)/pyspec-calibration.sh
+	@rm -f $(DESKTOP_DIR)/pyspec-measurement.sh
+	@rm -f $(DESKTOP_DIR)/pyspec-raman.sh
+	@rm -f $(DESKTOP_DIR)/pyspec-colorscience.sh
 	@rm -f run.sh run-waveshare.sh run-waveshare-fullscreen.sh
+	@rm -f pyspec-calibration.sh pyspec-measurement.sh pyspec-raman.sh pyspec-colorscience.sh
 	@echo "Uninstall complete. Dependencies not removed."
 
 ## Run targets
@@ -173,6 +287,24 @@ run-waveshare: create-waveshare-script
 run-waveshare-fullscreen: create-waveshare-script
 	@echo "Starting PySpectrometer3 for Waveshare 3.5\" display (fullscreen)..."
 	cd $(SRC_DIR) && $(PYTHON) -m $(PACKAGE) --waveshare --fullscreen
+
+## Mode-specific run targets
+
+run-calibration:
+	@echo "Starting PySpectrometer3 in Calibration mode..."
+	cd $(SRC_DIR) && $(PYTHON) -m $(PACKAGE) --waveshare --mode calibration
+
+run-measurement:
+	@echo "Starting PySpectrometer3 in Measurement mode..."
+	cd $(SRC_DIR) && $(PYTHON) -m $(PACKAGE) --waveshare --mode measurement
+
+run-raman:
+	@echo "Starting PySpectrometer3 in Raman mode..."
+	cd $(SRC_DIR) && $(PYTHON) -m $(PACKAGE) --waveshare --mode raman
+
+run-colorscience:
+	@echo "Starting PySpectrometer3 in Color Science mode..."
+	cd $(SRC_DIR) && $(PYTHON) -m $(PACKAGE) --waveshare --mode colorscience
 
 ## Development targets
 
@@ -214,16 +346,21 @@ help:
 	@echo "  make install-desktop           - Create standard desktop shortcut (800x480)"
 	@echo "  make install-waveshare         - Create Waveshare 3.5\" desktop shortcut"
 	@echo "  make install-waveshare-fullscreen - Create Waveshare fullscreen shortcut"
-	@echo "  make install-waveshare-link    - Create Waveshare desktop symlink"
-	@echo "  make install-waveshare-fullscreen-link - Create Waveshare fullscreen symlink"
+	@echo "  make install-link              - Create mode-specific desktop shortcuts (RECOMMENDED)"
 	@echo "  make uninstall                 - Remove all desktop shortcuts"
 	@echo ""
-	@echo "Running:"
+	@echo "Running (General):"
 	@echo "  make run                       - Run in windowed mode (800x480)"
 	@echo "  make run-fullscreen            - Run in fullscreen mode"
 	@echo "  make run-waterfall             - Run with waterfall display"
 	@echo "  make run-waveshare             - Run for Waveshare 3.5\" display (640x480)"
 	@echo "  make run-waveshare-fullscreen  - Run fullscreen on Waveshare 3.5\""
+	@echo ""
+	@echo "Running (Modes):"
+	@echo "  make run-calibration           - Run Calibration mode"
+	@echo "  make run-measurement           - Run Measurement mode"
+	@echo "  make run-raman                 - Run Raman mode"
+	@echo "  make run-colorscience          - Run Color Science mode"
 	@echo ""
 	@echo "Development:"
 	@echo "  make venv                      - Create virtual environment"
@@ -231,6 +368,12 @@ help:
 	@echo "  make typecheck                 - Run type checker"
 	@echo "  make test                      - Run tests"
 	@echo "  make clean                     - Remove cached files"
+	@echo ""
+	@echo "Operating Modes:"
+	@echo "  Calibration    - Wavelength calibration with FL/Hg/Sun references"
+	@echo "  Measurement    - General spectrum measurement"
+	@echo "  Raman          - Raman spectroscopy (785nm laser)"
+	@echo "  ColorScience   - Transmittance/Reflectance/CRI/XYZ"
 	@echo ""
 	@echo "Display Modes:"
 	@echo "  Default (800x480)              - Standard RPi LCD"

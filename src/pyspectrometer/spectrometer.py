@@ -28,18 +28,27 @@ class Spectrometer:
     input, export) and manages the main application loop.
     """
     
+    # Valid operating modes
+    VALID_MODES = ("calibration", "measurement", "raman", "colorscience")
+    
     def __init__(
         self,
         config: Optional[Config] = None,
         camera: Optional[CameraInterface] = None,
+        mode: str = "measurement",
+        laser_nm: float = 785.0,
     ):
         """Initialize spectrometer application.
         
         Args:
             config: Application configuration (uses defaults if None)
             camera: Camera backend (creates PicameraCapture if None)
+            mode: Operating mode (calibration, measurement, raman, colorscience)
+            laser_nm: Raman laser wavelength in nm (for raman mode)
         """
         self.config = config or Config()
+        self.mode = mode if mode in self.VALID_MODES else "measurement"
+        self.laser_nm = laser_nm
         
         self._camera = camera or PicameraCapture(
             width=self.config.camera.frame_width,
@@ -356,7 +365,13 @@ class Spectrometer:
     
     def run(self) -> None:
         """Run the main spectrometer application loop."""
-        print("Starting PySpectrometer 3...")
+        mode_names = {
+            "calibration": "Calibration",
+            "measurement": "Measurement",
+            "raman": "Raman",
+            "colorscience": "Color Science",
+        }
+        print(f"Starting PySpectrometer 3 - {mode_names.get(self.mode, self.mode)} Mode...")
         print(self._keyboard.get_help_text())
         print()
         
