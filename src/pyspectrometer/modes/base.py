@@ -1,10 +1,13 @@
 """Base class for operating modes."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 import numpy as np
+
+if TYPE_CHECKING:
+    from ..core.mode_context import ModeContext
 
 
 class ModeType(Enum):
@@ -66,6 +69,7 @@ class BaseMode(ABC):
         """Initialize base mode."""
         self.state = ModeState()
         self._callbacks: dict[str, Callable[[], None]] = {}
+        self._ctx: Optional["ModeContext"] = None
     
     @property
     @abstractmethod
@@ -122,10 +126,81 @@ class BaseMode(ABC):
         """
         pass
     
+    def setup(self, ctx: "ModeContext") -> None:
+        """Register handlers using the given context. Subclasses override to add mode-specific handlers."""
+        self._ctx = ctx
+        self._register_common_handlers()
+
+    def _register_common_handlers(self) -> None:
+        """Register handlers for buttons common to all modes."""
+        ctx = self._ctx
+        if ctx is None:
+            return
+        self.register_callback("quit", ctx.quit_app)
+        self.register_callback("capture_peak", lambda: self._on_toggle_hold())
+        self.register_callback("cycle_preview", lambda: ctx.display.cycle_preview_mode())
+        self.register_callback("show_gain_slider", lambda: self._on_toggle_gain_slider())
+        self.register_callback("show_exposure_slider", lambda: self._on_toggle_exposure_slider())
+        self.register_callback("auto_gain", lambda: self._on_toggle_auto_gain())
+        self.register_callback("auto_exposure", lambda: self._on_toggle_auto_exposure())
+        ctx.display.register_slider_callbacks(
+            gain_cb=lambda v: setattr(ctx.camera, "gain", v),
+            exposure_cb=lambda v: setattr(ctx.camera, "exposure", int(v)),
+        )
+        ctx.display.set_gain_value(ctx.camera.gain)
+        ctx.display.set_exposure_value(getattr(ctx.camera, "exposure", 10000))
+
+    def _on_toggle_hold(self) -> None:
+        """Toggle peak hold."""
+        ctx = self._ctx
+        if ctx is None:
+            return
+        ctx.display.state.hold_peaks = not ctx.display.state.hold_peaks
+        ctx.display.set_button_active("capture_peak", ctx.display.state.hold_peaks)
+        if not ctx.display.state.hold_peaks:
+            ctx.held_intensity = None
+        print(f"[HOLD] Peak hold {'ON' if ctx.display.state.hold_peaks else 'OFF'}")
+
+    def _on_toggle_gain_slider(self) -> None:
+        """Toggle gain slider visibility."""
+        ctx = self._ctx
+        if ctx is None:
+            return
+        visible = ctx.display.toggle_gain_slider()
+        ctx.display.set_button_active("show_gain_slider", visible)
+        print(f"[GAIN] Gain slider: {'VISIBLE' if visible else 'HIDDEN'}")
+
+    def _on_toggle_exposure_slider(self) -> None:
+        """Toggle exposure slider visibility."""
+        ctx = self._ctx
+        if ctx is None:
+            return
+        visible = ctx.display.toggle_exposure_slider()
+        ctx.display.set_button_active("show_exposure_slider", visible)
+        print(f"[EXPOSURE] Exposure slider: {'VISIBLE' if visible else 'HIDDEN'}")
+
+    def _on_toggle_auto_gain(self) -> None:
+        """Toggle auto gain."""
+        ctx = self._ctx
+        if ctx is None:
+            return
+        ctx.auto_gain_enabled = not ctx.auto_gain_enabled
+        ctx.display.set_button_active("auto_gain", ctx.auto_gain_enabled)
+        print(f"[AUTO_GAIN] Auto gain: {'ON' if ctx.auto_gain_enabled else 'OFF'}")
+
+    def _on_toggle_auto_exposure(self) -> None:
+        """Toggle auto exposure."""
+        ctx = self._ctx
+        if ctx is None:
+            return
+        ctx.auto_exposure_enabled = not ctx.auto_exposure_enabled
+        ctx.display.set_button_active("auto_exposure", ctx.auto_exposure_enabled)
+        print(f"[AUTO_EXPOSURE] Auto exposure: {'ON' if ctx.auto_exposure_enabled else 'OFF'}")
+
     def register_callback(self, action_name: str, callback: Callable[[], None]) -> None:
         """Register a callback for a button action."""
         self._callbacks[action_name] = callback
-    
+
     def handle_action(self, action_name: str) -> bool:
         """Handle a button action.
         

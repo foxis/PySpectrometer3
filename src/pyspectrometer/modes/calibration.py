@@ -20,6 +20,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 from .base import BaseMode, ModeType, ButtonDefinition
+from ..core.mode_context import ModeContext
 from ..utils.graph_scale import scale_intensity_to_graph
 from ..data.reference_spectra import (
     ReferenceSource,
@@ -90,13 +91,174 @@ class CalibrationMode(BaseMode):
         self._cmos_sensitivity_val: Optional[np.ndarray] = None
         self._load_cmos_sensitivity()
         
-        # Callbacks to be set by spectrometer
-        self._on_save_calibration: Optional[Callable[[], None]] = None
-        self._on_load_calibration: Optional[Callable[[], None]] = None
-        self._on_auto_calibrate: Optional[Callable[[list[tuple[int, float]]], None]] = None
-        self._on_gain_change: Optional[Callable[[float], None]] = None
-        self._on_y_shift_change: Optional[Callable[[int], None]] = None
-    
+    def setup(self, ctx: ModeContext) -> None:
+        """Register calibration-specific handlers."""
+        super().setup(ctx)
+        self._register_calibration_handlers(ctx)
+
+    def _register_calibration_handlers(self, ctx: ModeContext) -> None:
+        """Register calibration mode button handlers."""
+        for src in self.SOURCES:
+            name = f"source_{src.name.lower()}"
+            self.register_callback(name, lambda s=src: self._on_select_source(ctx, s))
+        self.register_callback("toggle_overlay", lambda: self._on_toggle_overlay(ctx))
+        self.register_callback("toggle_sensitivity", lambda: self._on_toggle_sensitivity(ctx))
+        self.register_callback("correct_sensitivity", lambda: self._on_correct_sensitivity(ctx))
+        self.register_callback("auto_level", lambda: self._on_auto_level(ctx))
+        self.register_callback("auto_calibrate", lambda: self._on_auto_calibrate(ctx))
+        self.register_callback("reset_calibration", lambda: self._on_reset_calibration(ctx))
+        self.register_callback("save_cal", lambda: self._on_save_calibration(ctx))
+        self.register_callback("save_spectrum", lambda: self._on_button_save(ctx))
+        self.register_callback("load_cal", lambda: self._on_load_calibration(ctx))
+        self.register_callback("freeze", lambda: self._on_toggle_freeze(ctx))
+        self.register_callback("toggle_averaging", lambda: self._on_toggle_averaging(ctx))
+        self.register_callback("clear_points", lambda: self._on_clear_points(ctx))
+        ctx.display.set_button_active("toggle_overlay", self.cal_state.overlay_visible)
+        ctx.display.set_button_active("toggle_sensitivity", self.cal_state.sensitivity_correction_enabled)
+        ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
+
+    def _on_select_source(self, ctx: ModeContext, source: ReferenceSource) -> None:
+        """Handle reference source selection."""
+        self.select_source(source)
+        for s in ReferenceSource:
+            ctx.display.set_button_active(f"source_{s.name.lower()}", source == s)
+
+    def _on_toggle_overlay(self, ctx: ModeContext) -> None:
+        """Toggle reference overlay visibility."""
+        visible = self.toggle_overlay()
+        ctx.display.set_button_active("toggle_overlay", visible)
+
+    def _on_toggle_sensitivity(self, ctx: ModeContext) -> None:
+        """Toggle CMOS sensitivity correction."""
+        enabled = self.toggle_sensitivity_correction()
+        ctx.display.set_button_active("toggle_sensitivity", enabled)
+
+    def _on_correct_sensitivity(self, ctx: ModeContext) -> None:
+        """Handle CORR button - placeholder for future sensitivity curve correction."""
+        print("[CORR] Correct sensitivity curve (placeholder, noop)")
+
+    def _on_auto_level(self, ctx: ModeContext) -> None:
+        """Handle auto-level - detect rotation and Y center."""
+        if ctx.last_frame is None:
+            print("[AutoLevel] No frame available for angle detection")
+            return
+        angle, y_center, vis_image = ctx.extractor.detect_angle(ctx.last_frame, visualize=True)
+        ctx.extractor.set_rotation_angle(angle)
+        ctx.extractor.set_spectrum_y_center(y_center)
+        print(f"[AutoLevel] Rotation: {angle:.2f}°  Y Center: {y_center}")
+        if vis_image is not None:
+            ctx.display.set_autolevel_overlay(vis_image)
+            ctx.display.set_autolevel_click_dismiss(ctx.clear_autolevel_overlay)
+            print("[AutoLevel] Click to close overlay")
+
+    def _on_auto_calibrate(self, ctx: ModeContext) -> None:
+        """Handle auto-calibrate action."""
+        import time
+        if ctx.last_data is None:
+            print("[CAL] No data available for calibration")
+            return
+        now = time.monotonic()
+        if now - ctx.last_auto_calibrate_time < ctx.auto_calibrate_debounce_sec:
+            return
+        ctx.last_auto_calibrate_time = now
+        if not ctx.frozen_spectrum:
+            print("[CAL] Freeze spectrum first (Play button), then click AutoCal")
+            return
+        measured = (
+            ctx.last_intensity_pre_sensitivity
+            if (
+                self.cal_state.sensitivity_correction_enabled
+                and ctx.last_intensity_pre_sensitivity is not None
+                and len(ctx.last_intensity_pre_sensitivity) == len(ctx.last_data.intensity)
+            )
+            else ctx.last_data.intensity
+        )
+        cal_points = self.auto_calibrate(
+            measured_intensity=measured,
+            wavelengths=ctx.last_data.wavelengths,
+            peak_indices=ctx.last_data.peaks,
+        )
+        if len(cal_points) >= 3:
+            print(f"[CAL] Auto-calibration found {len(cal_points)} points (4+ preferred)")
+            pixels = [p for p, w in cal_points]
+            wavelengths = [w for p, w in cal_points]
+            ctx.calibration.recalibrate(pixels, wavelengths)
+        else:
+            print("[CAL] Auto-calibration failed to find enough matches")
+
+    def _on_reset_calibration(self, ctx: ModeContext) -> None:
+        """Reset calibration to linear 1:1 pixels to spectrum."""
+        n = ctx.calibration.width
+        wl_min, wl_max = 380.0, 750.0
+        pixels = [0, n // 4, n // 2, 3 * n // 4, n - 1]
+        wavelengths = [wl_min + (wl_max - wl_min) * p / max(n - 1, 1) for p in pixels]
+        ctx.calibration.recalibrate(pixels, wavelengths)
+        self.cal_state.calibration_points = list(zip(pixels, wavelengths))
+        print(f"[R] Calibration reset to linear 1:1: {wl_min:.0f}-{wl_max:.0f} nm over {n} pixels")
+
+    def _on_save_calibration(self, ctx: ModeContext) -> None:
+        """Save calibration and extraction params."""
+        cal_points = self.get_calibration_points()
+        if len(cal_points) < 4:
+            pixels = ctx.calibration.cal_pixels
+            wavelengths = ctx.calibration.cal_wavelengths
+        else:
+            pixels = [p for p, w in cal_points]
+            wavelengths = [w for p, w in cal_points]
+        saved = False
+        if len(pixels) >= 4:
+            if ctx.calibration.save(pixels, wavelengths):
+                print(f"[CAL] Wavelength calibration saved ({len(pixels)} points)")
+                saved = True
+        ctx.calibration.save_extraction_params(
+            rotation_angle=ctx.extractor.rotation_angle,
+            spectrum_y_center=ctx.extractor.spectrum_y_center,
+            perpendicular_width=ctx.extractor.perpendicular_width,
+        )
+        print(f"[CAL] Extraction params saved")
+        if not saved:
+            print("[CAL] Need at least 4 calibration points to save wavelength cal")
+
+    def _on_button_save(self, ctx: ModeContext) -> None:
+        """Handle save spectrum button."""
+        if ctx.last_data is not None:
+            ctx.save_snapshot(ctx.last_data)
+        else:
+            print("[SAVE] No spectrum data available")
+
+    def _on_load_calibration(self, ctx: ModeContext) -> None:
+        """Load calibration from file."""
+        if ctx.calibration.load():
+            ctx.extractor.set_rotation_angle(ctx.calibration.rotation_angle)
+            ctx.extractor.set_spectrum_y_center(ctx.calibration.spectrum_y_center)
+            ctx.extractor.set_perpendicular_width(ctx.calibration.perpendicular_width)
+            print(f"[CAL] Calibration loaded")
+        else:
+            print("[CAL] Failed to load calibration")
+
+    def _on_toggle_freeze(self, ctx: ModeContext) -> None:
+        """Toggle spectrum freeze."""
+        frozen = self.toggle_freeze()
+        ctx.frozen_spectrum = frozen
+        if frozen and ctx.last_intensity_pre_sensitivity is not None:
+            ctx.frozen_intensity = ctx.last_intensity_pre_sensitivity.copy()
+        else:
+            ctx.frozen_intensity = None
+        ctx.display.set_button_active("freeze", not frozen)
+        print(f"[FREEZE] Spectrum {'FROZEN' if frozen else 'LIVE'}")
+
+    def _on_toggle_averaging(self, ctx: ModeContext) -> None:
+        """Toggle averaging."""
+        enabled = self.toggle_averaging()
+        ctx.display.set_button_active("toggle_averaging", enabled)
+        print(f"[AVG] Averaging {'ON' if enabled else 'OFF'}")
+
+    def _on_clear_points(self, ctx: ModeContext) -> None:
+        """Clear calibration points."""
+        self.clear_calibration_points()
+        ctx.display.state.click_points.clear()
+        print("[CAL] Points cleared")
+
     @property
     def mode_type(self) -> ModeType:
         return ModeType.CALIBRATION
@@ -140,6 +302,7 @@ class CalibrationMode(BaseMode):
             ButtonDefinition("Save", "save_cal", shortcut="w", row=2),
             ButtonDefinition("CSV", "save_spectrum", shortcut="s", row=2),
             ButtonDefinition("Load", "load_cal", row=2),
+            ButtonDefinition("Quit", "quit", row=2),
             ButtonDefinition("__spacer__", "__spacer_right__", row=2),
         ]
     

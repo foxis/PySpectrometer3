@@ -15,6 +15,7 @@ from typing import Optional, Callable
 import numpy as np
 
 from .base import BaseMode, ModeType, ButtonDefinition
+from ..core.mode_context import ModeContext
 from ..utils.graph_scale import scale_intensity_to_graph
 from ..processing.reference_correction import apply_dark_white_correction
 
@@ -48,11 +49,83 @@ class MeasurementMode(BaseMode):
         """Initialize measurement mode."""
         super().__init__()
         self.meas_state = MeasurementState()
-        
-        # Callbacks to be set by spectrometer
-        self._on_save: Optional[Callable[[], None]] = None
-        self._on_load: Optional[Callable[[], None]] = None
-    
+
+    def setup(self, ctx: ModeContext) -> None:
+        """Register measurement-specific handlers."""
+        super().setup(ctx)
+        self._register_measurement_handlers(ctx)
+
+    def _register_measurement_handlers(self, ctx: ModeContext) -> None:
+        """Register measurement mode button handlers."""
+        self.register_callback("capture", lambda: self._on_capture(ctx))
+        self.register_callback("toggle_averaging", lambda: self._on_toggle_averaging(ctx))
+        self.register_callback("set_dark", lambda: self._on_set_dark(ctx))
+        self.register_callback("set_white", lambda: self._on_set_white(ctx))
+        self.register_callback("clear_refs", lambda: self._on_clear_refs(ctx))
+        self.register_callback("save", lambda: self._on_save(ctx))
+        self.register_callback("load", lambda: self._on_load(ctx))
+        self.register_callback("show_reference", lambda: self._on_toggle_show_reference(ctx))
+        self.register_callback("normalize", lambda: self._on_toggle_normalize(ctx))
+        self.register_callback("lamp_toggle", lambda: self._on_toggle_light(ctx))
+
+    def _on_capture(self, ctx: ModeContext) -> None:
+        """Handle capture current spectrum."""
+        if ctx.last_data is None:
+            print("[CAPTURE] No spectrum data available")
+            return
+        self.capture_current(ctx.last_data.intensity, ctx.last_data.wavelengths)
+        self.set_reference_spectrum(ctx.last_data.intensity, "Captured")
+
+    def _on_toggle_averaging(self, ctx: ModeContext) -> None:
+        """Toggle averaging."""
+        enabled = self.toggle_averaging()
+        ctx.display.set_button_active("toggle_averaging", enabled)
+
+    def _on_set_dark(self, ctx: ModeContext) -> None:
+        """Set dark reference."""
+        if ctx.last_data is None:
+            print("[DARK] No spectrum data available")
+            return
+        self.set_dark_reference(ctx.last_data.intensity)
+
+    def _on_set_white(self, ctx: ModeContext) -> None:
+        """Set white reference."""
+        if ctx.last_data is None:
+            print("[WHITE] No spectrum data available")
+            return
+        self.set_white_reference(ctx.last_data.intensity)
+
+    def _on_clear_refs(self, ctx: ModeContext) -> None:
+        """Clear all references."""
+        self.clear_references()
+        ctx.display.set_button_active("show_reference", False)
+        ctx.display.set_button_active("normalize", False)
+
+    def _on_save(self, ctx: ModeContext) -> None:
+        """Handle save button."""
+        if ctx.last_data is not None:
+            ctx.save_snapshot(ctx.last_data)
+        else:
+            print("[SAVE] No spectrum data available")
+
+    def _on_load(self, ctx: ModeContext) -> None:
+        """Handle load spectrum - placeholder."""
+        print("[LOAD] Load spectrum (file dialog not implemented yet)")
+
+    def _on_toggle_show_reference(self, ctx: ModeContext) -> None:
+        """Toggle reference overlay."""
+        enabled = self.toggle_show_reference()
+        ctx.display.set_button_active("show_reference", enabled)
+
+    def _on_toggle_normalize(self, ctx: ModeContext) -> None:
+        """Toggle normalization to reference."""
+        enabled = self.toggle_normalize()
+        ctx.display.set_button_active("normalize", enabled)
+
+    def _on_toggle_light(self, ctx: ModeContext) -> None:
+        """Toggle light control - placeholder."""
+        print("[LIGHT] Toggle light (GPIO not implemented yet)")
+
     @property
     def mode_type(self) -> ModeType:
         return ModeType.MEASUREMENT
@@ -82,6 +155,7 @@ class MeasurementMode(BaseMode):
             ButtonDefinition("Lamp", "lamp_toggle", is_toggle=True, row=2),
             ButtonDefinition("Save", "save", shortcut="s", row=2),
             ButtonDefinition("Load", "load", row=2),
+            ButtonDefinition("Quit", "quit", row=2),
             ButtonDefinition("__spacer__", "__spacer_right__", row=2),
         ]
     
