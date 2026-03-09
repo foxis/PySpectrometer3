@@ -1,4 +1,4 @@
-"""Vertical slider controls for gain and exposure."""
+"""Vertical slider controls for gain, exposure, and LED intensity (PWM)."""
 
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -230,7 +230,7 @@ class VerticalSlider:
 
 
 class SliderPanel:
-    """Panel containing gain and exposure sliders."""
+    """Panel containing gain, exposure, and LED intensity sliders."""
     
     def __init__(
         self,
@@ -239,7 +239,7 @@ class SliderPanel:
         height: int,
         style: Optional[SliderStyle] = None,
     ):
-        """Initialize slider panel.
+        """Initialize slider panel (gain, exposure, LED intensity).
         
         Args:
             x: X position (right side of display)
@@ -281,12 +281,31 @@ class SliderPanel:
             log_scale=True,
         )
         
-        self._sliders = [self.gain_slider, self.exposure_slider]
+        # LED intensity: 0–100% software PWM duty cycle (Measurement, Color Science)
+        self.led_intensity_slider = VerticalSlider(
+            x=x + self.gain_slider.width + 5 + self.exposure_slider.width + 5,
+            y=y + 15,
+            height=slider_height,
+            min_val=0.0,
+            max_val=100.0,
+            value=100.0,
+            label="LED",
+            style=self.style,
+            log_scale=False,
+        )
+        self.led_intensity_slider.visible = False  # Shown only in Measurement/Color Science
+        
+        self._sliders = [self.gain_slider, self.exposure_slider, self.led_intensity_slider]
     
     @property
     def width(self) -> int:
         """Total width of panel."""
-        return self.gain_slider.width + self.exposure_slider.width + 5
+        return (
+            self.gain_slider.width
+            + self.exposure_slider.width
+            + self.led_intensity_slider.width
+            + 10
+        )
     
     def render(self, image: np.ndarray) -> None:
         """Render all visible sliders."""

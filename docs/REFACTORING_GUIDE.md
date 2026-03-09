@@ -60,12 +60,12 @@ This document is a **task list** for refactoring the codebase to improve **expan
 ### 2.1 Display — hide control bar and slider panel internals
 
 - [x] **2.1.1** `DisplayManager` already exposes `set_status(key, value)`. Spectrometer should use only `display.set_status()`, not `display._control_bar`.
-- [ ] **2.1.2** Spectrometer currently sets `self._display.slider_panel.gain_slider.on_change = ...` and `exposure_slider.on_change = ...`. Add `DisplayManager.register_gain_callback(cb)` and `register_exposure_callback(cb)` (or a single `register_slider_callbacks(gain_cb, exposure_cb)`) and implement them by wiring to the internal slider panel. Spectrometer then calls only these methods; no direct `slider_panel` access from Spectrometer.
-- [ ] **2.1.3** Remove or restrict public `slider_panel` property on `DisplayManager` so external code does not depend on slider internals. Keep `set_gain_value` / `set_exposure_value` and any other display API needed by Spectrometer.
+- [x] **2.1.2** register_slider_callbacks(gain_cb, exposure_cb, led_intensity_cb); LED slider added. — design the API to support gain, exposure, and LED intensity (or a generic “register slider callback by name”.
+- [x] **2.1.3** Public `slider_panel` property removed; external code uses `register_slider_callbacks`, `toggle_*_slider`, `set_*_value`, `show_*_slider`.
 
 ### 2.2 Display interface (optional but recommended)
 
-- [ ] **2.2.1** Define `DisplayInterface` (e.g. in `display/base.py`) with the methods Spectrometer needs: `setup_windows`, `render`, `set_status`, `register_button_callback`, `set_button_active`, `set_gain_value`, `set_exposure_value`, `register_gain_callback` / `register_exposure_callback`, and any other required. Make `DisplayManager` implement this interface. This prepares for dependency injection and testing.
+- [ ] **2.2.1** Define `DisplayInterface` (e.g. in `display/base.py`) with the methods Spectrometer needs: `setup_windows`, `render`, `set_status`, `register_button_callback`, `set_button_active`, `set_gain_value`, `set_exposure_value`, slider registration (gain, exposure, and LED intensity for Measurement/Color Science), and any other required. Make `DisplayManager` implement this interface. This prepares for dependency injection and testing.
 
 ---
 

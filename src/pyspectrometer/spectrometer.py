@@ -194,8 +194,10 @@ class Spectrometer:
         display.register_button_callback("auto_exposure", self._on_toggle_auto_exposure)
         
         # Set up slider change callbacks
-        self._display.slider_panel.gain_slider.on_change = self._on_gain_slider_change
-        self._display.slider_panel.exposure_slider.on_change = self._on_exposure_slider_change
+        self._display.register_slider_callbacks(
+            gain_cb=self._on_gain_slider_change,
+            exposure_cb=self._on_exposure_slider_change,
+        )
         
         # Initialize slider values from camera
         self._display.set_gain_value(self._camera.gain)
@@ -336,17 +338,15 @@ class Spectrometer:
     
     def _on_toggle_gain_slider(self) -> None:
         """Handle toggle gain slider visibility."""
-        slider = self._display.slider_panel.gain_slider
-        slider.visible = not slider.visible
-        self._display.set_button_active("show_gain_slider", slider.visible)
-        print(f"[GAIN] Gain slider: {'VISIBLE' if slider.visible else 'HIDDEN'}")
+        visible = self._display.toggle_gain_slider()
+        self._display.set_button_active("show_gain_slider", visible)
+        print(f"[GAIN] Gain slider: {'VISIBLE' if visible else 'HIDDEN'}")
     
     def _on_toggle_exposure_slider(self) -> None:
         """Handle toggle exposure slider visibility."""
-        slider = self._display.slider_panel.exposure_slider
-        slider.visible = not slider.visible
-        self._display.set_button_active("show_exposure_slider", slider.visible)
-        print(f"[EXPOSURE] Exposure slider: {'VISIBLE' if slider.visible else 'HIDDEN'}")
+        visible = self._display.toggle_exposure_slider()
+        self._display.set_button_active("show_exposure_slider", visible)
+        print(f"[EXPOSURE] Exposure slider: {'VISIBLE' if visible else 'HIDDEN'}")
     
     def _on_gain_slider_change(self, value: float) -> None:
         """Handle gain slider value change."""

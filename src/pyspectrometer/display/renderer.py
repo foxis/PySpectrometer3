@@ -97,9 +97,9 @@ class DisplayManager:
             mode=mode,
         )
         
-        # Slider panel for gain/exposure (positioned on right side of graph area)
-        # Need room for two sliders side by side: ~110 pixels total
-        slider_x = config.camera.frame_width - 115
+        # Slider panel for gain/exposure/LED (positioned on right side of graph area)
+        # Need room for three sliders: gain, exposure, LED intensity (~165 px total)
+        slider_x = config.camera.frame_width - 170
         slider_y = config.display.message_height + config.display.preview_height + 10
         slider_height = config.display.graph_height - 30
         self._slider_panel = SliderPanel(
@@ -804,10 +804,43 @@ class DisplayManager:
         """Get the control bar instance."""
         return self._control_bar
     
-    @property
-    def slider_panel(self) -> SliderPanel:
-        """Get the slider panel instance."""
-        return self._slider_panel
+    def register_slider_callbacks(
+        self,
+        gain_cb: Optional[Callable[[float], None]] = None,
+        exposure_cb: Optional[Callable[[float], None]] = None,
+        led_intensity_cb: Optional[Callable[[float], None]] = None,
+    ) -> None:
+        """Register callbacks for slider value changes.
+
+        Args:
+            gain_cb: Called when gain slider value changes
+            exposure_cb: Called when exposure slider value changes
+            led_intensity_cb: Called when LED intensity slider value changes (Measurement, Color Science)
+        """
+        if gain_cb is not None:
+            self._slider_panel.gain_slider.on_change = gain_cb
+        if exposure_cb is not None:
+            self._slider_panel.exposure_slider.on_change = exposure_cb
+        if led_intensity_cb is not None:
+            self._slider_panel.led_intensity_slider.on_change = led_intensity_cb
+    
+    def toggle_gain_slider(self) -> bool:
+        """Toggle gain slider visibility. Returns new visibility state."""
+        s = self._slider_panel.gain_slider
+        s.visible = not s.visible
+        return s.visible
+    
+    def toggle_exposure_slider(self) -> bool:
+        """Toggle exposure slider visibility. Returns new visibility state."""
+        s = self._slider_panel.exposure_slider
+        s.visible = not s.visible
+        return s.visible
+    
+    def toggle_led_slider(self) -> bool:
+        """Toggle LED intensity slider visibility. Returns new visibility state."""
+        s = self._slider_panel.led_intensity_slider
+        s.visible = not s.visible
+        return s.visible
     
     def show_gain_slider(self, visible: bool) -> None:
         """Show or hide the gain slider."""
@@ -817,6 +850,10 @@ class DisplayManager:
         """Show or hide the exposure slider."""
         self._slider_panel.exposure_slider.visible = visible
     
+    def show_led_slider(self, visible: bool) -> None:
+        """Show or hide the LED intensity slider (Measurement, Color Science)."""
+        self._slider_panel.led_intensity_slider.visible = visible
+    
     def set_gain_value(self, value: float) -> None:
         """Set the gain slider value."""
         self._slider_panel.gain_slider.value = value
@@ -824,6 +861,10 @@ class DisplayManager:
     def set_exposure_value(self, value: float) -> None:
         """Set the exposure slider value."""
         self._slider_panel.exposure_slider.value = value
+    
+    def set_led_intensity_value(self, value: float) -> None:
+        """Set the LED intensity slider value (0–100% PWM duty cycle)."""
+        self._slider_panel.led_intensity_slider.value = value
     
     def _render_sliders_on_graph(self, graph: np.ndarray) -> None:
         """Render sliders directly on the graph area."""
@@ -840,17 +881,15 @@ class DisplayManager:
         offset_y = message_height + preview_height
         
         # Temporarily adjust slider positions for graph rendering
-        original_gain_y = panel.gain_slider.y
-        original_exp_y = panel.exposure_slider.y
-        
-        panel.gain_slider.y = panel.gain_slider.y - offset_y
-        panel.exposure_slider.y = panel.exposure_slider.y - offset_y
+        originals = [(s, s.y) for s in panel._sliders]
+        for s, _ in originals:
+            s.y = s.y - offset_y
         
         panel.render(graph)
         
         # Restore original positions for mouse handling
-        panel.gain_slider.y = original_gain_y
-        panel.exposure_slider.y = original_exp_y
+        for s, y_orig in originals:
+            s.y = y_orig
     
     def destroy(self) -> None:
         """Destroy all OpenCV windows."""
