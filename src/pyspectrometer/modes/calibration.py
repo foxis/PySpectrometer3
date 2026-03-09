@@ -403,14 +403,6 @@ class CalibrationMode(BaseMode):
         self.cal_state.current_source = source
         print(f"[Calibration] Selected reference: {get_reference_name(source)}")
 
-    def cycle_source(self) -> ReferenceSource:
-        """Cycle to next reference source."""
-        current_idx = self.SOURCES.index(self.cal_state.current_source)
-        next_idx = (current_idx + 1) % len(self.SOURCES)
-        self.cal_state.current_source = self.SOURCES[next_idx]
-        print(f"[Calibration] Reference: {get_reference_name(self.cal_state.current_source)}")
-        return self.cal_state.current_source
-
     def toggle_overlay(self) -> bool:
         """Toggle reference overlay visibility."""
         self.cal_state.overlay_visible = not self.cal_state.overlay_visible

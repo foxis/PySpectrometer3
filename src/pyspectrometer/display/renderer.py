@@ -187,15 +187,6 @@ class DisplayManager:
         print(f"[PREVIEW] Mode: {self._preview_mode}")
         return self._preview_mode
 
-    def set_preview_mode(self, mode: str) -> None:
-        """Set preview display mode.
-
-        Args:
-            mode: One of "window", "full", "none"
-        """
-        if mode in ("window", "full", "none"):
-            self._preview_mode = mode
-
     def set_autolevel_overlay(self, img: np.ndarray | None) -> None:
         """Set autolevel overlay image (None to clear). Non-blocking."""
         self._autolevel_overlay = img
@@ -577,28 +568,6 @@ class DisplayManager:
                 (0, 0, 0),
             )
 
-    def _draw_sampling_lines(
-        self,
-        cropped: np.ndarray,
-        rotation_angle: float = 0.0,
-        perp_width: int = 20,
-    ) -> None:
-        """Draw sampling region indicator lines on cropped preview.
-
-        Since the image is already rotated to straighten the spectrum,
-        we only draw simple horizontal lines showing the sampling bounds.
-        """
-        width = cropped.shape[1]
-        rows = cropped.shape[0]
-        halfway = rows // 2
-        half_perp = perp_width // 2
-
-        # Draw horizontal lines at sampling bounds (image is already rotated)
-        y_top = max(0, halfway - half_perp)
-        y_bottom = min(rows - 1, halfway + half_perp)
-        cv2.line(cropped, (0, y_top), (width, y_top), (0, 255, 255), 1)
-        cv2.line(cropped, (0, y_bottom), (width, y_bottom), (0, 255, 255), 1)
-
     def _draw_rotated_crop_box(
         self,
         frame: np.ndarray,
@@ -643,47 +612,6 @@ class DisplayManager:
         p0 = (int(center_line_orig[0, 0] * scale_x), int(center_line_orig[0, 1] * scale_y))
         p1 = (int(center_line_orig[1, 0] * scale_x), int(center_line_orig[1, 1] * scale_y))
         cv2.line(frame, p0, p1, (255, 255, 0), 1)
-
-    def _draw_sampling_lines_full(
-        self,
-        frame: np.ndarray,
-        rotation_angle: float = 0.0,
-        perp_width: int = 20,
-        spectrum_y_center: int = 0,
-        original_height: int = 0,
-    ) -> None:
-        """Draw sampling region indicator lines on full camera view.
-
-        DEPRECATED: Use _draw_rotated_crop_box instead.
-
-        Shows the sampling region at the spectrum Y center position.
-        The spectrum_y_center is in original frame coordinates and gets
-        scaled to the current display frame size.
-        """
-        width = frame.shape[1]
-        height = frame.shape[0]
-
-        # Scale Y center from original frame coordinates to display coordinates
-        if original_height > 0 and spectrum_y_center > 0:
-            scale_y = height / original_height
-            spectrum_y = int(spectrum_y_center * scale_y)
-            scaled_perp = int(perp_width * scale_y)
-        else:
-            spectrum_y = spectrum_y_center if spectrum_y_center > 0 else height // 2
-            scaled_perp = perp_width
-
-        half_perp = scaled_perp // 2
-
-        # Draw horizontal lines at sampling bounds
-        y_top = max(0, spectrum_y - half_perp)
-        y_bottom = min(height - 1, spectrum_y + half_perp)
-
-        # Draw with thicker lines for visibility on full view
-        cv2.line(frame, (0, y_top), (width, y_top), (0, 255, 255), 2)
-        cv2.line(frame, (0, y_bottom), (width, y_bottom), (0, 255, 255), 2)
-
-        # Draw center line (thinner, different color)
-        cv2.line(frame, (0, spectrum_y), (width, spectrum_y), (255, 255, 0), 1)
 
     def _draw_status_overlay(self, image: np.ndarray, status_text: str) -> None:
         """Draw status text overlaid on the preview strip (semi-transparent background)."""

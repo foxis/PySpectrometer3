@@ -2,7 +2,6 @@
 
 import numpy as np
 
-from ..utils.display import scale_to_uint8
 from .base import CameraInterface
 
 
@@ -392,19 +391,3 @@ class Capture(CameraInterface):
             output = np.pad(output, ((0, pad_height), (0, 0)), mode="constant")
 
         return output
-
-    def capture_normalized(self) -> np.ndarray:
-        """Capture a frame normalized to 0-255 range.
-
-        Useful for display when using high bit-depth capture.
-
-        Returns:
-            Image normalized to uint8 (0-255)
-        """
-        frame = self.capture()
-
-        if self._actual_bit_depth > 8:
-            max_val = (1 << self._actual_bit_depth) - 1
-            frame = scale_to_uint8(frame, float(max_val))
-
-        return frame
