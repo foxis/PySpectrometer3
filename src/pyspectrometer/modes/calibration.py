@@ -261,7 +261,7 @@ class CalibrationMode(BaseMode):
             print("[SAVE] No spectrum data available")
 
     def _on_load_calibration(self, ctx: ModeContext) -> None:
-        """Load calibration from file."""
+        """Load calibration from file (calibration mode only)."""
         if ctx.calibration.load():
             ctx.extractor.set_rotation_angle(ctx.calibration.rotation_angle)
             ctx.extractor.set_spectrum_y_center(ctx.calibration.spectrum_y_center)

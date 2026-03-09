@@ -5,6 +5,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .calibration_io import CalibrationFileIO
+
 try:
     from scipy.interpolate import PchipInterpolator
 
@@ -80,6 +82,7 @@ class Calibration:
         self.cal_file = cal_file or Path("caldata.txt")
         self.default_pixels = default_pixels
         self.default_wavelengths = default_wavelengths
+        self._file_io = CalibrationFileIO(self.cal_file)
 
         self._result: CalibrationResult | None = None
         self._graticule: GraticuleData | None = None
@@ -115,16 +118,33 @@ class Calibration:
 
     def load(self) -> CalibrationResult:
         """Load calibration data from file and compute wavelengths."""
-        pixels, wavelengths, has_errors = self._read_cal_file()
+        data = self._file_io.read()
 
-        if has_errors:
+        if data.has_errors:
             pixels = list(self.default_pixels)
             wavelengths = list(self.default_wavelengths)
+            self._cal_pixels = list(pixels)
+            self._cal_wavelengths = list(wavelengths)
+            self._rotation_angle = data.rotation_angle
+            self._spectrum_y_center = data.spectrum_y_center
+            self._perpendicular_width = data.perpendicular_width
             print("Loading of Calibration data failed!")
             print("Loading placeholder data...")
             print("You MUST perform a Calibration to use this software!\n")
+        else:
+            pixels = data.pixels
+            wavelengths = data.wavelengths
+            self._cal_pixels = list(pixels)
+            self._cal_wavelengths = list(wavelengths)
+            self._rotation_angle = data.rotation_angle
+            self._spectrum_y_center = data.spectrum_y_center
+            self._perpendicular_width = data.perpendicular_width
+            print("Loading calibration data...")
+            print(f"Loaded rotation angle: {self._rotation_angle:.2f} deg")
+            print(f"Loaded spectrum Y center (offset): {self._spectrum_y_center}")
+            print(f"Loaded perpendicular width: {self._perpendicular_width}")
 
-        self._result = self._compute_calibration(pixels, wavelengths, has_errors)
+        self._result = self._compute_calibration(pixels, wavelengths, data.has_errors)
         self._graticule = None
         return self._result
 
@@ -163,24 +183,17 @@ class Calibration:
         if perpendicular_width is not None:
             self._perpendicular_width = perpendicular_width
 
-        try:
-            pixels_str = ",".join(map(str, pixel_data))
-            wavelengths_str = ",".join(map(str, wavelength_data))
-
-            with open(self.cal_file, "w") as f:
-                f.write(f"{pixels_str}\r\n")
-                f.write(f"{wavelengths_str}\r\n")
-                f.write(f"{self._rotation_angle}\r\n")
-                f.write(f"{self._spectrum_y_center}\r\n")
-                f.write(f"{self._perpendicular_width}\r\n")
-
+        if self._file_io.write(
+            pixel_data,
+            wavelength_data,
+            self._rotation_angle,
+            self._spectrum_y_center,
+            self._perpendicular_width,
+        ):
             print("Calibration Data Written!")
             self.load()
             return True
-
-        except Exception as e:
-            print(f"Failed to save calibration: {e}")
-            return False
+        return False
 
     def save_extraction_params(
         self,
@@ -202,34 +215,18 @@ class Calibration:
         self._spectrum_y_center = spectrum_y_center
         self._perpendicular_width = perpendicular_width
 
-        try:
-            pixels, wavelengths, has_errors = self._read_pixels_wavelengths_only()
-            if has_errors:
-                pixels = list(self.default_pixels)
-                wavelengths = list(self.default_wavelengths)
+        data = self._file_io.read()
+        pixels = data.pixels if not data.has_errors else list(self.default_pixels)
+        wavelengths = data.wavelengths if not data.has_errors else list(self.default_wavelengths)
 
-            pixels_str = ",".join(map(str, pixels))
-            wavelengths_str = ",".join(map(str, wavelengths))
-
-            with open(self.cal_file, "w") as f:
-                f.write(f"{pixels_str}\r\n")
-                f.write(f"{wavelengths_str}\r\n")
-                f.write(f"{rotation_angle}\r\n")
-                f.write(f"{spectrum_y_center}\r\n")
-                f.write(f"{perpendicular_width}\r\n")
-
-            self._rotation_angle = rotation_angle
-            self._spectrum_y_center = spectrum_y_center
-            self._perpendicular_width = perpendicular_width
-
+        if self._file_io.write(
+            pixels, wavelengths, rotation_angle, spectrum_y_center, perpendicular_width
+        ):
             print(
                 f"Extraction params saved: angle={rotation_angle:.2f}°, y={spectrum_y_center}, width={perpendicular_width}"
             )
             return True
-
-        except Exception as e:
-            print(f"Failed to save extraction params: {e}")
-            return False
+        return False
 
     @property
     def rotation_angle(self) -> float:
@@ -287,65 +284,6 @@ class Calibration:
         self._graticule = None
 
         return True
-
-    @staticmethod
-    def _parse_pixels_wavelengths(lines: list[str]) -> tuple[list[int], list[float], bool]:
-        """Parse pixels and wavelengths from first two lines. Returns (pixels, wavelengths, errors)."""
-        pixels: list[int] = []
-        wavelengths: list[float] = []
-        try:
-            line0 = lines[0].strip()
-            pixels = [int(x) for x in line0.split(",")]
-            line1 = lines[1].strip()
-            wavelengths = [float(x) for x in line1.split(",")]
-            if len(pixels) != len(wavelengths) or len(pixels) < 3:
-                return pixels, wavelengths, True
-        except (IndexError, ValueError):
-            return pixels, wavelengths, True
-        return pixels, wavelengths, False
-
-    def _read_pixels_wavelengths_only(self) -> tuple[list[int], list[float], bool]:
-        """Read only pixels and wavelengths (lines 0-1). No side effects on extraction params."""
-        try:
-            with open(self.cal_file) as f:
-                lines = f.readlines()
-            return self._parse_pixels_wavelengths(lines)
-        except OSError:
-            return [], [], True
-
-    def _read_cal_file(self) -> tuple[list[int], list[float], bool]:
-        """Read calibration data from file.
-        Pixels/wavelengths (lines 0-1) and extraction params (lines 2-4)
-        are read independently so offset/rotation still load when lines 0-1 fail.
-        """
-        try:
-            print("Loading calibration data...")
-            with open(self.cal_file) as f:
-                lines = f.readlines()
-        except OSError:
-            return [], [], True
-
-        pixels, wavelengths, errors = self._parse_pixels_wavelengths(lines)
-        if not errors and len(pixels) >= 3:
-            self._cal_pixels = pixels
-            self._cal_wavelengths = wavelengths
-
-        # Always load extraction params (offset, rotation, perpendicular width)
-        # so they apply even when pixel/wavelength lines fail
-        try:
-            if len(lines) >= 3:
-                self._rotation_angle = float(lines[2].strip())
-                print(f"Loaded rotation angle: {self._rotation_angle:.2f} deg")
-            if len(lines) >= 4:
-                self._spectrum_y_center = int(float(lines[3].strip()))
-                print(f"Loaded spectrum Y center (offset): {self._spectrum_y_center}")
-            if len(lines) >= 5:
-                self._perpendicular_width = int(float(lines[4].strip()))
-                print(f"Loaded perpendicular width: {self._perpendicular_width}")
-        except (IndexError, ValueError) as e:
-            print(f"[Calibration] Could not parse extraction params: {e}")
-
-        return pixels, wavelengths, errors
 
     def _compute_calibration(
         self,

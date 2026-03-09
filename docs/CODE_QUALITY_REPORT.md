@@ -16,10 +16,12 @@
 - **1.4** `_parse_pixels_wavelengths(lines)` shared in `core/calibration.py`.
 
 ### Dead Code Removed
-- **2.1–2.6** Spectrometer refactored to thin orchestrator (~306 lines); `_on_load_reference`, `_on_use_as_reference`, `_on_capture_dark`, `_on_fit_xyz`, `_on_toggle_auto_gain_meas`, `_on_toggle_auto_gain_cal` removed.
+- **2.1–2.6** Spectrometer refactored to thin orchestrator (~306 lines); unregistered callbacks removed.
+- **2.7–2.9, 2.11, 2.13** `capture_normalized`, `_draw_sampling_lines`, `_draw_sampling_lines_full`, `cycle_source`, `set_preview_mode` removed.
 
 ### SRP / Structure
 - **3.1** Spectrometer reduced to thin orchestrator; mode logic delegated to mode classes.
+- **3.4** `CalibrationFileIO` extracted for load/save; Calibration keeps compute, graticule, extraction params.
 - **4.2** `run()` main loop simplified (~30 lines).
 - **4.8** `_read_cal_file()` uses `_parse_pixels_wavelengths()`.
 
@@ -63,7 +65,7 @@
 | 3.1 | `spectrometer.py` | Was ~1000 lines. | IMPROVED: thin orchestrator ~306 lines |
 | 3.2 | `display/renderer.py` DisplayManager | Window + mouse + graph/peak/cursor/overlay/status/slider/control bar. | Extract `GraphRenderer`, `PreviewComposer`, `StatusRenderer`. |
 | 3.3 | `modes/calibration.py` CalibrationMode | Source + overlay + sensitivity + auto-cal + CMOS load. | Extract `AutoCalibrator`, `SensitivityCorrection`. |
-| 3.4 | `core/calibration.py` Calibration | Load, save, compute, graticule, extraction params. | Extract `CalibrationFileIO`. |
+| 3.4 | `core/calibration.py` Calibration | Load, save, compute, graticule, extraction params. | FIXED: `CalibrationFileIO` extracted. |
 
 ---
 
@@ -88,10 +90,10 @@
 |----------|------|-----------|
 | Duplicate functionality | 4 | 0 |
 | Dead functionality | 11 | 2 |
-| SRP violations | 1 (partial) | 3 |
+| SRP violations | 2 (partial) | 2 |
 | Long methods | 2 | 6 |
 
 **Recommended next steps:**
-1. Remove dead code (2.7–2.13)
-2. SRP refactors (3.2–3.4)
+1. Remove or expose dead code (2.10 `calibrate_from_peaks`; 2.12 base mode refs)
+2. SRP refactors (3.2–3.3)
 3. Split long methods (4.1, 4.3–4.7)

@@ -29,6 +29,7 @@ from .processing.extraction import ExtractionMethod, SpectrumExtractor
 from .processing.filters import SavitzkyGolayFilter
 from .processing.peak_detection import PeakDetector
 from .processing.pipeline import ProcessingPipeline
+from .utils.dialog import prompt_calibrate
 
 
 class Spectrometer:
@@ -259,10 +260,13 @@ class Spectrometer:
         }
         print(f"Starting PySpectrometer 3 - {mode_names.get(self.mode, self.mode)} Mode...")
 
-        self._calibration.load()
+        result = self._calibration.load()
         self._extractor.set_rotation_angle(self._calibration.rotation_angle)
         self._extractor.set_spectrum_y_center(self._calibration.spectrum_y_center)
         self._extractor.set_perpendicular_width(self._calibration.perpendicular_width)
+
+        if self.mode != "calibration" and result.order == 0:
+            prompt_calibrate()
 
         self._camera.start()
         self._display.setup_windows()
