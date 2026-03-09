@@ -20,7 +20,7 @@ We use light sources (FL12, HG, LED, D65) with known spectrum and peaks. We capt
 
 ### 1.3 Sensitivity Correction
 
-We use the CMOS sensitivity curve for OV9281 (or the next best candidate) to correct sensitivity roughly. We also support a known reference spectrum (e.g. halogen light bulb at a specific color temperature, with or without UV filter): measure that spectrum and derive the sensitivity correction curve from the deviation. Calibration and sensitivity correction can be saved and loaded as a configuration file for use in other modes.
+We use the CMOS sensitivity curve for OV9281 (or the next best candidate) to correct sensitivity roughly. Sensor spectral curves for OV9281, OV7251, IMX290, IMX296, and other MIPI sensors are documented in the [VC MIPI Camera Module Hardware Manual](https://www.mipi-modules.com/fileadmin/external/documentation/hardware/VC_MIPI_Camera_Module/index.html); spectral curve charts are available as reference data (see `data/sensor_sensitivity/`). We also support a known reference spectrum (e.g. halogen light bulb at a specific color temperature, with or without UV filter): measure that spectrum and derive the sensitivity correction curve from the deviation. Calibration and sensitivity correction can be saved and loaded as a configuration file for use in other modes.
 
 ### 1.4 Light Source Control
 
@@ -501,6 +501,19 @@ data/colorscience/
 ├── CIE_TCS_reflectance.csv
 └── planckian_locus.csv
 ```
+
+**Sensor spectral sensitivity (for sensitivity correction):**
+
+Reference: [VC MIPI Camera Module Hardware Manual](https://www.mipi-modules.com/fileadmin/external/documentation/hardware/VC_MIPI_Camera_Module/index.html) — spectral curves for OV9281, OV7251, IMX290, IMX296, and other sensors.
+
+```
+data/sensor_sensitivity/
+├── mipi_sensors_spectral_curve.png   # Source chart from VC documentation
+├── OV9281_spectral_sensitivity.csv   # Curated OV9281 curve (wavelength_nm, relative_sensitivity)
+└── OV9281_spectral_sensitivity_extracted.csv  # Programmatic extraction (scripts/extract_sensor_curve.py)
+```
+
+Use `OV9281_spectral_sensitivity.csv` for sensitivity correction; the extracted CSV is experimental. Run `python scripts/extract_sensor_curve.py [image] -o output.csv` to re-extract from the chart image.
 
 ---
 

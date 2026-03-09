@@ -1,0 +1,19 @@
+# Approximate spectral sensitivity for Omnivision OV9281 (monochrome)
+# Extracted from VC MIPI Camera Module documentation
+# Source: https://www.mipi-modules.com/fileadmin/external/documentation/hardware/VC_MIPI_Camera_Module/
+# Image: mipi_sensors_spectral_curve.png
+# Values are relative sensitivity (0-100), normalized to 1.0 in script if needed
+wavelength_nm,relative_sensitivity
+400,0.40
+450,0.70
+500,0.90
+550,0.98
+600,0.90
+650,0.75
+700,0.55
+750,0.35
+800,0.20
+850,0.10
+900,0.03
+950,0.01
+1000,0.00
