@@ -8,6 +8,7 @@ import numpy as np
 
 if TYPE_CHECKING:
     from ..core.mode_context import ModeContext
+    from ..core.spectrum import SpectrumData
 
 
 class ModeType(Enum):
@@ -125,6 +126,25 @@ class BaseMode(ABC):
             Tuple of (intensity array scaled to graph height, BGR color) or None
         """
         pass
+
+    def on_start(self, ctx: "ModeContext") -> None:
+        """Called when the main loop starts. Override for mode-specific startup (e.g. default source)."""
+        pass
+
+    def update_display(
+        self,
+        ctx: "ModeContext",
+        processed: "SpectrumData",
+        graph_height: int,
+    ) -> None:
+        """Update overlay and status. Override in subclasses. Default: clear overlays, legacy ref if available."""
+        ctx.display.set_mode_overlay(None)
+        ctx.display.set_sensitivity_overlay(None)
+        if ctx.reference_manager is not None:
+            ref_intensity = ctx.reference_manager.get_interpolated(
+                processed.wavelengths, processed.intensity
+            )
+            ctx.display.state.reference_spectrum = ref_intensity
     
     def setup(self, ctx: "ModeContext") -> None:
         """Register handlers using the given context. Subclasses override to add mode-specific handlers."""

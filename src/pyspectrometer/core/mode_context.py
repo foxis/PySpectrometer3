@@ -6,10 +6,19 @@ without depending on the orchestrator.
 """
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 import numpy as np
 
 from .spectrum import SpectrumData
+
+if TYPE_CHECKING:
+    from ..capture.base import CameraInterface
+    from ..display.renderer import DisplayManager
+    from .calibration import Calibration
+    from ..export.csv_exporter import CSVExporter
+    from ..processing.extraction import SpectrumExtractor
+    from ..processing.auto_controls import AutoGainController, AutoExposureController
+    from ..core.reference_spectrum import ReferenceSpectrumManager
 
 
 def _noop() -> None:
@@ -29,13 +38,14 @@ class ModeContext:
     """
 
     # Services (read-only for modes)
-    camera: object  # CameraInterface
-    calibration: object  # Calibration
-    display: object  # DisplayManager
-    exporter: object  # CSVExporter
-    extractor: object  # SpectrumExtractor
-    auto_gain: object  # AutoGainController
-    auto_exposure: object  # AutoExposureController
+    camera: "CameraInterface"
+    calibration: "Calibration"
+    display: "DisplayManager"
+    exporter: "CSVExporter"
+    extractor: "SpectrumExtractor"
+    auto_gain: "AutoGainController"
+    auto_exposure: "AutoExposureController"
+    reference_manager: Optional["ReferenceSpectrumManager"] = None
 
     # Quit callback - mode calls to stop the main loop
     quit_app: Callable[[], None] = _noop

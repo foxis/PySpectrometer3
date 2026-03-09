@@ -11,7 +11,10 @@ Features:
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Callable
+from typing import TYPE_CHECKING, Optional, Callable
+
+if TYPE_CHECKING:
+    from ..core.spectrum import SpectrumData
 import numpy as np
 
 from .base import BaseMode, ModeType, ButtonDefinition
@@ -125,6 +128,19 @@ class MeasurementMode(BaseMode):
     def _on_toggle_light(self, ctx: ModeContext) -> None:
         """Toggle light control - placeholder."""
         print("[LIGHT] Toggle light (GPIO not implemented yet)")
+
+    def update_display(
+        self,
+        ctx: ModeContext,
+        processed: "SpectrumData",
+        graph_height: int,
+    ) -> None:
+        """Update measurement overlay and status."""
+        overlay = self.get_overlay(processed.wavelengths, graph_height)
+        ctx.display.set_mode_overlay(overlay)
+        ctx.display.set_sensitivity_overlay(None)
+        for key, value in self.get_status().items():
+            ctx.display.set_status(key, value)
 
     @property
     def mode_type(self) -> ModeType:

@@ -13,9 +13,13 @@ Workflow:
 Manual calibration (peak matching) via calibrate_from_peaks() for later use.
 """
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Callable
+from typing import TYPE_CHECKING, Optional, Callable
+
+if TYPE_CHECKING:
+    from ..core.spectrum import SpectrumData
 import numpy as np
 from scipy.optimize import minimize
 
@@ -117,6 +121,32 @@ class CalibrationMode(BaseMode):
         ctx.display.set_button_active("toggle_sensitivity", self.cal_state.sensitivity_correction_enabled)
         ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
 
+    def on_start(self, ctx: ModeContext) -> None:
+        """Select FL as default source and update source button states."""
+        self.select_source(ReferenceSource.FL)
+        for s in ReferenceSource:
+            ctx.display.set_button_active(f"source_{s.name.lower()}", s == ReferenceSource.FL)
+
+    def update_display(
+        self,
+        ctx: ModeContext,
+        processed: "SpectrumData",
+        graph_height: int,
+    ) -> None:
+        """Update calibration overlay and status."""
+        overlay = self.get_overlay(processed.wavelengths, graph_height)
+        ctx.display.set_mode_overlay(overlay)
+        sensitivity_overlay = self.get_sensitivity_curve(processed.wavelengths, graph_height)
+        ctx.display.set_sensitivity_overlay(sensitivity_overlay)
+        ctx.display.set_status("Ref", self.get_current_source_name())
+        ctx.display.set_status("Pts", str(len(self.cal_state.calibration_points)))
+        if ctx.frozen_spectrum:
+            ctx.display.set_status("Status", "FROZEN")
+        elif self.state.averaging_enabled:
+            ctx.display.set_status("Status", f"AVG:{self.state.accumulated_frames}")
+        else:
+            ctx.display.set_status("Status", "LIVE")
+
     def _on_select_source(self, ctx: ModeContext, source: ReferenceSource) -> None:
         """Handle reference source selection."""
         self.select_source(source)
@@ -153,7 +183,6 @@ class CalibrationMode(BaseMode):
 
     def _on_auto_calibrate(self, ctx: ModeContext) -> None:
         """Handle auto-calibrate action."""
-        import time
         if ctx.last_data is None:
             print("[CAL] No data available for calibration")
             return

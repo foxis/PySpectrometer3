@@ -27,7 +27,6 @@ from .export.csv_exporter import CSVExporter
 from .modes.base import BaseMode
 from .modes.calibration import CalibrationMode
 from .modes.measurement import MeasurementMode
-from .data.reference_spectra import ReferenceSource
 
 
 class Spectrometer:
@@ -130,12 +129,96 @@ class Spectrometer:
             extractor=self._extractor,
             auto_gain=self._auto_gain,
             auto_exposure=self._auto_exposure,
+            reference_manager=self._reference_manager,
         )
         ctx.quit_app = lambda: setattr(ctx, "running", False)
         ctx.save_snapshot = self._save_snapshot
         ctx.clear_autolevel_overlay = self._clear_autolevel_overlay
         ctx.auto_calibrate_debounce_sec = 1.5
         return ctx
+
+    def _capture_frame(self) -> np.ndarray:
+        """Capture frame and update context."""
+        frame = self._camera.capture()
+        self._ctx.last_frame = frame
+        return frame
+
+    def _process_intensity(self, frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Extract intensity, apply freeze/hold, mode processing, sensitivity correction. Returns (intensity, cropped)."""
+        bit_depth = getattr(self._camera, "bit_depth", self.config.camera.bit_depth)
+        max_val = float((1 << bit_depth) - 1)
+        extraction_result = self._extractor.extract(frame, max_val=max_val)
+        cropped = extraction_result.cropped_frame
+        intensity = extraction_result.intensity.astype(np.float32)
+
+        if self._calibration_mode is not None and self._ctx.frozen_spectrum:
+            if self._ctx.frozen_intensity is not None:
+                intensity = self._ctx.frozen_intensity.copy()
+
+        if self._display.state.hold_peaks:
+            if self._ctx.held_intensity is None:
+                self._ctx.held_intensity = intensity.copy()
+            else:
+                self._ctx.held_intensity = np.maximum(self._ctx.held_intensity, intensity)
+            intensity = self._ctx.held_intensity
+
+        if self._calibration_mode is not None and not self._ctx.frozen_spectrum:
+            intensity = self._calibration_mode.accumulate_spectrum(intensity)
+        elif self._measurement_mode is not None:
+            intensity = self._measurement_mode.process_spectrum(
+                intensity, self._calibration.wavelengths
+            )
+
+        if self._calibration_mode is not None:
+            self._ctx.last_intensity_pre_sensitivity = intensity.copy()
+
+        if self._calibration_mode is not None:
+            intensity = self._calibration_mode.apply_sensitivity_correction(
+                intensity, self._calibration.wavelengths
+            )
+
+        n_wl = len(self._calibration.wavelengths)
+        n_int = len(intensity)
+        n = min(n_wl, n_int)
+        if n < n_int:
+            intensity = intensity[:n]
+        return intensity, cropped
+
+    def _run_pipeline(
+        self, frame: np.ndarray, intensity: np.ndarray, cropped: np.ndarray
+    ) -> SpectrumData:
+        """Build SpectrumData and run processing pipeline."""
+        n = min(len(self._calibration.wavelengths), len(intensity))
+        wl = self._calibration.wavelengths[:n]
+        data = SpectrumData(
+            intensity=intensity[:n],
+            wavelengths=wl,
+            raw_frame=frame,
+            cropped_frame=cropped,
+        )
+        return self._pipeline.run(data)
+
+    def _render_frame(self, processed: SpectrumData) -> None:
+        """Render spectrum display."""
+        self._display.render(
+            processed,
+            camera_gain=self._camera.gain,
+            savgol_poly=self._savgol_filter.poly_order,
+            peak_min_dist=self._peak_detector.min_distance,
+            peak_threshold=self._peak_detector.threshold,
+            extraction_method=str(self._extractor.method),
+            rotation_angle=self._extractor.rotation_angle,
+            perp_width=self._extractor.perpendicular_width,
+            spectrum_y_center=self._extractor.spectrum_y_center,
+        )
+
+    def _check_window_closed(self) -> None:
+        """Check if window was closed by user and stop if so."""
+        try:
+            if cv2.getWindowProperty(self.config.spectrograph_title, cv2.WND_PROP_VISIBLE) < 1:
+                self._ctx.running = False
+        except cv2.error:
+            self._ctx.running = False
 
     def _clear_autolevel_overlay(self) -> None:
         """Clear autolevel overlay (used by calibration mode)."""
@@ -173,115 +256,20 @@ class Spectrometer:
         self._display.setup_windows()
         self._ctx.running = True
         self._ctx.last_data = None
-
-        if self._calibration_mode is not None:
-            self._calibration_mode.select_source(ReferenceSource.FL)
-            for s in ReferenceSource:
-                self._display.set_button_active(f"source_{s.name.lower()}", s == ReferenceSource.FL)
+        self._mode_instance.on_start(self._ctx)
 
         try:
             while self._ctx.running:
-                frame = self._camera.capture()
-                self._ctx.last_frame = frame
-                bit_depth = getattr(self._camera, "bit_depth", self.config.camera.bit_depth)
-                max_val = float((1 << bit_depth) - 1)
-                extraction_result = self._extractor.extract(frame, max_val=max_val)
-                cropped = extraction_result.cropped_frame
-                intensity = extraction_result.intensity.astype(np.float32)
-
-                if self._calibration_mode is not None and self._ctx.frozen_spectrum:
-                    if self._ctx.frozen_intensity is not None:
-                        intensity = self._ctx.frozen_intensity.copy()
-
-                if self._display.state.hold_peaks:
-                    if self._ctx.held_intensity is None:
-                        self._ctx.held_intensity = intensity.copy()
-                    else:
-                        self._ctx.held_intensity = np.maximum(self._ctx.held_intensity, intensity)
-                    intensity = self._ctx.held_intensity
-
-                if self._calibration_mode is not None and not self._ctx.frozen_spectrum:
-                    intensity = self._calibration_mode.accumulate_spectrum(intensity)
-                elif self._measurement_mode is not None:
-                    intensity = self._measurement_mode.process_spectrum(
-                        intensity, self._calibration.wavelengths
-                    )
-
-                if self._calibration_mode is not None:
-                    self._ctx.last_intensity_pre_sensitivity = intensity.copy()
-
-                if self._calibration_mode is not None:
-                    intensity = self._calibration_mode.apply_sensitivity_correction(
-                        intensity, self._calibration.wavelengths
-                    )
-
-                n_wl = len(self._calibration.wavelengths)
-                n_int = len(intensity)
-                n = min(n_wl, n_int)
-                if n < n_int:
-                    intensity = intensity[:n]
-                wl = self._calibration.wavelengths[:n]
-
-                data = SpectrumData(
-                    intensity=intensity,
-                    wavelengths=wl,
-                    raw_frame=frame,
-                    cropped_frame=cropped,
-                )
-                processed = self._pipeline.run(data)
+                frame = self._capture_frame()
+                intensity, cropped = self._process_intensity(frame)
+                processed = self._run_pipeline(frame, intensity, cropped)
                 self._ctx.last_data = processed
                 self._ctx.handle_auto_gain_exposure(processed)
-
-                if self._calibration_mode is not None:
-                    overlay = self._calibration_mode.get_overlay(
-                        processed.wavelengths, self.config.display.graph_height
-                    )
-                    self._display.set_mode_overlay(overlay)
-                    sensitivity_overlay = self._calibration_mode.get_sensitivity_curve(
-                        processed.wavelengths, self.config.display.graph_height
-                    )
-                    self._display.set_sensitivity_overlay(sensitivity_overlay)
-                    self._display.set_status("Ref", self._calibration_mode.get_current_source_name())
-                    self._display.set_status("Pts", str(len(self._calibration_mode.cal_state.calibration_points)))
-                    if self._ctx.frozen_spectrum:
-                        self._display.set_status("Status", "FROZEN")
-                    elif self._calibration_mode.state.averaging_enabled:
-                        self._display.set_status("Status", f"AVG:{self._calibration_mode.state.accumulated_frames}")
-                    else:
-                        self._display.set_status("Status", "LIVE")
-                elif self._measurement_mode is not None:
-                    overlay = self._measurement_mode.get_overlay(
-                        processed.wavelengths, self.config.display.graph_height
-                    )
-                    self._display.set_mode_overlay(overlay)
-                    self._display.set_sensitivity_overlay(None)
-                    for key, value in self._measurement_mode.get_status().items():
-                        self._display.set_status(key, value)
-                else:
-                    self._display.set_mode_overlay(None)
-                    self._display.set_sensitivity_overlay(None)
-                    ref_intensity = self._reference_manager.get_interpolated(
-                        processed.wavelengths, processed.intensity
-                    )
-                    self._display.state.reference_spectrum = ref_intensity
-
-                self._display.render(
-                    processed,
-                    camera_gain=self._camera.gain,
-                    savgol_poly=self._savgol_filter.poly_order,
-                    peak_min_dist=self._peak_detector.min_distance,
-                    peak_threshold=self._peak_detector.threshold,
-                    extraction_method=str(self._extractor.method),
-                    rotation_angle=self._extractor.rotation_angle,
-                    perp_width=self._extractor.perpendicular_width,
-                    spectrum_y_center=self._extractor.spectrum_y_center,
+                self._mode_instance.update_display(
+                    self._ctx, processed, self.config.display.graph_height
                 )
-
-                try:
-                    if cv2.getWindowProperty(self.config.spectrograph_title, cv2.WND_PROP_VISIBLE) < 1:
-                        self._ctx.running = False
-                except cv2.error:
-                    self._ctx.running = False
+                self._render_frame(processed)
+                self._check_window_closed()
         finally:
             self._camera.stop()
             self._display.destroy()
