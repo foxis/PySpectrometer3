@@ -49,7 +49,7 @@ This document is a **task list** for refactoring the codebase to improve **expan
 
 ### 1.4 Intensity scaling to graph
 
-- [ ] **1.4.1** Add a small helper (e.g. in `display/overlay_utils.py` or `display/scale_utils.py`) such as `scale_intensity_to_graph(intensity, graph_height, margin=10)` and use it wherever intensity is scaled to graph Y. Replace ad-hoc expressions like `intensity * (graph_height - 10)` with this helper.
+- [x] **1.4.1** Add `scale_intensity_to_graph(intensity, graph_height, margin=10)` in `display/overlay_utils.py`; use it in calibration (overlay, sensitivity), measurement (overlay), and renderer (reference spectrum, spectrum line, peaks).
 
 ---
 

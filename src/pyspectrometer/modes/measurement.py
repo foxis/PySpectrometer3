@@ -15,6 +15,7 @@ from typing import Optional, Callable
 import numpy as np
 
 from .base import BaseMode, ModeType, ButtonDefinition
+from ..utils.graph_scale import scale_intensity_to_graph
 from ..processing.reference_correction import apply_dark_white_correction
 
 
@@ -131,7 +132,7 @@ class MeasurementMode(BaseMode):
         
         # Scale to graph height
         max_val = max(ref.max(), 1)
-        scaled = (ref / max_val) * (graph_height - 10)
+        scaled = scale_intensity_to_graph(ref / max_val, graph_height)
         
         # Light gray color for reference
         return (scaled, (150, 150, 150))

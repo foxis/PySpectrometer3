@@ -18,6 +18,7 @@ from ..gui.control_bar import ControlBar, ControlBarConfig
 from ..gui.sliders import SliderPanel
 from .graticule import GraticuleRenderer
 from .waterfall import WaterfallDisplay
+from ..utils.graph_scale import scale_intensity_to_graph
 from .overlay_utils import render_polyline_overlay
 
 
@@ -432,11 +433,7 @@ class DisplayManager:
             return
 
         height = graph.shape[0]
-        scale = float(height - 1) if height > 1 else 1.0
-        scaled = np.minimum(
-            np.asarray(ref_intensity, dtype=np.float32) * scale,
-            height - 1,
-        )
+        scaled = scale_intensity_to_graph(ref_intensity, height, margin=1)
         render_polyline_overlay(
             graph,
             scaled,
@@ -450,15 +447,12 @@ class DisplayManager:
         Intensity is float32 0-1. Scale to fit graph height.
         """
         height = graph.shape[0]
-        scale = float(height - 1) if height > 1 else 1.0
 
         for i, intensity in enumerate(data.intensity):
             rgb = wavelength_to_rgb(round(data.wavelengths[i]))
             bgr = rgb_to_bgr(rgb)
 
-            # Scale intensity (0-1) to graph height
-            scaled_intensity = int(float(intensity) * scale)
-            scaled_intensity = min(scaled_intensity, height - 1)  # Clamp to graph
+            scaled_intensity = int(scale_intensity_to_graph(intensity, height, margin=1))
             
             cv2.line(graph, (i, height), (i, height - scaled_intensity), bgr, 1)
             cv2.line(
@@ -476,8 +470,7 @@ class DisplayManager:
         text_offset = 12
 
         for peak in data.peaks:
-            # Map intensity 0-1 to y: y = height - intensity * (height-1)
-            scaled = int(float(peak.intensity) * (height - 1)) if height > 1 else 0
+            scaled = int(scale_intensity_to_graph(peak.intensity, height, margin=1))
             label_height = height - scaled
             
             cv2.rectangle(

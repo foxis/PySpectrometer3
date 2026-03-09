@@ -20,6 +20,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 from .base import BaseMode, ModeType, ButtonDefinition
+from ..utils.graph_scale import scale_intensity_to_graph
 from ..data.reference_spectra import (
     ReferenceSource,
     get_reference_spectrum,
@@ -164,7 +165,7 @@ class CalibrationMode(BaseMode):
         )
         
         # Scale to graph height
-        scaled = ref_intensity * (graph_height - 10)
+        scaled = scale_intensity_to_graph(ref_intensity, graph_height)
         
         # Color based on source
         colors = {
@@ -621,7 +622,7 @@ class CalibrationMode(BaseMode):
             right=0.0,
         )
         
-        scaled = sensitivity * (graph_height - 10)
+        scaled = scale_intensity_to_graph(sensitivity, graph_height)
         color = (100, 255, 100)  # Green
         
         return (scaled, color)
