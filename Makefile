@@ -23,7 +23,7 @@ endif
         install-link uninstall run run-fullscreen run-waterfall run-waveshare \
         run-calibration run-measurement run-raman run-colorscience \
         calibrate measure raman colors \
-        clean help venv
+        stream clean help venv
 
 all: help
 
@@ -325,6 +325,13 @@ colors:
 	@echo "Starting PySpectrometer3 in Color Science mode..."
 	cd $(SRC_DIR) && $(PYTHON) -m $(PACKAGE) --waveshare --mode colorscience
 
+## Remote development - MJPEG stream (run on Pi, connect from desktop)
+
+stream:
+	@echo "Starting MJPEG stream on port 8000..."
+	@echo "On desktop, run: python -m $(PACKAGE) --camera http://<Pi-IP>:8000/stream.mjpg"
+	$(PYTHON) scripts/stream_camera.py --port 8000
+
 ## Development targets
 
 venv:
@@ -384,6 +391,10 @@ help:
 	@echo "  make run-measurement           - Run Measurement mode"
 	@echo "  make run-raman                 - Run Raman mode"
 	@echo "  make run-colorscience          - Run Color Science mode"
+	@echo ""
+	@echo "Remote development:"
+	@echo "  make stream                    - Start MJPEG HTTP stream (run on Pi)"
+	@echo "                                 Use --camera http://<Pi-IP>:8000/stream.mjpg on desktop"
 	@echo ""
 	@echo "Development:"
 	@echo "  make venv                      - Create virtual environment"

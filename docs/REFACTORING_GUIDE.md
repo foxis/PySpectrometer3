@@ -142,7 +142,16 @@ This document is a **task list** for refactoring the codebase to improve **expan
 ### 6.2 Export and camera
 
 - [ ] **6.2.1** Ensure `ExportInterface` (if not already) defines the methods Spectrometer needs (e.g. save spectrum, path). `CSVExporter` implements it. Spectrometer depends on `ExportInterface`, not `CSVExporter`.
-- [ ] **6.2.2** Camera: `CameraInterface` is already the abstraction. Spectrometer should type-hint and use only `CameraInterface` in its public flow.
+- [x] **6.2.2** Camera: `CameraInterface` is the abstraction; Spectrometer accepts `camera: Optional[CameraInterface] = None`.
+
+### 6.3 OpenCV capture backend (ARCHITECTURE §5.1)
+
+- [ ] **6.3.1** Add `capture/opencv_capture.py` — `OpenCVCapture` implementing `CameraInterface`. Source: webcam (int index), v4l path, or rtsp URL, from CLI `--camera SOURCE`.
+- [ ] **6.3.2** Convert frames to **10-bit grayscale**: 2D `uint16`, shape `(height, width)`, values 0–1023. BGR/grayscale from OpenCV → `gray.astype(np.uint16) * 1023 / 255`.
+- [ ] **6.3.3** **Gain / exposure:** No-op (setters accept but have no effect).
+- [ ] **6.3.4** **List cameras:** `--list-cameras` enumerates available devices; log index/name or path; exit after listing.
+- [ ] **6.3.5** **Capabilities on start:** On `start()`, log camera info and capabilities (resolution, fps, format) like Picamera2.
+- [ ] **6.3.6** Add `--camera SOURCE` and `--list-cameras` to `__main__.py`. When `--camera` set, create `OpenCVCapture` and pass to `Spectrometer(camera=...)`. No other code changes.
 
 ---
 
@@ -177,6 +186,7 @@ After each phase (or at the end), verify:
 | 10 | Mode contract: `process_spectrum` 0–1; use `apply_references` in MeasurementMode | 5.1–5.2 |
 | 11 | Extract `CorrelationCalibrator`, `PeakMatchCalibrator`, `SensitivityCorrector` from CalibrationMode (4-pt min per ARCHITECTURE) | 5.2 |
 | 12 | Optional: constructor injection for camera, display factory, exporter | 6.1–6.2 |
+| 13 | OpenCVCapture: webcam/v4l/rtsp, 10-bit grayscale, --camera/--list-cameras; gain/exposure no-op; log capabilities on start | 6.3 |
 
 ---
 
@@ -187,7 +197,8 @@ After each phase (or at the end), verify:
 - **Modes:** Refactoring supports all **five** modes (Calibration, Measurement, Waterfall, Raman, Color Science). Button layouts and actions follow ARCHITECTURE §3 button tables (e.g. FL12, SaveCal, LoadCal, LED, I2C…).
 - **Layers:** Controller (Spectrometer + EventHandlerRegistry + ModeCoordinator), Viewer (display + gui), Data/Logic (core, processing, modes) — refactor keeps these boundaries clear.
 - **Calibration:** 4-point minimum, `match_peaks_to_reference`, Auto-Level, Auto-Center Y as in ARCHITECTURE §3.2.
-- **Module map:** ARCHITECTURE §8 is authoritative; new modules (e.g. `modes/waterfall.py`) appear there when planned/implemented.
+- **Module map:** ARCHITECTURE §8 is authoritative; new modules (e.g. `modes/waterfall.py`, `capture/opencv_capture.py`) appear there when planned/implemented.
+- **Capture:** OpenCVCapture (webcam, v4l, rtsp) in `capture/`; selected via `--camera`; outputs 10-bit grayscale; substitutes via `Spectrometer(camera=...)` with no other code changes (ARCHITECTURE §5.1).
 
 ---
 
