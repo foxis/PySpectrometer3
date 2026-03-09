@@ -71,17 +71,18 @@ class MeasurementMode(BaseMode):
             ButtonDefinition("Dark", "set_dark", row=1),
             ButtonDefinition("White", "set_white", row=1),
             ButtonDefinition("ClrRef", "clear_refs", row=1),
-            ButtonDefinition("Save", "save", shortcut="s", row=1),
-            ButtonDefinition("Load", "load", row=1),
-            
             # Row 2: Display and control
             ButtonDefinition("ShowRef", "show_reference", is_toggle=True, row=2),
             ButtonDefinition("Norm", "normalize", is_toggle=True, row=2),
-            ButtonDefinition("AutoG", "auto_gain", is_toggle=True, row=2),
-            ButtonDefinition("Gain+", "gain_up", shortcut="t", row=2),
-            ButtonDefinition("Gain-", "gain_down", shortcut="g", row=2),
+            ButtonDefinition("G", "show_gain_slider", is_toggle=True, row=2),
+            ButtonDefinition("E", "show_exposure_slider", is_toggle=True, row=2),
+            ButtonDefinition("AG", "auto_gain", is_toggle=True, row=2),
+            ButtonDefinition("AE", "auto_exposure", is_toggle=True, row=2),
+            ButtonDefinition("Prev", "cycle_preview", shortcut="v", row=2),
             ButtonDefinition("Lamp", "lamp_toggle", is_toggle=True, row=2),
-            ButtonDefinition("Quit", "quit", shortcut="q", row=2),
+            ButtonDefinition("Save", "save", shortcut="s", row=2),
+            ButtonDefinition("Load", "load", row=2),
+            ButtonDefinition("__spacer__", "__spacer_right__", row=2),
         ]
     
     def process_spectrum(

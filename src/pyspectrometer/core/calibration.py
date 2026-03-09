@@ -284,53 +284,47 @@ class Calibration:
         
         return True
     
-    def _read_pixels_wavelengths_only(self) -> tuple[list[int], list[float], bool]:
-        """Read only pixels and wavelengths (lines 0-1). No side effects on extraction params."""
+    @staticmethod
+    def _parse_pixels_wavelengths(lines: list[str]) -> tuple[list[int], list[float], bool]:
+        """Parse pixels and wavelengths from first two lines. Returns (pixels, wavelengths, errors)."""
         pixels: list[int] = []
         wavelengths: list[float] = []
         try:
-            with open(self.cal_file, "r") as f:
-                lines = f.readlines()
             line0 = lines[0].strip()
             pixels = [int(x) for x in line0.split(",")]
             line1 = lines[1].strip()
             wavelengths = [float(x) for x in line1.split(",")]
             if len(pixels) != len(wavelengths) or len(pixels) < 3:
                 return pixels, wavelengths, True
-        except (OSError, IndexError, ValueError):
+        except (IndexError, ValueError):
             return pixels, wavelengths, True
         return pixels, wavelengths, False
+
+    def _read_pixels_wavelengths_only(self) -> tuple[list[int], list[float], bool]:
+        """Read only pixels and wavelengths (lines 0-1). No side effects on extraction params."""
+        try:
+            with open(self.cal_file, "r") as f:
+                lines = f.readlines()
+            return self._parse_pixels_wavelengths(lines)
+        except OSError:
+            return [], [], True
 
     def _read_cal_file(self) -> tuple[list[int], list[float], bool]:
         """Read calibration data from file.
         Pixels/wavelengths (lines 0-1) and extraction params (lines 2-4)
         are read independently so offset/rotation still load when lines 0-1 fail.
         """
-        errors = False
-        pixels: list[int] = []
-        wavelengths: list[float] = []
-        lines: list[str] = []
-
         try:
             print("Loading calibration data...")
             with open(self.cal_file, "r") as f:
                 lines = f.readlines()
         except OSError:
-            return pixels, wavelengths, True
+            return [], [], True
 
-        # Parse pixels and wavelengths (lines 0-1)
-        try:
-            line0 = lines[0].strip()
-            pixels = [int(x) for x in line0.split(",")]
-            line1 = lines[1].strip()
-            wavelengths = [float(x) for x in line1.split(",")]
-            if len(pixels) != len(wavelengths) or len(pixels) < 3:
-                errors = True
-            else:
-                self._cal_pixels = pixels
-                self._cal_wavelengths = wavelengths
-        except (IndexError, ValueError):
-            errors = True
+        pixels, wavelengths, errors = self._parse_pixels_wavelengths(lines)
+        if not errors and len(pixels) >= 3:
+            self._cal_pixels = pixels
+            self._cal_wavelengths = wavelengths
 
         # Always load extraction params (offset, rotation, perpendicular width)
         # so they apply even when pixel/wavelength lines fail

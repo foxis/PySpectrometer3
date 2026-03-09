@@ -20,6 +20,7 @@ from .processing.extraction import SpectrumExtractor, ExtractionMethod
 from .display.renderer import DisplayManager
 from .export.csv_exporter import CSVExporter
 from .input.keyboard import KeyboardHandler, Action
+from .modes.base import BaseMode
 from .modes.calibration import CalibrationMode
 from .modes.measurement import MeasurementMode
 from .data.reference_spectra import ReferenceSource
@@ -118,20 +119,23 @@ class Spectrometer:
             self._peak_detector,
         ])
         
-        self._display = DisplayManager(self.config, self._calibration, mode=mode)
+        # Mode instance for button definitions (single source of truth)
+        mode_instance: Optional[BaseMode] = None
+        match mode:
+            case "calibration":
+                self._calibration_mode = CalibrationMode()
+                mode_instance = self._calibration_mode
+            case "measurement":
+                self._measurement_mode = MeasurementMode()
+                mode_instance = self._measurement_mode
+            case _:
+                mode_instance = MeasurementMode()  # Fallback for raman/colorscience
+        self._display = DisplayManager(self.config, self._calibration, mode=mode, mode_instance=mode_instance)
         self._exporter = CSVExporter(output_dir=self.config.export.output_dir)
         self._keyboard = KeyboardHandler()
         self._reference_manager = ReferenceSpectrumManager()
         
-        # Mode-specific handlers
-        self._calibration_mode: Optional[CalibrationMode] = None
-        self._measurement_mode: Optional[MeasurementMode] = None
-        
-        match mode:
-            case "calibration":
-                self._calibration_mode = CalibrationMode()
-            case "measurement":
-                self._measurement_mode = MeasurementMode()
+        # Mode-specific handlers (modes created above)
         
         self._held_intensity: Optional[np.ndarray] = None
         self._running = False

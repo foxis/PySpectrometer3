@@ -45,115 +45,43 @@ class ControlBarConfig:
             self.row_height = (available - self.row_spacing) // 2
 
 
-@dataclass
-class ButtonDef:
-    """Button definition for control bar setup."""
-    
-    label: str
-    action_name: str
-    is_toggle: bool = False
-    shortcut: str = ""
-    row: int = 1
-    icon_type: str = ""  # "playback" = red circle when active, gray square when stopped
-
-
-# Measurement mode buttons
-MEASUREMENT_BUTTONS = [
-    # Row 1: Capture and references
-    ButtonDef("Capture", "capture", row=1),
-    ButtonDef("Peak", "capture_peak", is_toggle=True, shortcut="h", row=1),
-    ButtonDef("Avg", "toggle_averaging", is_toggle=True, row=1),
-    ButtonDef("Dark", "set_dark", row=1),
-    ButtonDef("White", "set_white", row=1),
-    ButtonDef("ClrRef", "clear_refs", row=1),
-    # Row 2: Display and control, Save/Load before Quit, Quit right-justified
-    ButtonDef("ShowRef", "show_reference", is_toggle=True, row=2),
-    ButtonDef("Norm", "normalize", is_toggle=True, row=2),
-    ButtonDef("G", "show_gain_slider", is_toggle=True, row=2),
-    ButtonDef("E", "show_exposure_slider", is_toggle=True, row=2),
-    ButtonDef("AG", "auto_gain", is_toggle=True, row=2),
-    ButtonDef("AE", "auto_exposure", is_toggle=True, row=2),
-    ButtonDef("Prev", "cycle_preview", shortcut="v", row=2),
-    ButtonDef("Lamp", "lamp_toggle", is_toggle=True, row=2),
-    ButtonDef("Save", "save", shortcut="s", row=2),
-    ButtonDef("Load", "load", row=2),
-    ButtonDef("__spacer__", "__spacer_right__", row=2),
-]
-
-# Default buttons (legacy, for non-mode operation)
-DEFAULT_BUTTONS = MEASUREMENT_BUTTONS
-
-# Calibration mode buttons
-# LEVEL and CALIB are pushed right via spacer (far from other buttons)
-CALIBRATION_BUTTONS = [
-    # Row 1: Source selection, Save/Load, then spacer, SENS, LEVEL, CALIB
-    ButtonDef("FL", "source_fl", row=1),
-    ButtonDef("Hg", "source_hg", row=1),
-    ButtonDef("D65", "source_d65", row=1),
-    ButtonDef("LED1", "source_led", row=1),
-    ButtonDef("LED2", "source_led2", row=1),
-    ButtonDef("LED3", "source_led3", row=1),
-    ButtonDef("FL2", "source_fl2", row=1),
-    ButtonDef("FL3", "source_fl3", row=1),
-    ButtonDef("FL4", "source_fl4", row=1),
-    ButtonDef("FL5", "source_fl5", row=1),
-    ButtonDef("A", "source_a", row=1),
-    ButtonDef("Overlay", "toggle_overlay", is_toggle=True, row=1),
-    ButtonDef("__spacer__", "__spacer_left__", row=1),  # Pushes S/CORR/LEVEL/CALIB/R right
-    ButtonDef("S", "toggle_sensitivity", is_toggle=True, row=1),
-    ButtonDef("CORR", "correct_sensitivity", row=1),
-    ButtonDef("LEVEL", "auto_level", is_toggle=True, row=1),
-    ButtonDef("CALIB", "auto_calibrate", row=1),
-    ButtonDef("R", "reset_calibration", row=1),
-    # Row 2: Playback icon (freeze), Peak, Avg, etc.
-    ButtonDef("Play", "freeze", is_toggle=True, row=2, icon_type="playback"),
-    ButtonDef("Peak", "capture_peak", is_toggle=True, row=2),  # No shortcut
-    ButtonDef("Avg", "toggle_averaging", is_toggle=True, row=2),
-    ButtonDef("G", "show_gain_slider", is_toggle=True, row=2),
-    ButtonDef("E", "show_exposure_slider", is_toggle=True, row=2),
-    ButtonDef("AG", "auto_gain", is_toggle=True, row=2),
-    ButtonDef("AE", "auto_exposure", is_toggle=True, row=2),
-    ButtonDef("Prev", "cycle_preview", shortcut="v", row=2),
-    ButtonDef("Clear", "clear_points", shortcut="x", row=2),
-    ButtonDef("Save", "save_cal", shortcut="w", row=2),
-    ButtonDef("CSV", "save_spectrum", shortcut="s", row=2),
-    ButtonDef("Load", "load_cal", row=2),
-    ButtonDef("__spacer__", "__spacer_right__", row=2),
-]
-
-
 class ControlBar:
     """Two-row control bar with clickable buttons.
-    
+
     Replaces the static message banner with interactive controls.
+    Uses mode.get_buttons() as single source of truth when buttons provided.
     """
-    
+
     def __init__(
         self,
         width: int = 800,
         config: Optional[ControlBarConfig] = None,
         mode: str = "measurement",
+        buttons: Optional[list] = None,
     ):
         """Initialize control bar.
-        
+
         Args:
             width: Width of the control bar
             config: Configuration (uses defaults if None)
-            mode: Operating mode (affects button layout)
+            mode: Operating mode
+            buttons: Button definitions from mode.get_buttons() (required)
         """
+        if buttons is None:
+            raise ValueError("buttons required; use mode.get_buttons()")
         self.width = width
         self.config = config or ControlBarConfig()
         self.mode = mode
-        
+
         self._row1: Optional[ButtonBar] = None
         self._row2: Optional[ButtonBar] = None
         self._status_values: dict[str, str] = {}
         self._button_style: Optional[ButtonStyle] = None
-        
-        self._setup_buttons_for_mode(mode)
-    
-    def _setup_buttons_for_mode(self, mode: str) -> None:
-        """Set up buttons based on operating mode."""
+
+        self._setup_buttons(buttons)
+
+    def _setup_buttons(self, buttons: list) -> None:
+        """Set up buttons from list (ButtonDefinition from mode.get_buttons())."""
         cfg = self.config
         
         self._button_style = ButtonStyle(
@@ -182,15 +110,6 @@ class ControlBar:
             style=self._button_style,
         )
         
-        # Select button set based on mode
-        match mode:
-            case "calibration":
-                buttons = CALIBRATION_BUTTONS
-            case "measurement":
-                buttons = MEASUREMENT_BUTTONS
-            case _:
-                buttons = DEFAULT_BUTTONS
-        
         for btn_def in buttons:
             bar = self._row1 if btn_def.row == 1 else self._row2
             if btn_def.action_name.startswith("__spacer"):
@@ -217,15 +136,16 @@ class ControlBar:
                 icon_type=getattr(btn_def, "icon_type", ""),
             )
     
-    def set_mode(self, mode: str) -> None:
+    def set_mode(self, mode: str, buttons: list) -> None:
         """Change operating mode (rebuilds buttons).
-        
+
         Args:
             mode: New operating mode
+            buttons: Button definitions from mode.get_buttons() (required)
         """
         self.mode = mode
         self._status_values.clear()
-        self._setup_buttons_for_mode(mode)
+        self._setup_buttons(buttons)
     
     def register_callback(self, action_name: str, callback: Callable[[], None]) -> bool:
         """Register a callback for a button action.

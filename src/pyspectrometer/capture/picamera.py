@@ -4,6 +4,7 @@ from typing import Optional
 import numpy as np
 
 from .base import CameraInterface
+from ..utils.display import scale_to_uint8
 
 
 class Capture(CameraInterface):
@@ -404,8 +405,7 @@ class Capture(CameraInterface):
         frame = self.capture()
         
         if self._actual_bit_depth > 8:
-            # Scale down from 10/16-bit to 8-bit
             max_val = (1 << self._actual_bit_depth) - 1
-            frame = (frame.astype(np.float32) * 255 / max_val).astype(np.uint8)
+            frame = scale_to_uint8(frame, float(max_val))
         
         return frame

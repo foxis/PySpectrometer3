@@ -40,15 +40,16 @@ class ModeState:
     lamp_enabled: bool = False
 
 
-@dataclass 
+@dataclass
 class ButtonDefinition:
     """Definition of a button for the mode's control bar."""
-    
+
     label: str
     action_name: str
     is_toggle: bool = False
     shortcut: str = ""
     row: int = 1
+    icon_type: str = ""  # e.g. "playback" for freeze button
 
 
 class BaseMode(ABC):

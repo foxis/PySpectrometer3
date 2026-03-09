@@ -18,7 +18,9 @@ from ..gui.control_bar import ControlBar, ControlBarConfig
 from ..gui.sliders import SliderPanel
 from .graticule import GraticuleRenderer
 from .waterfall import WaterfallDisplay
+from ..modes.base import BaseMode
 from ..utils.graph_scale import scale_intensity_to_graph
+from ..utils.display import scale_to_uint8
 from .overlay_utils import render_polyline_overlay
 
 
@@ -64,13 +66,15 @@ class DisplayManager:
         config: Config,
         calibration: Calibration,
         mode: str = "measurement",
+        mode_instance: Optional["BaseMode"] = None,
     ):
         """Initialize display manager.
-        
+
         Args:
             config: Application configuration
             calibration: Wavelength calibration data
             mode: Operating mode (calibration, measurement, raman, colorscience)
+            mode_instance: Mode instance for button definitions (single source of truth)
         """
         self.config = config
         self.calibration = calibration
@@ -88,6 +92,7 @@ class DisplayManager:
                 brightness=config.waterfall.brightness,
             )
         
+        buttons = mode_instance.get_buttons() if mode_instance is not None else None
         self._control_bar = ControlBar(
             width=config.camera.frame_width,
             config=ControlBarConfig(
@@ -95,6 +100,7 @@ class DisplayManager:
                 font_scale=config.display.font_scale,
             ),
             mode=mode,
+            buttons=buttons,
         )
         
         # Slider panel for gain/exposure/LED (positioned on right side of graph area)
@@ -324,8 +330,7 @@ class DisplayManager:
                     if raw_frame.ndim == 2:
                         # Monochrome - scale to 8-bit for display only (preserve 10/16-bit in data)
                         if raw_frame.dtype == np.uint16:
-                            max_val = max(float(np.max(raw_frame)), 1.0)
-                            display = (raw_frame.astype(np.float32) * 255.0 / max_val).astype(np.uint8)
+                            display = scale_to_uint8(raw_frame)
                         else:
                             display = raw_frame.astype(np.uint8)
                         display = cv2.cvtColor(display, cv2.COLOR_GRAY2BGR)

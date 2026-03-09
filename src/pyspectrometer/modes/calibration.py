@@ -108,26 +108,39 @@ class CalibrationMode(BaseMode):
     def get_buttons(self) -> list[ButtonDefinition]:
         """Get calibration mode buttons."""
         return [
-            # Row 1: Source selection and calibration actions
+            # Row 1: Source selection, spacer, SENS/LEVEL/CALIB/R
             ButtonDefinition("FL", "source_fl", row=1),
             ButtonDefinition("Hg", "source_hg", row=1),
             ButtonDefinition("D65", "source_d65", row=1),
             ButtonDefinition("LED1", "source_led", row=1),
             ButtonDefinition("LED2", "source_led2", row=1),
             ButtonDefinition("LED3", "source_led3", row=1),
-            ButtonDefinition("AutoLvl", "auto_level", is_toggle=True, row=1),
-            ButtonDefinition("AutoCal", "auto_calibrate", row=1),
-            ButtonDefinition("Save", "save_cal", shortcut="w", row=1),
-            ButtonDefinition("Load", "load_cal", row=1),
-            
-            # Row 2: Display and control
-            ButtonDefinition("Freeze", "freeze", is_toggle=True, shortcut="f", row=2),
-            ButtonDefinition("Overlay", "toggle_overlay", is_toggle=True, row=2),
-            ButtonDefinition("AutoG", "auto_gain", is_toggle=True, row=2),
-            ButtonDefinition("Gain+", "gain_up", shortcut="t", row=2),
-            ButtonDefinition("Gain-", "gain_down", shortcut="g", row=2),
+            ButtonDefinition("FL2", "source_fl2", row=1),
+            ButtonDefinition("FL3", "source_fl3", row=1),
+            ButtonDefinition("FL4", "source_fl4", row=1),
+            ButtonDefinition("FL5", "source_fl5", row=1),
+            ButtonDefinition("A", "source_a", row=1),
+            ButtonDefinition("Overlay", "toggle_overlay", is_toggle=True, row=1),
+            ButtonDefinition("__spacer__", "__spacer_left__", row=1),
+            ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=1),
+            ButtonDefinition("CORR", "correct_sensitivity", row=1),
+            ButtonDefinition("LEVEL", "auto_level", is_toggle=True, row=1),
+            ButtonDefinition("CALIB", "auto_calibrate", row=1),
+            ButtonDefinition("R", "reset_calibration", row=1),
+            # Row 2: Playback (freeze), Peak, Avg, G, E, AG, AE, Prev, Clear, Save, CSV, Load
+            ButtonDefinition("Play", "freeze", is_toggle=True, row=2, icon_type="playback"),
+            ButtonDefinition("Peak", "capture_peak", is_toggle=True, row=2),
+            ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=2),
+            ButtonDefinition("G", "show_gain_slider", is_toggle=True, row=2),
+            ButtonDefinition("E", "show_exposure_slider", is_toggle=True, row=2),
+            ButtonDefinition("AG", "auto_gain", is_toggle=True, row=2),
+            ButtonDefinition("AE", "auto_exposure", is_toggle=True, row=2),
+            ButtonDefinition("Prev", "cycle_preview", shortcut="v", row=2),
             ButtonDefinition("Clear", "clear_points", shortcut="x", row=2),
-            ButtonDefinition("Quit", "quit", shortcut="q", row=2),
+            ButtonDefinition("Save", "save_cal", shortcut="w", row=2),
+            ButtonDefinition("CSV", "save_spectrum", shortcut="s", row=2),
+            ButtonDefinition("Load", "load_cal", row=2),
+            ButtonDefinition("__spacer__", "__spacer_right__", row=2),
         ]
     
     def process_spectrum(
@@ -352,19 +365,10 @@ class CalibrationMode(BaseMode):
             if wl_0 >= wl_n - 50:
                 range_penalty += 1e6
             ref = get_reference_spectrum(source, wl)
-            if (
-                self.cal_state.sensitivity_correction_enabled
-                and self._cmos_sensitivity_wl is not None
-                and self._cmos_sensitivity_val is not None
-            ):
-                sens = np.interp(
-                    wl,
-                    self._cmos_sensitivity_wl,
-                    self._cmos_sensitivity_val,
-                    left=0.0,
-                    right=0.0,
-                )
-                ref = ref * np.maximum(sens, 1e-9)
+            if self.cal_state.sensitivity_correction_enabled:
+                sens = self._interp_sensitivity(wl)
+                if sens is not None:
+                    ref = ref * np.maximum(sens, 1e-9)
             if ref.size < 2 or np.std(ref) < 1e-9 or np.std(measured_intensity) < 1e-9:
                 return 1e6
             corr = np.corrcoef(measured_intensity, ref)[0, 1]
@@ -405,19 +409,10 @@ class CalibrationMode(BaseMode):
         self.cal_state.calibration_points = calibration_points
 
         ref_final = get_reference_spectrum(source, wl_arr)
-        if (
-            self.cal_state.sensitivity_correction_enabled
-            and self._cmos_sensitivity_wl is not None
-            and self._cmos_sensitivity_val is not None
-        ):
-            sens = np.interp(
-                wl_arr,
-                self._cmos_sensitivity_wl,
-                self._cmos_sensitivity_val,
-                left=0.0,
-                right=0.0,
-            )
-            ref_final = ref_final * np.maximum(sens, 1e-9)
+        if self.cal_state.sensitivity_correction_enabled:
+            sens = self._interp_sensitivity(wl_arr)
+            if sens is not None:
+                ref_final = ref_final * np.maximum(sens, 1e-9)
         corr_final = np.corrcoef(measured_intensity, ref_final)[0, 1] if np.std(ref_final) > 1e-9 else 0
         print(f"[Calibration] Correlation calibration: r={corr_final:.4f}")
         for pixel, wl in calibration_points:
@@ -594,34 +589,29 @@ class CalibrationMode(BaseMode):
         print(f"[Calibration] Sensitivity correction: {'ON' if self.cal_state.sensitivity_correction_enabled else 'OFF'}")
         return self.cal_state.sensitivity_correction_enabled
     
-    def get_sensitivity_curve(
-        self,
-        wavelengths: np.ndarray,
-        graph_height: int,
-    ) -> Optional[tuple[np.ndarray, tuple[int, int, int]]]:
-        """Get CMOS sensitivity curve for overlay.
-        
-        Args:
-            wavelengths: Wavelength array (per pixel)
-            graph_height: Height of graph in pixels
-            
-        Returns:
-            Tuple of (scaled_sensitivity, color) or None if not available
-        """
+    def _interp_sensitivity(self, wavelengths: np.ndarray) -> Optional[np.ndarray]:
+        """Interpolate CMOS sensitivity at wavelengths. Returns None if not loaded."""
         if self._cmos_sensitivity_wl is None or self._cmos_sensitivity_val is None:
             return None
-        
-        if not self.cal_state.sensitivity_correction_enabled:
-            return None
-        
-        sensitivity = np.interp(
+        return np.interp(
             wavelengths,
             self._cmos_sensitivity_wl,
             self._cmos_sensitivity_val,
             left=0.0,
             right=0.0,
         )
-        
+
+    def get_sensitivity_curve(
+        self,
+        wavelengths: np.ndarray,
+        graph_height: int,
+    ) -> Optional[tuple[np.ndarray, tuple[int, int, int]]]:
+        """Get CMOS sensitivity curve for overlay."""
+        if not self.cal_state.sensitivity_correction_enabled:
+            return None
+        sensitivity = self._interp_sensitivity(wavelengths)
+        if sensitivity is None:
+            return None
         scaled = scale_intensity_to_graph(sensitivity, graph_height)
         color = (100, 255, 100)  # Green
         
@@ -644,22 +634,15 @@ class CalibrationMode(BaseMode):
         if not self.cal_state.sensitivity_correction_enabled:
             return intensity
 
-        if self._cmos_sensitivity_wl is None or self._cmos_sensitivity_val is None:
+        sensitivity = self._interp_sensitivity(wavelengths)
+        if sensitivity is None:
             return intensity
 
         n_wl = len(wavelengths)
         n_int = len(intensity)
         n = min(n_wl, n_int)
         intensity = intensity[:n]
-        wl = wavelengths[:n]
-
-        sensitivity = np.interp(
-            wl,
-            self._cmos_sensitivity_wl,
-            self._cmos_sensitivity_val,
-            left=0.0,
-            right=0.0,
-        )
+        sensitivity = sensitivity[:n]
 
         intensity_f = np.asarray(intensity, dtype=np.float32)
         corrected = np.zeros(n, dtype=np.float32)

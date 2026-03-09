@@ -6,6 +6,7 @@ from typing import Optional
 import numpy as np
 import cv2
 
+from ..utils.display import scale_to_uint8
 from .spectrum_transform import (
     SpectrumTransformParams,
     apply_forward_transform,
@@ -299,19 +300,11 @@ class SpectrumExtractor:
         
         # Convert monochrome to 3-channel for display
         if cropped.ndim == 2:
-            # Scale to 8-bit if high bit-depth
+            # Scale to 8-bit if high bit-depth (use bit-depth-based max for consistency)
             if cropped.dtype == np.uint16:
-                max_val = cropped.max()
-                if max_val > 255:
-                    if max_val > 4095:
-                        scale = 255.0 / 65535.0
-                    elif max_val > 1023:
-                        scale = 255.0 / 4095.0
-                    else:
-                        scale = 255.0 / 1023.0
-                    cropped = (cropped.astype(np.float32) * scale).astype(np.uint8)
-                else:
-                    cropped = cropped.astype(np.uint8)
+                m = cropped.max()
+                max_val = 65535.0 if m > 4095 else (4095.0 if m > 1023 else 1023.0)
+                cropped = scale_to_uint8(cropped, max_val)
             # Convert grayscale to BGR for display
             cropped = cv2.cvtColor(cropped, cv2.COLOR_GRAY2BGR)
         
@@ -370,11 +363,9 @@ class SpectrumExtractor:
                         pass
 
             # Right panel: ORIGINAL frame with ellipses (same coords - no transform)
-            # Ellipses are fitted on original; crop box is on ROTATED frame, so draw it on rotated
             vis_orig = frame.copy()
             if vis_orig.dtype == np.uint16:
-                max_val = max(vis_orig.max(), 1)
-                vis_orig = (vis_orig.astype(np.float32) * 255 / max_val).astype(np.uint8)
+                vis_orig = scale_to_uint8(vis_orig)
             if vis_orig.ndim == 2:
                 vis_orig = cv2.cvtColor(vis_orig, cv2.COLOR_GRAY2BGR)
 
@@ -389,8 +380,7 @@ class SpectrumExtractor:
             rotated_frame = apply_forward_transform(frame, params)
             vis_rot = rotated_frame.copy()
             if vis_rot.dtype == np.uint16:
-                max_val = max(vis_rot.max(), 1)
-                vis_rot = (vis_rot.astype(np.float32) * 255 / max_val).astype(np.uint8)
+                vis_rot = scale_to_uint8(vis_rot)
             if vis_rot.ndim == 2:
                 vis_rot = cv2.cvtColor(vis_rot, cv2.COLOR_GRAY2BGR)
 
