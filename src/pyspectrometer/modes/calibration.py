@@ -16,23 +16,23 @@ Manual calibration (peak matching) via calibrate_from_peaks() for later use.
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Callable
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..core.spectrum import SpectrumData
 import numpy as np
 from scipy.optimize import minimize
 
-from .base import BaseMode, ModeType, ButtonDefinition
 from ..core.mode_context import ModeContext
-from ..utils.graph_scale import scale_intensity_to_graph
 from ..data.reference_spectra import (
     ReferenceSource,
-    get_reference_spectrum,
-    get_reference_peaks,
-    get_reference_name,
     SpectralLine,
+    get_reference_name,
+    get_reference_peaks,
+    get_reference_spectrum,
 )
+from ..utils.graph_scale import scale_intensity_to_graph
+from .base import BaseMode, ButtonDefinition, ModeType
 
 # Data directory for CMOS sensitivity curve (up 3 levels from modes/calibration.py)
 _DATA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data"
@@ -41,32 +41,32 @@ _DATA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "data"
 @dataclass
 class CalibrationState:
     """State specific to calibration mode."""
-    
+
     # Current reference source
     current_source: ReferenceSource = ReferenceSource.FL
-    
+
     # Overlay visibility
     overlay_visible: bool = True
-    
+
     # Sensitivity correction enabled
     sensitivity_correction_enabled: bool = False
-    
+
     # Detected peaks from measured spectrum
     detected_peaks: list[int] = field(default_factory=list)  # pixel positions
-    
+
     # Matched calibration points (pixel, wavelength)
     calibration_points: list[tuple[int, float]] = field(default_factory=list)
-    
+
     # Y-axis shift (for auto-center)
     y_shift: int = 0
-    
+
     # Frozen spectrum for calibration
-    frozen_intensity: Optional[np.ndarray] = None
+    frozen_intensity: np.ndarray | None = None
 
 
 class CalibrationMode(BaseMode):
     """Calibration mode for wavelength calibration."""
-    
+
     # Reference sources in cycle order
     SOURCES = [
         ReferenceSource.FL,
@@ -81,20 +81,20 @@ class CalibrationMode(BaseMode):
         ReferenceSource.LED2,
         ReferenceSource.LED3,
     ]
-    
+
     def __init__(self):
         """Initialize calibration mode."""
         super().__init__()
         self.cal_state = CalibrationState()
-        
+
         # Enable auto-gain by default
         self.state.auto_gain_enabled = True
-        
+
         # Load CMOS sensitivity curve
-        self._cmos_sensitivity_wl: Optional[np.ndarray] = None
-        self._cmos_sensitivity_val: Optional[np.ndarray] = None
+        self._cmos_sensitivity_wl: np.ndarray | None = None
+        self._cmos_sensitivity_val: np.ndarray | None = None
         self._load_cmos_sensitivity()
-        
+
     def setup(self, ctx: ModeContext) -> None:
         """Register calibration-specific handlers."""
         super().setup(ctx)
@@ -119,7 +119,9 @@ class CalibrationMode(BaseMode):
         self.register_callback("toggle_accumulation", lambda: self._on_toggle_accumulation(ctx))
         self.register_callback("clear_points", lambda: self._on_clear_points(ctx))
         ctx.display.set_button_active("toggle_overlay", self.cal_state.overlay_visible)
-        ctx.display.set_button_active("toggle_sensitivity", self.cal_state.sensitivity_correction_enabled)
+        ctx.display.set_button_active(
+            "toggle_sensitivity", self.cal_state.sensitivity_correction_enabled
+        )
         ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
 
     def on_start(self, ctx: ModeContext) -> None:
@@ -144,7 +146,9 @@ class CalibrationMode(BaseMode):
         if ctx.frozen_spectrum:
             ctx.display.set_status("Status", "FROZEN")
         elif self.state.integration_mode != "none":
-            ctx.display.set_status("Status", f"{self.state.integration_mode.upper()}:{self.state.accumulated_frames}")
+            ctx.display.set_status(
+                "Status", f"{self.state.integration_mode.upper()}:{self.state.accumulated_frames}"
+            )
         else:
             ctx.display.set_status("Status", "LIVE")
 
@@ -245,7 +249,7 @@ class CalibrationMode(BaseMode):
             spectrum_y_center=ctx.extractor.spectrum_y_center,
             perpendicular_width=ctx.extractor.perpendicular_width,
         )
-        print(f"[CAL] Extraction params saved")
+        print("[CAL] Extraction params saved")
         if not saved:
             print("[CAL] Need at least 4 calibration points to save wavelength cal")
 
@@ -262,7 +266,7 @@ class CalibrationMode(BaseMode):
             ctx.extractor.set_rotation_angle(ctx.calibration.rotation_angle)
             ctx.extractor.set_spectrum_y_center(ctx.calibration.spectrum_y_center)
             ctx.extractor.set_perpendicular_width(ctx.calibration.perpendicular_width)
-            print(f"[CAL] Calibration loaded")
+            print("[CAL] Calibration loaded")
         else:
             print("[CAL] Failed to load calibration")
 
@@ -300,11 +304,11 @@ class CalibrationMode(BaseMode):
     @property
     def mode_type(self) -> ModeType:
         return ModeType.CALIBRATION
-    
+
     @property
     def name(self) -> str:
         return "Calibration"
-    
+
     def get_buttons(self) -> list[ButtonDefinition]:
         """Get calibration mode buttons."""
         return [
@@ -344,7 +348,7 @@ class CalibrationMode(BaseMode):
             ButtonDefinition("Quit", "quit", row=2),
             ButtonDefinition("__spacer__", "__spacer_right__", row=2),
         ]
-    
+
     def process_spectrum(
         self,
         intensity: np.ndarray,
@@ -354,51 +358,51 @@ class CalibrationMode(BaseMode):
         # If frozen, return the frozen spectrum
         if self.state.frozen and self.cal_state.frozen_intensity is not None:
             return self.cal_state.frozen_intensity
-        
+
         if self.state.integration_mode != "none":
             intensity = self.accumulate_spectrum(intensity)
-        
+
         # Store for freeze
         self.cal_state.frozen_intensity = intensity.copy()
-        
+
         return intensity
-    
+
     def get_overlay(
         self,
         wavelengths: np.ndarray,
         graph_height: int,
-    ) -> Optional[tuple[np.ndarray, tuple[int, int, int]]]:
+    ) -> tuple[np.ndarray, tuple[int, int, int]] | None:
         """Get reference spectrum overlay."""
         if not self.cal_state.overlay_visible:
             return None
-        
+
         # Generate reference spectrum
         ref_intensity = get_reference_spectrum(
             self.cal_state.current_source,
             wavelengths,
         )
-        
+
         # Scale to graph height
         scaled = scale_intensity_to_graph(ref_intensity, graph_height)
-        
+
         # Color based on source
         colors = {
-            ReferenceSource.FL: (255, 200, 0),     # Yellow
-            ReferenceSource.HG: (255, 0, 255),     # Magenta
+            ReferenceSource.FL: (255, 200, 0),  # Yellow
+            ReferenceSource.HG: (255, 0, 255),  # Magenta
             ReferenceSource.D65: (100, 200, 255),  # Daylight blue
             ReferenceSource.LED: (200, 200, 200),  # White/gray
-            ReferenceSource.LED2: (180, 220, 220), # Light cyan
-            ReferenceSource.LED3: (220, 200, 220), # Light purple
+            ReferenceSource.LED2: (180, 220, 220),  # Light cyan
+            ReferenceSource.LED3: (220, 200, 220),  # Light purple
         }
         color = colors.get(self.cal_state.current_source, (200, 200, 200))
-        
+
         return (scaled, color)
-    
+
     def select_source(self, source: ReferenceSource) -> None:
         """Select a reference source."""
         self.cal_state.current_source = source
         print(f"[Calibration] Selected reference: {get_reference_name(source)}")
-    
+
     def cycle_source(self) -> ReferenceSource:
         """Cycle to next reference source."""
         current_idx = self.SOURCES.index(self.cal_state.current_source)
@@ -406,13 +410,13 @@ class CalibrationMode(BaseMode):
         self.cal_state.current_source = self.SOURCES[next_idx]
         print(f"[Calibration] Reference: {get_reference_name(self.cal_state.current_source)}")
         return self.cal_state.current_source
-    
+
     def toggle_overlay(self) -> bool:
         """Toggle reference overlay visibility."""
         self.cal_state.overlay_visible = not self.cal_state.overlay_visible
         print(f"[Calibration] Overlay: {'ON' if self.cal_state.overlay_visible else 'OFF'}")
         return self.cal_state.overlay_visible
-    
+
     def auto_calibrate(
         self,
         measured_intensity: np.ndarray,
@@ -443,8 +447,10 @@ class CalibrationMode(BaseMode):
         """
         ref_peaks = get_reference_peaks(self.cal_state.current_source)
         if len(ref_peaks) < 3:
-            print(f"[Calibration] Reference '{get_reference_name(self.cal_state.current_source)}' "
-                  f"has {len(ref_peaks)} peaks; use Hg or FL for auto-calibration")
+            print(
+                f"[Calibration] Reference '{get_reference_name(self.cal_state.current_source)}' "
+                f"has {len(ref_peaks)} peaks; use Hg or FL for auto-calibration"
+            )
             return []
 
         # Try peak-based ordered matching first (robust for slightly different spectra)
@@ -474,8 +480,10 @@ class CalibrationMode(BaseMode):
         n_ref = len(ref_sorted)
         n_meas = len(peak_pixels)
         if n_ref < min_required or n_meas < min_required:
-            print(f"[Calibration] Peak matching: need {min_required}+ peaks, "
-                  f"have {n_meas} measured, {n_ref} reference")
+            print(
+                f"[Calibration] Peak matching: need {min_required}+ peaks, "
+                f"have {n_meas} measured, {n_ref} reference"
+            )
             return []
 
         n_use = min(n_ref, n_meas)
@@ -518,7 +526,7 @@ class CalibrationMode(BaseMode):
                     best_dispersion_score = dsc
                     best_points = pts
 
-        calibration_points = best_points[:min(6, len(best_points))]
+        calibration_points = best_points[: min(6, len(best_points))]
         self.cal_state.calibration_points = calibration_points
 
         print(f"[Calibration] Peak-ordered calibration: {len(calibration_points)} points")
@@ -576,7 +584,7 @@ class CalibrationMode(BaseMode):
             if np.isnan(corr):
                 return 1e6
             # Strong linearity penalty: mostly shift + scale, not drastic curvature
-            linearity_penalty = 2.0 * (c2 ** 2 + c3 ** 2)
+            linearity_penalty = 2.0 * (c2**2 + c3**2)
             return -corr + linearity_penalty + range_penalty
 
         # c0: wl at pixel 0; c1: nm/pixel (span ~350-400 nm over n pixels)
@@ -602,7 +610,12 @@ class CalibrationMode(BaseMode):
 
         c0, c1, c2, c3 = res.x
         pixels_arr = np.arange(n, dtype=np.float64)
-        wl_arr = c0 + c1 * pixels_arr + c2 * (pixels_arr ** 2) / (n * n) + c3 * (pixels_arr ** 3) / (n * n * n)
+        wl_arr = (
+            c0
+            + c1 * pixels_arr
+            + c2 * (pixels_arr**2) / (n * n)
+            + c3 * (pixels_arr**3) / (n * n * n)
+        )
 
         # Generate 5 points for 3rd-order poly fit (existing recalibrate expects points)
         idx = [0, n // 4, n // 2, 3 * n // 4, n - 1]
@@ -614,7 +627,9 @@ class CalibrationMode(BaseMode):
             sens = self._interp_sensitivity(wl_arr)
             if sens is not None:
                 ref_final = ref_final * np.maximum(sens, 1e-9)
-        corr_final = np.corrcoef(measured_intensity, ref_final)[0, 1] if np.std(ref_final) > 1e-9 else 0
+        corr_final = (
+            np.corrcoef(measured_intensity, ref_final)[0, 1] if np.std(ref_final) > 1e-9 else 0
+        )
         print(f"[Calibration] Correlation calibration: r={corr_final:.4f}")
         for pixel, wl in calibration_points:
             print(f"  Pixel {pixel} -> {wl:.1f} nm")
@@ -648,7 +663,7 @@ class CalibrationMode(BaseMode):
             print(f"[Calibration] Reference has only {len(reference_peaks)} peaks")
             return []
 
-        pixel_indices = [p.index if hasattr(p, 'index') else p for p in peak_indices]
+        pixel_indices = [p.index if hasattr(p, "index") else p for p in peak_indices]
         peak_wavelengths = [wavelengths[min(idx, len(wavelengths) - 1)] for idx in pixel_indices]
 
         matches = self._match_peaks_to_reference(
@@ -661,7 +676,7 @@ class CalibrationMode(BaseMode):
             print(f"[Calibration] Could only match {len(matches)} peaks, need 4")
             return []
 
-        matches = sorted(matches, key=lambda m: m[2])[:min(6, len(matches))]
+        matches = sorted(matches, key=lambda m: m[2])[: min(6, len(matches))]
         calibration_points = [(m[0], m[1]) for m in matches]
         self.cal_state.calibration_points = calibration_points
 
@@ -669,7 +684,7 @@ class CalibrationMode(BaseMode):
         for pixel, wl in calibration_points:
             print(f"  Pixel {pixel} -> {wl:.1f} nm")
         return calibration_points
-    
+
     def _linearity_score(self, points: list[tuple[int, float]]) -> float:
         """R² of linear fit pixel→wavelength. Higher = more linear."""
         if len(points) < 2:
@@ -738,24 +753,24 @@ class CalibrationMode(BaseMode):
 
         matches.sort(key=lambda m: m[0])
         return matches
-    
+
     def get_calibration_points(self) -> list[tuple[int, float]]:
         """Get current calibration points for saving.
-        
+
         Returns:
             List of (pixel, wavelength) tuples
         """
         return self.cal_state.calibration_points.copy()
-    
+
     def clear_calibration_points(self) -> None:
         """Clear all calibration points."""
         self.cal_state.calibration_points.clear()
         print("[Calibration] Points cleared")
-    
+
     def get_current_source_name(self) -> str:
         """Get name of current reference source."""
         return get_reference_name(self.cal_state.current_source)
-    
+
     def _load_cmos_sensitivity(self) -> None:
         """Load CMOS spectral sensitivity curve from CSV.
         Tries cwd/data first, then package-relative data dir.
@@ -771,26 +786,34 @@ class CalibrationMode(BaseMode):
                 csv_path = p
                 break
         if csv_path is None:
-            print(f"[Calibration] CMOS sensitivity file not found (tried: {[str(p) for p in candidates]})")
+            print(
+                f"[Calibration] CMOS sensitivity file not found (tried: {[str(p) for p in candidates]})"
+            )
             return
 
         try:
             data = np.loadtxt(csv_path, delimiter=",", skiprows=2)
             self._cmos_sensitivity_wl = data[:, 0]
             self._cmos_sensitivity_val = data[:, 1]
-            print(f"[Calibration] Loaded CMOS sensitivity: {len(self._cmos_sensitivity_wl)} points, {self._cmos_sensitivity_wl[0]:.0f}-{self._cmos_sensitivity_wl[-1]:.0f} nm")
+            print(
+                f"[Calibration] Loaded CMOS sensitivity: {len(self._cmos_sensitivity_wl)} points, {self._cmos_sensitivity_wl[0]:.0f}-{self._cmos_sensitivity_wl[-1]:.0f} nm"
+            )
         except Exception as e:
             print(f"[Calibration] Failed to load CMOS sensitivity: {e}")
             self._cmos_sensitivity_wl = None
             self._cmos_sensitivity_val = None
-    
+
     def toggle_sensitivity_correction(self) -> bool:
         """Toggle CMOS sensitivity correction."""
-        self.cal_state.sensitivity_correction_enabled = not self.cal_state.sensitivity_correction_enabled
-        print(f"[Calibration] Sensitivity correction: {'ON' if self.cal_state.sensitivity_correction_enabled else 'OFF'}")
+        self.cal_state.sensitivity_correction_enabled = (
+            not self.cal_state.sensitivity_correction_enabled
+        )
+        print(
+            f"[Calibration] Sensitivity correction: {'ON' if self.cal_state.sensitivity_correction_enabled else 'OFF'}"
+        )
         return self.cal_state.sensitivity_correction_enabled
-    
-    def _interp_sensitivity(self, wavelengths: np.ndarray) -> Optional[np.ndarray]:
+
+    def _interp_sensitivity(self, wavelengths: np.ndarray) -> np.ndarray | None:
         """Interpolate CMOS sensitivity at wavelengths. Returns None if not loaded."""
         if self._cmos_sensitivity_wl is None or self._cmos_sensitivity_val is None:
             return None
@@ -806,7 +829,7 @@ class CalibrationMode(BaseMode):
         self,
         wavelengths: np.ndarray,
         graph_height: int,
-    ) -> Optional[tuple[np.ndarray, tuple[int, int, int]]]:
+    ) -> tuple[np.ndarray, tuple[int, int, int]] | None:
         """Get CMOS sensitivity curve for overlay."""
         if not self.cal_state.sensitivity_correction_enabled:
             return None
@@ -815,9 +838,9 @@ class CalibrationMode(BaseMode):
             return None
         scaled = scale_intensity_to_graph(sensitivity, graph_height)
         color = (100, 255, 100)  # Green
-        
+
         return (scaled, color)
-    
+
     def apply_sensitivity_correction(
         self,
         intensity: np.ndarray,

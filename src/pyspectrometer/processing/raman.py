@@ -27,5 +27,3 @@ def wavelengths_to_wavenumbers(
 ) -> np.ndarray:
     """Convert wavelength array to Raman shift array in cm⁻¹."""
     return (1.0 / laser_nm - 1.0 / np.maximum(wavelengths_nm, 1e-6)) * 1e7
-
-

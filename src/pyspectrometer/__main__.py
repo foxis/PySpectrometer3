@@ -61,25 +61,25 @@ Examples:
   pyspectrometer --camera http://pi:8000/stream.mjpg  # Remote Pi stream
 """,
     )
-    
+
     parser.add_argument(
         "--fullscreen",
         action="store_true",
         help="Run in fullscreen mode",
     )
-    
+
     parser.add_argument(
         "--waterfall",
         action="store_true",
         help="Enable waterfall display",
     )
-    
+
     parser.add_argument(
         "--waveshare",
         action="store_true",
-        help="Optimize for Waveshare 3.5\" touchscreen (640x480)",
+        help='Optimize for Waveshare 3.5" touchscreen (640x480)',
     )
-    
+
     parser.add_argument(
         "--gain",
         type=float,
@@ -87,7 +87,7 @@ Examples:
         metavar="VALUE",
         help="Initial camera gain (0-50, default: 10)",
     )
-    
+
     parser.add_argument(
         "--width",
         type=int,
@@ -95,7 +95,7 @@ Examples:
         metavar="PIXELS",
         help="Frame width in pixels (default: 800)",
     )
-    
+
     parser.add_argument(
         "--height",
         type=int,
@@ -103,7 +103,7 @@ Examples:
         metavar="PIXELS",
         help="Frame height in pixels (default: 600)",
     )
-    
+
     parser.add_argument(
         "--mode",
         type=str,
@@ -112,7 +112,7 @@ Examples:
         metavar="MODE",
         help="Operating mode: calibration, measurement, raman, colorscience (default: measurement)",
     )
-    
+
     parser.add_argument(
         "--laser",
         type=float,
@@ -120,13 +120,13 @@ Examples:
         metavar="NM",
         help="Raman laser wavelength in nm (default: 785)",
     )
-    
+
     parser.add_argument(
         "--color",
         action="store_true",
         help="Use color camera mode (RGB888, 8-bit) instead of monochrome",
     )
-    
+
     parser.add_argument(
         "--bit-depth",
         type=int,
@@ -135,7 +135,7 @@ Examples:
         metavar="BITS",
         help="Bit depth for monochrome mode (8, 10, or 16, default: 10)",
     )
-    
+
     parser.add_argument(
         "--camera",
         type=str,
@@ -143,19 +143,19 @@ Examples:
         metavar="SOURCE",
         help="OpenCV camera source: 0 (webcam), v4l:/dev/video0, rtsp://..., http://... (Pi stream)",
     )
-    
+
     parser.add_argument(
         "--list-cameras",
         action="store_true",
         help="List available OpenCV camera devices and exit",
     )
-    
+
     parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s 3.0.0",
     )
-    
+
     return parser.parse_args()
 
 
@@ -170,9 +170,10 @@ def _parse_source(value: str) -> int | str:
 def main() -> int:
     """Main entry point for PySpectrometer 3."""
     args = parse_args()
-    
+
     if args.list_cameras:
         from .capture.opencv import list_cameras
+
         cameras = list_cameras()
         if not cameras:
             print("No cameras found.")
@@ -181,36 +182,36 @@ def main() -> int:
             for idx, desc in cameras:
                 print(f"  {idx}: {desc}")
         return 0
-    
+
     # Full imports (needed only when running spectrometer)
     from .config import Config
     from .spectrometer import Spectrometer
-    
+
     mode_names = {
         "calibration": "Calibration",
         "measurement": "Measurement",
         "raman": "Raman",
         "colorscience": "Color Science",
     }
-    
+
     print(f"PySpectrometer 3 - {mode_names.get(args.mode, args.mode)} Mode")
-    
+
     if args.waveshare:
-        print("Waveshare 3.5\" display mode (640x480)")
+        print('Waveshare 3.5" display mode (640x480)')
     if args.fullscreen:
         print("Fullscreen Spectrometer enabled")
     if args.waterfall:
         print("Waterfall display enabled")
     if args.mode == "raman":
         print(f"Raman laser wavelength: {args.laser} nm")
-    
+
     # Monochrome is default, --color disables it
     monochrome = not args.color
     if monochrome:
         print(f"Monochrome camera mode ({args.bit_depth}-bit)")
     else:
         print("Color camera mode (RGB888, 8-bit)")
-    
+
     config = Config.from_args(
         fullscreen=args.fullscreen,
         waterfall=args.waterfall,
@@ -221,10 +222,11 @@ def main() -> int:
         monochrome=monochrome,
         bit_depth=args.bit_depth,
     )
-    
+
     camera = None
     if args.camera is not None:
         from .capture.opencv import Capture
+
         source = _parse_source(args.camera)
         camera = Capture(
             source=source,
@@ -234,7 +236,7 @@ def main() -> int:
             fps=config.camera.fps,
         )
         print(f"Using camera: {args.camera}")
-    
+
     try:
         spectrometer = Spectrometer(
             config,
@@ -250,6 +252,7 @@ def main() -> int:
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         import traceback
+
         traceback.print_exc()
         return 1
 

@@ -1,6 +1,6 @@
 """Core domain objects for PySpectrometer3."""
 
-from .spectrum import SpectrumData, Peak
 from .calibration import Calibration
+from .spectrum import Peak, SpectrumData
 
 __all__ = ["SpectrumData", "Peak", "Calibration"]

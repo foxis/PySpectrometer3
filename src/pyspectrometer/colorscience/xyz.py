@@ -5,12 +5,13 @@ and correct formulas per measurement type. Normalizes to custom illuminant
 (white reference) for reflectance/transmittance; self-normalizes for illumination.
 """
 
-from typing import Literal, Optional
+from typing import Literal
 
 import numpy as np
 
 try:
     import colour
+
     _COLOUR_AVAILABLE = True
 except ImportError:
     _COLOUR_AVAILABLE = False
@@ -27,8 +28,8 @@ def calculate_XYZ(
     spectrum: np.ndarray,
     wavelengths: np.ndarray,
     measurement_type: Literal["reflectance", "transmittance", "illumination"],
-    illuminant_spectrum: Optional[np.ndarray] = None,
-    illuminant_wavelengths: Optional[np.ndarray] = None,
+    illuminant_spectrum: np.ndarray | None = None,
+    illuminant_wavelengths: np.ndarray | None = None,
     observer: Literal["2deg", "10deg"] = "10deg",
 ) -> tuple[float, float, float]:
     """Calculate CIE XYZ tristimulus values.
@@ -80,7 +81,7 @@ def xyz_to_lab(
     X: float,
     Y: float,
     Z: float,
-    reference_white_XYZ: Optional[tuple[float, float, float]] = None,
+    reference_white_XYZ: tuple[float, float, float] | None = None,
 ) -> tuple[float, float, float]:
     """Convert XYZ to CIE L*a*b* using colour-science.
 

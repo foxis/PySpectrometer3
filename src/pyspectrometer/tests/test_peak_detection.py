@@ -5,11 +5,10 @@ import pytest
 
 from ..core.spectrum import SpectrumData
 from ..processing.peak_detection import (
+    _SCIPY_AVAILABLE,
     PeakDetector,
-    find_peak_indexes,
     find_peak_indexes_scipy,
 )
-from ..processing.peak_detection import _SCIPY_AVAILABLE
 
 
 def _gaussian_line(center: int, sigma: float, length: int, height: float = 1.0) -> np.ndarray:

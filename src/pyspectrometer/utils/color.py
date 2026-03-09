@@ -5,6 +5,7 @@ from typing import NamedTuple
 
 class RGB(NamedTuple):
     """RGB color tuple."""
+
     r: int
     g: int
     b: int
@@ -16,17 +17,17 @@ DEFAULT_GRAY = RGB(155, 155, 155)
 
 def wavelength_to_rgb(nm: float, gamma: float = 0.8) -> RGB:
     """Convert a wavelength in nanometers to an RGB color.
-    
+
     This function converts visible light wavelengths (380-780nm) to
     approximate RGB values for display purposes.
-    
+
     Based on code by Chris Webb:
     https://www.codedrome.com/exploring-the-visible-spectrum-in-python/
-    
+
     Args:
         nm: Wavelength in nanometers
         gamma: Gamma correction factor (default 0.8)
-        
+
     Returns:
         RGB tuple with values 0-255
     """
@@ -35,7 +36,7 @@ def wavelength_to_rgb(nm: float, gamma: float = 0.8) -> RGB:
     r = 0.0
     g = 0.0
     b = 0.0
-    
+
     if 380 <= nm <= 439:
         r = -(nm - 440) / (440 - 380)
         g = 0.0
@@ -60,21 +61,21 @@ def wavelength_to_rgb(nm: float, gamma: float = 0.8) -> RGB:
         r = 1.0
         g = 0.0
         b = 0.0
-    
+
     if 380 <= nm <= 419:
         factor = 0.3 + 0.7 * (nm - 380) / (420 - 380)
     elif 420 <= nm <= 700:
         factor = 1.0
     elif 701 <= nm <= 780:
         factor = 0.3 + 0.7 * (780 - nm) / (780 - 700)
-    
+
     r_out = int(max_intensity * ((r * factor) ** gamma)) if r > 0 else 0
     g_out = int(max_intensity * ((g * factor) ** gamma)) if g > 0 else 0
     b_out = int(max_intensity * ((b * factor) ** gamma)) if b > 0 else 0
-    
+
     if r_out + g_out + b_out == 0:
         return DEFAULT_GRAY
-    
+
     return RGB(r_out, g_out, b_out)
 
 
@@ -85,11 +86,11 @@ def rgb_to_bgr(rgb: RGB) -> tuple[int, int, int]:
 
 def apply_luminosity(rgb: RGB, luminosity: float) -> RGB:
     """Apply luminosity scaling to an RGB color.
-    
+
     Args:
         rgb: Original RGB color
         luminosity: Luminosity factor (0.0 to 1.0)
-        
+
     Returns:
         Scaled RGB color
     """

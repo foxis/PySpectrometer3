@@ -2,9 +2,9 @@
 
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Optional
-import numpy as np
+
 import cv2
+import numpy as np
 
 from ..utils.display import scale_to_uint8
 from .spectrum_transform import (
@@ -19,13 +19,14 @@ from .spectrum_transform import (
 
 class ExtractionMethod(Enum):
     """Available spectrum extraction methods."""
+
     MEDIAN = auto()
     WEIGHTED_SUM = auto()
     GAUSSIAN = auto()
-    
+
     def __str__(self) -> str:
         return self.name.replace("_", " ").title()
-    
+
     def next(self) -> "ExtractionMethod":
         """Cycle to next method."""
         members = list(ExtractionMethod)
@@ -39,6 +40,7 @@ class ExtractionResult:
 
     intensity: float32 array in 0-1 range (normalized by sensor full scale).
     """
+
     intensity: np.ndarray
     cropped_frame: np.ndarray
     method_used: ExtractionMethod
@@ -48,14 +50,14 @@ class ExtractionResult:
 
 class SpectrumExtractor:
     """Extracts spectrum intensity from camera frames.
-    
+
     Handles rotated spectrum lines and vertical structure by sampling
     perpendicular to the spectrum axis and applying one of three methods:
     - Median: robust to outliers
     - Weighted Sum: best S/N ratio (default)
     - Gaussian: most accurate, fits profile
     """
-    
+
     def __init__(
         self,
         frame_width: int,
@@ -63,12 +65,12 @@ class SpectrumExtractor:
         method: ExtractionMethod = ExtractionMethod.WEIGHTED_SUM,
         rotation_angle: float = 0.0,
         perpendicular_width: int = 20,
-        spectrum_y_center: Optional[int] = None,
+        spectrum_y_center: int | None = None,
         crop_height: int = 80,
         background_percentile: float = 10.0,
     ):
         """Initialize spectrum extractor.
-        
+
         Args:
             frame_width: Width of input frames in pixels
             frame_height: Height of input frames in pixels
@@ -87,12 +89,12 @@ class SpectrumExtractor:
         self.spectrum_y_center = spectrum_y_center or (frame_height // 2)
         self.crop_height = crop_height
         self.background_percentile = background_percentile
-        
+
         self._perpendicular_width_min = 5
         self._perpendicular_width_max = 100
-        
-        self._last_gaussian_params: Optional[np.ndarray] = None
-    
+
+        self._last_gaussian_params: np.ndarray | None = None
+
     def _transform_params(self) -> SpectrumTransformParams:
         """Build transform params from saved rotation_angle and spectrum_y_center."""
         return params_from_saved(
@@ -100,16 +102,16 @@ class SpectrumExtractor:
             self.spectrum_y_center,
             self.frame_height,
         )
-    
+
     def _rotate_frame(self, frame: np.ndarray) -> np.ndarray:
         """Rotate frame to straighten spectrum lines. Uses spectrum_transform."""
         params = self._transform_params()
         return apply_forward_transform(frame, params)
-    
+
     def extract(
         self,
         frame: np.ndarray,
-        max_val: Optional[float] = None,
+        max_val: float | None = None,
     ) -> ExtractionResult:
         """Extract spectrum intensity from frame.
 
@@ -135,10 +137,10 @@ class SpectrumExtractor:
         # Normalize to 0-1 using sensor full scale
         scale = max_val if max_val is not None and max_val > 0 else 1023.0
         intensity = (intensity.astype(np.float32) / scale).astype(np.float32)
-        
+
         # Use rotated frame for preview so lines appear straight
         cropped = self._create_cropped_preview(rotated_frame)
-        
+
         return ExtractionResult(
             intensity=intensity,
             cropped_frame=cropped,
@@ -146,30 +148,30 @@ class SpectrumExtractor:
             rotation_angle=self.rotation_angle,
             perpendicular_width=self.perpendicular_width,
         )
-    
+
     def _frame_to_gray(self, frame: np.ndarray) -> np.ndarray:
         """Convert frame to grayscale float32.
-        
+
         Handles:
         - BGR color (3D uint8) -> grayscale (0-255)
         - Monochrome (2D uint8 or uint16) -> float32, PRESERVING original range
-        
+
         Note: For 10-bit data, values are 0-1023. We do NOT scale to 0-255
         to preserve full dynamic range. Display code handles scaling separately.
-        
+
         Args:
             frame: Input frame (2D or 3D)
-            
+
         Returns:
             Grayscale float32 array (0-255 for 8-bit, 0-1023 for 10-bit, etc.)
         """
         if frame.ndim == 3:
             # Color frame: convert BGR to grayscale
             return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
-        
+
         # Monochrome frame - preserve original bit depth
         return frame.astype(np.float32)
-    
+
     def _extract_with_method(self, gray: np.ndarray) -> np.ndarray:
         """Apply selected extraction method."""
         match self.method:
@@ -179,36 +181,36 @@ class SpectrumExtractor:
                 return self._extract_weighted_sum(gray)
             case ExtractionMethod.GAUSSIAN:
                 return self._extract_gaussian(gray)
-    
+
     def _extract_median(self, gray: np.ndarray) -> np.ndarray:
         """Extract using median along vertical slices.
-        
+
         Preserves original bit depth (0-1023 for 10-bit, 0-255 for 8-bit).
         Uses spectrum_y_center (absolute Y in rotated frame) - same offset as crop.
         """
         half_perp = self.perpendicular_width // 2
         y_start = max(0, self.spectrum_y_center - half_perp)
         y_end = min(gray.shape[0], self.spectrum_y_center + half_perp + 1)
-        
+
         # Extract the ROI and compute median along vertical axis
         roi = gray[y_start:y_end, :]
         intensity = np.median(roi, axis=0)
-        
+
         # Return as float32, preserving original range
         return intensity.astype(np.float32)
-    
+
     def _extract_weighted_sum(self, gray: np.ndarray) -> np.ndarray:
         """Extract using intensity-weighted sum along vertical slices.
-        
+
         Preserves original bit depth (0-1023 for 10-bit, 0-255 for 8-bit).
         """
         half_perp = self.perpendicular_width // 2
         y_start = max(0, self.spectrum_y_center - half_perp)
         y_end = min(gray.shape[0], self.spectrum_y_center + half_perp + 1)
-        
+
         # Extract the ROI
         roi = gray[y_start:y_end, :]
-        
+
         # Compute background per column
         bg = np.percentile(roi, self.background_percentile, axis=0)
         roi_bg = np.maximum(roi - bg, 0)
@@ -223,52 +225,52 @@ class SpectrumExtractor:
         intensity = np.where(total > 1e-6, intensity_weighted, intensity_fallback)
 
         return intensity.astype(np.float32)
-    
+
     def _extract_gaussian(self, gray: np.ndarray) -> np.ndarray:
         """Extract by fitting Gaussian to each vertical slice.
-        
+
         Preserves original bit depth (0-1023 for 10-bit, 0-255 for 8-bit).
         Returns the fitted amplitude (not normalized).
         Uses spectrum_y_center (absolute Y in rotated frame) - same offset as crop.
         """
         from scipy.optimize import curve_fit
-        
+
         intensity = np.zeros(self.frame_width, dtype=np.float32)
-        
+
         half_perp = self.perpendicular_width // 2
         y_start = max(0, self.spectrum_y_center - half_perp)
         y_end = min(gray.shape[0], self.spectrum_y_center + half_perp + 1)
-        
+
         roi = gray[y_start:y_end, :]
         n_samples = roi.shape[0]
         y_fit = np.arange(n_samples, dtype=np.float32) - n_samples // 2
-        
+
         # Detect intensity range for proper bounds
         max_possible = float(np.max(gray)) if gray.size > 0 else 255.0
         max_possible = max(max_possible, 255.0)  # At least 8-bit
-        
+
         for x in range(self.frame_width):
             samples = roi[:, x]
-            
+
             try:
                 bg = np.percentile(samples, self.background_percentile)
                 amplitude = np.max(samples) - bg
                 center = y_fit[np.argmax(samples)]
                 sigma = 3.0
-                
+
                 if self._last_gaussian_params is not None:
                     _, prev_center, prev_sigma, _ = self._last_gaussian_params
                     center = prev_center
                     sigma = prev_sigma
-                
+
                 p0 = [amplitude, center, sigma, bg]
-                
+
                 # Use detected max for bounds
                 bounds = (
                     [0, -n_samples // 2, 0.5, 0],
-                    [max_possible, n_samples // 2, n_samples // 2, max_possible]
+                    [max_possible, n_samples // 2, n_samples // 2, max_possible],
                 )
-                
+
                 popt, _ = curve_fit(
                     self._gaussian,
                     y_fit,
@@ -277,27 +279,29 @@ class SpectrumExtractor:
                     bounds=bounds,
                     maxfev=50,
                 )
-                
+
                 self._last_gaussian_params = popt
-                
+
                 amplitude, _, sigma, _ = popt
                 intensity[x] = amplitude
-                
+
             except (RuntimeError, ValueError):
                 intensity[x] = np.max(samples) - np.percentile(samples, self.background_percentile)
-        
+
         # Return as float32, preserving original range (no normalization)
         return intensity.astype(np.float32)
-    
+
     @staticmethod
-    def _gaussian(x: np.ndarray, amplitude: float, center: float, sigma: float, background: float) -> np.ndarray:
+    def _gaussian(
+        x: np.ndarray, amplitude: float, center: float, sigma: float, background: float
+    ) -> np.ndarray:
         """1D Gaussian function for curve fitting."""
         return amplitude * np.exp(-0.5 * ((x - center) / sigma) ** 2) + background
-    
+
     def _create_cropped_preview(self, frame: np.ndarray) -> np.ndarray:
         """Create cropped preview region centered on spectrum. Uses spectrum_transform."""
         cropped = crop_region(frame, self.spectrum_y_center, self.crop_height)
-        
+
         # Convert monochrome to 3-channel for display
         if cropped.ndim == 2:
             # Scale to 8-bit if high bit-depth (use bit-depth-based max for consistency)
@@ -307,20 +311,22 @@ class SpectrumExtractor:
                 cropped = scale_to_uint8(cropped, max_val)
             # Convert grayscale to BGR for display
             cropped = cv2.cvtColor(cropped, cv2.COLOR_GRAY2BGR)
-        
+
         return cropped
-    
-    def detect_angle(self, frame: np.ndarray, visualize: bool = False) -> tuple[float, int, Optional[np.ndarray]]:
+
+    def detect_angle(
+        self, frame: np.ndarray, visualize: bool = False
+    ) -> tuple[float, int, np.ndarray | None]:
         """Auto-detect spectrum rotation angle and Y center using gradient analysis.
-        
+
         Analyzes horizontal gradients (edges of vertical stripes) and uses
         PCA to find the dominant orientation. Computes the optimal Y center
         on the ROTATED frame to ensure proper centering after correction.
-        
+
         Args:
             frame: Input frame (BGR color or monochrome)
             visualize: If True, return visualization image
-            
+
         Returns:
             Tuple of (correction_angle, spectrum_y_center, visualization_or_None)
             correction_angle is the inverse of orientation (what we save).
@@ -343,9 +349,11 @@ class SpectrumExtractor:
         if visualize and strong_mask is not None and gray is not None and rotated_gray is not None:
             print("[AutoLevel] Building visualization...")
             # Left panel: thresholded gradient (strong_mask as grayscale BGR)
-            thresh_display = (strong_mask.astype(np.uint8) * 255)
+            thresh_display = strong_mask.astype(np.uint8) * 255
             thresh_bgr = cv2.cvtColor(thresh_display, cv2.COLOR_GRAY2BGR)
-            cv2.putText(thresh_bgr, "Thresholded", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            cv2.putText(
+                thresh_bgr, "Thresholded", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2
+            )
 
             # Find contours and fit ellipses (on original frame coords, before rotation)
             thresh_u8 = strong_mask.astype(np.uint8) * 255
@@ -384,14 +392,15 @@ class SpectrumExtractor:
             if vis_rot.ndim == 2:
                 vis_rot = cv2.cvtColor(vis_rot, cv2.COLOR_GRAY2BGR)
 
-            half_perp = self.perpendicular_width // 2
             half_crop = self.crop_height // 2
             y_top = max(0, optimal_y_center - half_crop)
             y_bottom = min(height - 1, optimal_y_center + half_crop)
             cv2.rectangle(vis_rot, (0, y_top), (width, y_bottom), (0, 255, 255), 2)
             cv2.line(vis_rot, (0, optimal_y_center), (width, optimal_y_center), (255, 255, 0), 2)
 
-            cv2.putText(vis_rot, "Rotated + crop", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            cv2.putText(
+                vis_rot, "Rotated + crop", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2
+            )
 
             cv2.putText(
                 vis_orig,
@@ -423,20 +432,20 @@ class SpectrumExtractor:
 
             vis_image = np.hstack([thresh_bgr, vis_orig, vis_rot])
             print("[AutoLevel] Visualization complete, returning")
-        
+
         return correction_angle, optimal_y_center, vis_image
-    
+
     def set_method(self, method: ExtractionMethod) -> None:
         """Set the extraction method."""
         self.method = method
         self._last_gaussian_params = None
-    
+
     def cycle_method(self) -> ExtractionMethod:
         """Cycle to next extraction method."""
         self.method = self.method.next()
         self._last_gaussian_params = None
         return self.method
-    
+
     def set_rotation_angle(self, angle: float) -> None:
         """Set rotation angle (correction = inverse of orientation)."""
         self.rotation_angle = angle
@@ -455,15 +464,13 @@ class SpectrumExtractor:
     def increase_perpendicular_width(self, step: int = 2) -> int:
         """Increase perpendicular sampling width."""
         self.perpendicular_width = min(
-            self.perpendicular_width + step,
-            self._perpendicular_width_max
+            self.perpendicular_width + step, self._perpendicular_width_max
         )
         return self.perpendicular_width
 
     def decrease_perpendicular_width(self, step: int = 2) -> int:
         """Decrease perpendicular sampling width."""
         self.perpendicular_width = max(
-            self.perpendicular_width - step,
-            self._perpendicular_width_min
+            self.perpendicular_width - step, self._perpendicular_width_min
         )
         return self.perpendicular_width

@@ -9,38 +9,37 @@ Features:
 - GPIO lamp control
 """
 
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Callable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..core.spectrum import SpectrumData
 import numpy as np
 
-from .base import BaseMode, ModeType, ButtonDefinition
 from ..core.mode_context import ModeContext
-from ..utils.graph_scale import scale_intensity_to_graph
 from ..processing.reference_correction import apply_dark_white_correction
+from ..utils.graph_scale import scale_intensity_to_graph
+from .base import BaseMode, ButtonDefinition, ModeType
 
 
 @dataclass
 class MeasurementState:
     """State specific to measurement mode."""
-    
+
     # Reference spectra
-    dark_spectrum: Optional[np.ndarray] = None
-    white_spectrum: Optional[np.ndarray] = None
-    reference_spectrum: Optional[np.ndarray] = None
-    
+    dark_spectrum: np.ndarray | None = None
+    white_spectrum: np.ndarray | None = None
+    reference_spectrum: np.ndarray | None = None
+
     # Current captured spectrum (for saving)
-    captured_spectrum: Optional[np.ndarray] = None
-    captured_wavelengths: Optional[np.ndarray] = None
-    
+    captured_spectrum: np.ndarray | None = None
+    captured_wavelengths: np.ndarray | None = None
+
     # Display settings
     show_reference: bool = False
     normalize_to_reference: bool = False
     subtract_dark: bool = True
-    
+
     # Loaded spectrum info
     loaded_spectrum_name: str = ""
     load_as: str = "overlay"  # overlay, black, white
@@ -48,7 +47,7 @@ class MeasurementState:
 
 class MeasurementMode(BaseMode):
     """Measurement mode for general spectrum analysis."""
-    
+
     def __init__(self):
         """Initialize measurement mode."""
         super().__init__()
@@ -96,7 +95,11 @@ class MeasurementMode(BaseMode):
 
     def _on_set_dark(self, ctx: ModeContext) -> None:
         """Set dark reference from raw intensity (pre-correction)."""
-        raw = ctx.last_raw_intensity if ctx.last_raw_intensity is not None else (ctx.last_data.intensity if ctx.last_data is not None else None)
+        raw = (
+            ctx.last_raw_intensity
+            if ctx.last_raw_intensity is not None
+            else (ctx.last_data.intensity if ctx.last_data is not None else None)
+        )
         if raw is None:
             print("[DARK] No spectrum data available")
             return
@@ -104,7 +107,11 @@ class MeasurementMode(BaseMode):
 
     def _on_set_white(self, ctx: ModeContext) -> None:
         """Set white reference from raw intensity (pre-correction)."""
-        raw = ctx.last_raw_intensity if ctx.last_raw_intensity is not None else (ctx.last_data.intensity if ctx.last_data is not None else None)
+        raw = (
+            ctx.last_raw_intensity
+            if ctx.last_raw_intensity is not None
+            else (ctx.last_data.intensity if ctx.last_data is not None else None)
+        )
         if raw is None:
             print("[WHITE] No spectrum data available")
             return
@@ -133,7 +140,9 @@ class MeasurementMode(BaseMode):
 
     def _on_load(self, ctx: ModeContext) -> None:
         """Load spectrum into overlay, black, or white per load_as."""
-        print(f"[LOAD] Load spectrum as {self.meas_state.load_as} (file dialog not implemented yet)")
+        print(
+            f"[LOAD] Load spectrum as {self.meas_state.load_as} (file dialog not implemented yet)"
+        )
 
     def _on_toggle_show_reference(self, ctx: ModeContext) -> None:
         """Toggle reference overlay."""
@@ -165,11 +174,11 @@ class MeasurementMode(BaseMode):
     @property
     def mode_type(self) -> ModeType:
         return ModeType.MEASUREMENT
-    
+
     @property
     def name(self) -> str:
         return "Measurement"
-    
+
     def get_buttons(self) -> list[ButtonDefinition]:
         """Get measurement mode buttons."""
         return [
@@ -196,7 +205,7 @@ class MeasurementMode(BaseMode):
             ButtonDefinition("Quit", "quit", row=2),
             ButtonDefinition("__spacer__", "__spacer_right__", row=2),
         ]
-    
+
     def process_spectrum(
         self,
         intensity: np.ndarray,
@@ -220,7 +229,10 @@ class MeasurementMode(BaseMode):
         )
 
         # Normalize to reference spectrum if enabled
-        if self.meas_state.normalize_to_reference and self.meas_state.reference_spectrum is not None:
+        if (
+            self.meas_state.normalize_to_reference
+            and self.meas_state.reference_spectrum is not None
+        ):
             ref = np.maximum(
                 np.asarray(self.meas_state.reference_spectrum, dtype=np.float64),
                 1,
@@ -228,50 +240,50 @@ class MeasurementMode(BaseMode):
             result = np.clip(result.astype(np.float64) / ref, 0, 1).astype(np.float32)
 
         return result
-    
+
     def get_overlay(
         self,
         wavelengths: np.ndarray,
         graph_height: int,
-    ) -> Optional[tuple[np.ndarray, tuple[int, int, int]]]:
+    ) -> tuple[np.ndarray, tuple[int, int, int]] | None:
         """Get reference spectrum overlay if enabled."""
         if not self.meas_state.show_reference:
             return None
-        
+
         ref = self.meas_state.reference_spectrum
         if ref is None:
             return None
-        
+
         # Scale to graph height
         max_val = max(ref.max(), 1)
         scaled = scale_intensity_to_graph(ref / max_val, graph_height)
-        
+
         # Light gray color for reference
         return (scaled, (150, 150, 150))
-    
+
     def capture_current(self, intensity: np.ndarray, wavelengths: np.ndarray) -> None:
         """Capture current spectrum for later use."""
         self.meas_state.captured_spectrum = intensity.copy()
         self.meas_state.captured_wavelengths = wavelengths.copy()
         print("[Measurement] Spectrum captured")
-    
+
     def set_dark_reference(self, intensity: np.ndarray) -> None:
         """Set dark/black reference spectrum."""
         self.meas_state.dark_spectrum = intensity.copy()
         self.meas_state.subtract_dark = True
         print("[Measurement] Dark reference set")
-    
+
     def set_white_reference(self, intensity: np.ndarray) -> None:
         """Set white reference spectrum."""
         self.meas_state.white_spectrum = intensity.copy()
         print("[Measurement] White reference set")
-    
+
     def set_reference_spectrum(self, intensity: np.ndarray, name: str = "Current") -> None:
         """Set reference spectrum for normalization/overlay."""
         self.meas_state.reference_spectrum = intensity.copy()
         self.meas_state.loaded_spectrum_name = name
         print(f"[Measurement] Reference spectrum set: {name}")
-    
+
     def clear_references(self) -> None:
         """Clear all reference spectra."""
         self.meas_state.dark_spectrum = None
@@ -282,23 +294,25 @@ class MeasurementMode(BaseMode):
         self.meas_state.show_reference = False
         self.meas_state.loaded_spectrum_name = ""
         print("[Measurement] All references cleared")
-    
+
     def toggle_show_reference(self) -> bool:
         """Toggle reference spectrum overlay."""
         self.meas_state.show_reference = not self.meas_state.show_reference
         print(f"[Measurement] Show reference: {'ON' if self.meas_state.show_reference else 'OFF'}")
         return self.meas_state.show_reference
-    
+
     def toggle_normalize(self) -> bool:
         """Toggle normalization to reference."""
         self.meas_state.normalize_to_reference = not self.meas_state.normalize_to_reference
-        print(f"[Measurement] Normalize: {'ON' if self.meas_state.normalize_to_reference else 'OFF'}")
+        print(
+            f"[Measurement] Normalize: {'ON' if self.meas_state.normalize_to_reference else 'OFF'}"
+        )
         return self.meas_state.normalize_to_reference
-    
+
     def get_status(self) -> dict[str, str]:
         """Get status values for display."""
         status = {}
-        
+
         if self.meas_state.dark_spectrum is not None:
             status["Dark"] = "SET"
         if self.meas_state.white_spectrum is not None:
@@ -309,5 +323,5 @@ class MeasurementMode(BaseMode):
 
         if self.state.integration_mode != "none":
             status[self.state.integration_mode.capitalize()] = str(self.state.accumulated_frames)
-        
+
         return status

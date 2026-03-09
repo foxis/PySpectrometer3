@@ -5,27 +5,27 @@ dark reference, averaging, save/load.
 """
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..core.spectrum import SpectrumData
 import numpy as np
 
-from .base import BaseMode, ModeType, ButtonDefinition
 from ..core.calibration import GraticuleData, graticule_from_x_axis
 from ..core.mode_context import ModeContext
 from ..core.spectrum import SpectrumData
-from ..utils.graph_scale import scale_intensity_to_graph
-from ..processing.reference_correction import apply_dark_white_correction
 from ..processing.raman import wavelengths_to_wavenumbers
+from ..processing.reference_correction import apply_dark_white_correction
+from ..utils.graph_scale import scale_intensity_to_graph
+from .base import BaseMode, ButtonDefinition, ModeType
 
 
 @dataclass
 class RamanState:
     """State specific to Raman mode."""
 
-    dark_spectrum: Optional[np.ndarray] = None
-    reference_spectrum: Optional[np.ndarray] = None
+    dark_spectrum: np.ndarray | None = None
+    reference_spectrum: np.ndarray | None = None
 
 
 class RamanMode(BaseMode):
@@ -99,7 +99,11 @@ class RamanMode(BaseMode):
 
     def _on_set_dark(self, ctx: ModeContext) -> None:
         """Set dark reference from raw intensity (pre-correction)."""
-        raw = ctx.last_raw_intensity if ctx.last_raw_intensity is not None else (ctx.last_data.intensity if ctx.last_data is not None else None)
+        raw = (
+            ctx.last_raw_intensity
+            if ctx.last_raw_intensity is not None
+            else (ctx.last_data.intensity if ctx.last_data is not None else None)
+        )
         if raw is None:
             print("[RAMAN] No spectrum data available")
             return
@@ -149,7 +153,7 @@ class RamanMode(BaseMode):
             x_axis_label="Raman shift (cm⁻¹)",
         )
 
-    def get_graticule(self, data: "SpectrumData") -> Optional[GraticuleData]:
+    def get_graticule(self, data: "SpectrumData") -> GraticuleData | None:
         """Graticule with wavenumber labels for Raman display."""
         return graticule_from_x_axis(
             data.wavelengths,
@@ -161,7 +165,7 @@ class RamanMode(BaseMode):
         self,
         wavelengths: np.ndarray,
         graph_height: int,
-    ) -> Optional[tuple[np.ndarray, tuple[int, int, int]]]:
+    ) -> tuple[np.ndarray, tuple[int, int, int]] | None:
         """Reference spectrum overlay if set."""
         ref = self.raman_state.reference_spectrum
         if ref is None:
@@ -185,4 +189,6 @@ class RamanMode(BaseMode):
         if self.raman_state.dark_spectrum is not None:
             ctx.display.set_status("Black", "SET")
         if self.state.integration_mode != "none":
-            ctx.display.set_status(self.state.integration_mode.capitalize(), str(self.state.accumulated_frames))
+            ctx.display.set_status(
+                self.state.integration_mode.capitalize(), str(self.state.accumulated_frames)
+            )

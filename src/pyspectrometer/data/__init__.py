@@ -2,12 +2,12 @@
 
 from .reference_spectra import (
     ReferenceSource,
-    get_reference_spectrum,
-    get_reference_peaks,
-    get_reference_name,
-    get_all_reference_names,
-    spectrum_to_xyz_1931,
     SpectralLine,
+    get_all_reference_names,
+    get_reference_name,
+    get_reference_peaks,
+    get_reference_spectrum,
+    spectrum_to_xyz_1931,
 )
 
 __all__ = [

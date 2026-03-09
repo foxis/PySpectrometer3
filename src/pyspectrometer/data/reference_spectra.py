@@ -12,12 +12,13 @@ All spectra from colour.SDS_ILLUMINANTS are CIE-standard, not approximations.
 
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Optional
+
 import numpy as np
 
 # colour-science provides CIE-standard spectral distributions
 try:
     import colour
+
     _COLOUR_AVAILABLE = True
 except ImportError:
     _COLOUR_AVAILABLE = False
@@ -26,17 +27,17 @@ except ImportError:
 class ReferenceSource(Enum):
     """Available reference light sources for calibration."""
 
-    FL = auto()      # CIE FL1 - Daylight fluorescent
-    FL2 = auto()     # CIE FL2 - Cool white fluorescent
-    FL3 = auto()     # CIE FL3 - White fluorescent
-    FL4 = auto()     # CIE FL4 - Warm white fluorescent
-    FL5 = auto()     # CIE FL5 - Daylight fluorescent (alternative)
-    A = auto()       # CIE Standard Illuminant A (incandescent)
-    D65 = auto()     # CIE Illuminant D65 (daylight 6504K) - actual spectrum
-    HG = auto()      # Mercury low-pressure lamp
-    LED = auto()     # CIE LED-B1 (phosphor white LED)
-    LED2 = auto()    # CIE LED-B2 (phosphor white LED)
-    LED3 = auto()    # CIE LED-B3 (phosphor white LED)
+    FL = auto()  # CIE FL1 - Daylight fluorescent
+    FL2 = auto()  # CIE FL2 - Cool white fluorescent
+    FL3 = auto()  # CIE FL3 - White fluorescent
+    FL4 = auto()  # CIE FL4 - Warm white fluorescent
+    FL5 = auto()  # CIE FL5 - Daylight fluorescent (alternative)
+    A = auto()  # CIE Standard Illuminant A (incandescent)
+    D65 = auto()  # CIE Illuminant D65 (daylight 6504K) - actual spectrum
+    HG = auto()  # Mercury low-pressure lamp
+    LED = auto()  # CIE LED-B1 (phosphor white LED)
+    LED2 = auto()  # CIE LED-B2 (phosphor white LED)
+    LED3 = auto()  # CIE LED-B3 (phosphor white LED)
 
 
 @dataclass
@@ -44,8 +45,8 @@ class SpectralLine:
     """A spectral emission or absorption line."""
 
     wavelength: float  # nm
-    intensity: float   # relative intensity (0-1)
-    label: str = ""    # optional label (e.g., "Hg", "Na-D")
+    intensity: float  # relative intensity (0-1)
+    label: str = ""  # optional label (e.g., "Hg", "Na-D")
 
 
 @dataclass
@@ -56,7 +57,7 @@ class ReferenceSpectrum:
     source: ReferenceSource
     peaks: list[SpectralLine]
     description: str = ""
-    colour_key: Optional[str] = None  # key in colour.SDS_ILLUMINANTS
+    colour_key: str | None = None  # key in colour.SDS_ILLUMINANTS
 
 
 # colour-science SDS keys for each ReferenceSource
@@ -218,7 +219,7 @@ def _generate_hg_spectrum(wavelengths: np.ndarray) -> np.ndarray:
     intensity = np.zeros_like(wavelengths, dtype=np.float64)
     for peak in HG_LINES:
         intensity += peak.intensity * np.exp(
-            -((wavelengths - peak.wavelength) ** 2) / (2 * sigma ** 2)
+            -((wavelengths - peak.wavelength) ** 2) / (2 * sigma**2)
         )
     if intensity.max() > 0:
         intensity /= intensity.max()
@@ -284,9 +285,7 @@ def spectrum_to_xyz_1931(
     if not _COLOUR_AVAILABLE:
         return (0.0, 0.0, 0.0)
     try:
-        sd = colour.SpectralDistribution(
-            dict(zip(wavelengths.astype(float), values.astype(float)))
-        )
+        sd = colour.SpectralDistribution(dict(zip(wavelengths.astype(float), values.astype(float))))
         xyz = colour.sd_to_XYZ(sd)
         return (float(xyz[0]), float(xyz[1]), float(xyz[2]))
     except Exception:

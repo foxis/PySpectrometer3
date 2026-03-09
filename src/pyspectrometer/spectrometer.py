@@ -6,29 +6,29 @@ button layout and mode logic to mode classes.
 
 import time
 from pathlib import Path
-from typing import Optional
-import numpy as np
-import cv2
 
+import cv2
+import numpy as np
+
+from .capture.base import CameraInterface
+from .capture.picamera import Capture
 from .config import Config
-from .core.spectrum import SpectrumData
 from .core.calibration import Calibration
 from .core.mode_context import ModeContext
 from .core.reference_spectrum import ReferenceSpectrumManager
-from .capture.base import CameraInterface
-from .capture.picamera import Capture
-from .processing.pipeline import ProcessingPipeline
-from .processing.filters import SavitzkyGolayFilter
-from .processing.auto_controls import AutoGainController, AutoExposureController
-from .processing.peak_detection import PeakDetector
-from .processing.extraction import SpectrumExtractor, ExtractionMethod
+from .core.spectrum import SpectrumData
 from .display.renderer import DisplayManager
 from .export.csv_exporter import CSVExporter
 from .modes.base import BaseMode
 from .modes.calibration import CalibrationMode
+from .modes.colorscience import ColorScienceMode
 from .modes.measurement import MeasurementMode
 from .modes.raman import RamanMode
-from .modes.colorscience import ColorScienceMode
+from .processing.auto_controls import AutoExposureController, AutoGainController
+from .processing.extraction import ExtractionMethod, SpectrumExtractor
+from .processing.filters import SavitzkyGolayFilter
+from .processing.peak_detection import PeakDetector
+from .processing.pipeline import ProcessingPipeline
 
 
 class Spectrometer:
@@ -38,8 +38,8 @@ class Spectrometer:
 
     def __init__(
         self,
-        config: Optional[Config] = None,
-        camera: Optional[CameraInterface] = None,
+        config: Config | None = None,
+        camera: CameraInterface | None = None,
         mode: str = "measurement",
         laser_nm: float = 785.0,
     ):
@@ -71,7 +71,9 @@ class Spectrometer:
             self.config.extraction.method,
             ExtractionMethod.WEIGHTED_SUM,
         )
-        spectrum_y = self.config.extraction.spectrum_y_center or self.config.camera.frame_height // 2
+        spectrum_y = (
+            self.config.extraction.spectrum_y_center or self.config.camera.frame_height // 2
+        )
         self._extractor = SpectrumExtractor(
             frame_width=self.config.camera.frame_width,
             frame_height=self.config.camera.frame_height,
@@ -105,8 +107,8 @@ class Spectrometer:
         self._reference_manager = ReferenceSpectrumManager()
 
         self._mode_instance: BaseMode
-        self._calibration_mode: Optional[CalibrationMode] = None
-        self._measurement_mode: Optional[MeasurementMode] = None
+        self._calibration_mode: CalibrationMode | None = None
+        self._measurement_mode: MeasurementMode | None = None
         match mode:
             case "calibration":
                 self._calibration_mode = CalibrationMode()

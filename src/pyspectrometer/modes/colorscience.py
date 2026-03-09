@@ -6,17 +6,16 @@ black/white references, save/load.
 
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..core.spectrum import SpectrumData
 import numpy as np
 
-from .base import BaseMode, ModeType, ButtonDefinition
-from ..core.mode_context import ModeContext
-from ..utils.graph_scale import scale_intensity_to_graph
-from ..processing.reference_correction import apply_dark_white_correction
 from ..colorscience.xyz import calculate_XYZ, xyz_to_lab
+from ..core.mode_context import ModeContext
+from ..processing.reference_correction import apply_dark_white_correction
+from .base import BaseMode, ButtonDefinition, ModeType
 
 
 class ColorMeasurementType(Enum):
@@ -39,8 +38,8 @@ class ColorScienceState:
     """State specific to Color Science mode."""
 
     measurement_type: ColorMeasurementType = ColorMeasurementType.ILLUMINATION
-    dark_spectrum: Optional[np.ndarray] = None
-    white_spectrum: Optional[np.ndarray] = None
+    dark_spectrum: np.ndarray | None = None
+    white_spectrum: np.ndarray | None = None
     show_lab: bool = False  # False = XYZ, True = LAB
 
 
@@ -87,15 +86,23 @@ class ColorScienceMode(BaseMode):
     def on_start(self, ctx: ModeContext) -> None:
         """Set initial measurement type and button states."""
         for t in ColorMeasurementType:
-            ctx.display.set_button_active(f"type_{t.name.lower()}", t == self.color_state.measurement_type)
+            ctx.display.set_button_active(
+                f"type_{t.name.lower()}", t == self.color_state.measurement_type
+            )
         ctx.display.set_button_active("toggle_xyz_lab", self.color_state.show_lab)
 
     def setup(self, ctx: ModeContext) -> None:
         """Register Color Science handlers."""
         super().setup(ctx)
-        self.register_callback("type_reflectance", lambda: self._on_type(ctx, ColorMeasurementType.REFLECTANCE))
-        self.register_callback("type_transmittance", lambda: self._on_type(ctx, ColorMeasurementType.TRANSMITTANCE))
-        self.register_callback("type_illumination", lambda: self._on_type(ctx, ColorMeasurementType.ILLUMINATION))
+        self.register_callback(
+            "type_reflectance", lambda: self._on_type(ctx, ColorMeasurementType.REFLECTANCE)
+        )
+        self.register_callback(
+            "type_transmittance", lambda: self._on_type(ctx, ColorMeasurementType.TRANSMITTANCE)
+        )
+        self.register_callback(
+            "type_illumination", lambda: self._on_type(ctx, ColorMeasurementType.ILLUMINATION)
+        )
         self.register_callback("set_dark", lambda: self._on_set_dark(ctx))
         self.register_callback("set_white", lambda: self._on_set_white(ctx))
         self.register_callback("save", lambda: self._on_save(ctx))
@@ -114,7 +121,11 @@ class ColorScienceMode(BaseMode):
 
     def _on_set_dark(self, ctx: ModeContext) -> None:
         """Set dark reference."""
-        raw = ctx.last_raw_intensity if ctx.last_raw_intensity is not None else (ctx.last_data.intensity if ctx.last_data is not None else None)
+        raw = (
+            ctx.last_raw_intensity
+            if ctx.last_raw_intensity is not None
+            else (ctx.last_data.intensity if ctx.last_data is not None else None)
+        )
         if raw is None:
             print("[COLOR] No spectrum data available")
             return
@@ -123,7 +134,11 @@ class ColorScienceMode(BaseMode):
 
     def _on_set_white(self, ctx: ModeContext) -> None:
         """Set white reference."""
-        raw = ctx.last_raw_intensity if ctx.last_raw_intensity is not None else (ctx.last_data.intensity if ctx.last_data is not None else None)
+        raw = (
+            ctx.last_raw_intensity
+            if ctx.last_raw_intensity is not None
+            else (ctx.last_data.intensity if ctx.last_data is not None else None)
+        )
         if raw is None:
             print("[COLOR] No spectrum data available")
             return
@@ -186,11 +201,11 @@ class ColorScienceMode(BaseMode):
         self,
         wavelengths: np.ndarray,
         graph_height: int,
-    ) -> Optional[tuple[np.ndarray, tuple[int, int, int]]]:
+    ) -> tuple[np.ndarray, tuple[int, int, int]] | None:
         """No overlay for Color Science MVP."""
         return None
 
-    def _compute_color_values(self, intensity: np.ndarray, wavelengths: np.ndarray) -> Optional[str]:
+    def _compute_color_values(self, intensity: np.ndarray, wavelengths: np.ndarray) -> str | None:
         """Compute XYZ or LAB using correct formula per measurement type.
 
         Reflectance/Transmittance: normalizes to white reference (our illuminant).
@@ -219,9 +234,7 @@ class ColorScienceMode(BaseMode):
                 else:
                     ref_white = tuple(
                         float(x)
-                        for x in calculate_XYZ(
-                            white, wavelengths, "illumination", None, None
-                        )
+                        for x in calculate_XYZ(white, wavelengths, "illumination", None, None)
                     )
                 L, a, b = xyz_to_lab(X, Y, Z, reference_white_XYZ=ref_white)
                 return f"L*={L:.1f} a*={a:.1f} b*={b:.1f}"

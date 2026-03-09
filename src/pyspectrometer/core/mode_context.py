@@ -5,20 +5,22 @@ and passes it to modes. Modes use the context to implement their handlers
 without depending on the orchestrator.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Optional
+
 import numpy as np
 
 from .spectrum import SpectrumData
 
 if TYPE_CHECKING:
     from ..capture.base import CameraInterface
-    from ..display.renderer import DisplayManager
-    from .calibration import Calibration
-    from ..export.csv_exporter import CSVExporter
-    from ..processing.extraction import SpectrumExtractor
-    from ..processing.auto_controls import AutoGainController, AutoExposureController
     from ..core.reference_spectrum import ReferenceSpectrumManager
+    from ..display.renderer import DisplayManager
+    from ..export.csv_exporter import CSVExporter
+    from ..processing.auto_controls import AutoExposureController, AutoGainController
+    from ..processing.extraction import SpectrumExtractor
+    from .calibration import Calibration
 
 
 def _noop() -> None:
@@ -54,16 +56,16 @@ class ModeContext:
     save_snapshot: Callable[[SpectrumData], None] = _noop_save
 
     # Frame state (orchestrator updates each frame; modes read)
-    last_data: Optional[SpectrumData] = None
-    last_frame: Optional[np.ndarray] = None
-    last_intensity_pre_sensitivity: Optional[np.ndarray] = None
-    last_raw_intensity: Optional[np.ndarray] = None  # Pre-process_spectrum for dark capture
+    last_data: SpectrumData | None = None
+    last_frame: np.ndarray | None = None
+    last_intensity_pre_sensitivity: np.ndarray | None = None
+    last_raw_intensity: np.ndarray | None = None  # Pre-process_spectrum for dark capture
 
     # Mutable state (modes read/write; orchestrator reads for loop logic)
     running: bool = True
     frozen_spectrum: bool = False
-    frozen_intensity: Optional[np.ndarray] = None
-    held_intensity: Optional[np.ndarray] = None
+    frozen_intensity: np.ndarray | None = None
+    held_intensity: np.ndarray | None = None
     auto_gain_enabled: bool = False
     auto_exposure_enabled: bool = False
 

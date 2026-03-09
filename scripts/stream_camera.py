@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
-"""MJPEG HTTP stream from Picamera2 for remote development.
+"""MJPEG HTTP stream from camera (Picamera2 on Pi, OpenCV elsewhere).
 
 Run on the Raspberry Pi, then from your desktop use OpenCV:
     cap = cv2.VideoCapture("http://<Pi-IP>:8000/stream.mjpg")
 
 Or run PySpectrometer3 with:
     python -m pyspectrometer --camera http://<Pi-IP>:8000/stream.mjpg
+
+Usage:
+    poetry run stream              # Pi: Picamera2, port 8000
+    poetry run stream 0            # OpenCV camera 0, port 8000
+    poetry run stream 0 9000       # OpenCV camera 0, port 9000
 """
 
 import argparse
 import io
 import logging
 import socketserver
+import threading
 from http import server
-from threading import Condition
+
+import cv2
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -24,7 +31,7 @@ class StreamingOutput(io.BufferedIOBase):
 
     def __init__(self) -> None:
         self.frame: bytes | None = None
-        self.condition = Condition()
+        self.condition = threading.Condition()
 
     def write(self, buf: bytes) -> int:
         with self.condition:
@@ -111,15 +118,49 @@ class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
     stream_port: int
 
 
+def _parse_camera(source: str) -> int | str:
+    """Parse camera source to int or str for OpenCV."""
+    s = source.strip()
+    if s.isdigit():
+        return int(s)
+    if s.lower().startswith("v4l:"):
+        return s[4:].strip()
+    return s
+
+
+def _run_opencv_stream(output: StreamingOutput, source: int | str, width: int, height: int) -> None:
+    """Capture from OpenCV and write JPEG frames to output."""
+    cap = cv2.VideoCapture(source)
+    if not cap.isOpened():
+        raise RuntimeError(f"Cannot open camera {source}")
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                continue
+            _, jpeg = cv2.imencode(".jpg", frame)
+            output.write(jpeg.tobytes())
+    finally:
+        cap.release()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Stream Picamera2 as MJPEG over HTTP for remote development."
+        description="Stream camera as MJPEG over HTTP (Picamera2 on Pi, OpenCV elsewhere)."
     )
     parser.add_argument(
         "--port",
         type=int,
         default=8000,
         help="HTTP port (default: 8000)",
+    )
+    parser.add_argument(
+        "--camera",
+        type=str,
+        default=None,
+        help="Camera source for OpenCV (0, v4l:/dev/video0). Omit for Picamera2 on Pi.",
     )
     parser.add_argument(
         "--width",
@@ -135,24 +176,35 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    try:
-        from picamera2 import Picamera2
-        from picamera2.encoders import JpegEncoder
-        from picamera2.outputs import FileOutput
-    except ImportError as e:
-        logger.error(
-            "Picamera2 required. Install: sudo apt install python3-picamera2"
-        )
-        raise SystemExit(1) from e
-
-    picam2 = Picamera2()
-    picam2.configure(
-        picam2.create_video_configuration(
-            main={"size": (args.width, args.height)}
-        )
-    )
     output = StreamingOutput()
-    picam2.start_recording(JpegEncoder(), FileOutput(output))
+    picam2 = None
+
+    if args.camera is not None:
+        source = _parse_camera(args.camera)
+        thread = threading.Thread(
+            target=_run_opencv_stream,
+            args=(output, source, args.width, args.height),
+            daemon=True,
+        )
+        thread.start()
+    else:
+        try:
+            from picamera2 import Picamera2
+            from picamera2.encoders import JpegEncoder
+            from picamera2.outputs import FileOutput
+        except ImportError as e:
+            logger.error(
+                "Picamera2 not found. Use --camera 0 for webcam: poetry run stream 0"
+            )
+            raise SystemExit(1) from e
+
+        picam2 = Picamera2()
+        picam2.configure(
+            picam2.create_video_configuration(
+                main={"size": (args.width, args.height)}
+            )
+        )
+        picam2.start_recording(JpegEncoder(), FileOutput(output))
 
     server_instance = StreamingServer(
         ("", args.port),
@@ -172,13 +224,14 @@ def main() -> int:
             args.port,
         )
         logger.info(
-            "On desktop: --camera http://%s:%d/stream.mjpg",
+            "Connect: --camera http://%s:%d/stream.mjpg",
             addr,
             args.port,
         )
         server_instance.serve_forever()
     finally:
-        picam2.stop_recording()
+        if picam2 is not None:
+            picam2.stop_recording()
 
     return 0
 

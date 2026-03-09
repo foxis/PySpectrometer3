@@ -1,13 +1,12 @@
 """Reference spectrum correction (dark/white)."""
 
-from typing import Optional
 import numpy as np
 
 
 def apply_dark_white_correction(
     intensity: np.ndarray,
-    dark: Optional[np.ndarray],
-    white: Optional[np.ndarray],
+    dark: np.ndarray | None,
+    white: np.ndarray | None,
 ) -> np.ndarray:
     """Apply dark subtraction and white reference normalization.
 

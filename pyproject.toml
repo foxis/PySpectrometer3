@@ -1,0 +1,54 @@
+[tool.poetry]
+name = "pyspectrometer"
+version = "3.0.0"
+description = "Modular spectrometer application with calibration, measurement, Raman, and color science modes"
+authors = []
+readme = "README.md"
+packages = [{ include = "pyspectrometer", from = "src" }]
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.15"
+numpy = ">=1.20.0"
+opencv-python = ">=4.5.0"
+scipy = ">=1.7.0"
+colour-science = ">=0.4.7"
+
+[tool.poetry.group.dev.dependencies]
+pytest = ">=7.0.0"
+ruff = ">=0.8.0"
+
+[tool.poetry.scripts]
+calibrate = "pyspectrometer.cli:calibrate"
+measure = "pyspectrometer.cli:measure"
+colors = "pyspectrometer.cli:colors"
+raman = "pyspectrometer.cli:raman"
+lint = "pyspectrometer.cli:lint"
+format = "pyspectrometer.cli:format_src"
+stream = "pyspectrometer.cli:stream"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # Pyflakes
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "UP",     # pyupgrade
+]
+ignore = ["E501", "B905", "F821", "B027"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pyspectrometer"]
+
+[tool.ruff.format]
+quote-style = "double"

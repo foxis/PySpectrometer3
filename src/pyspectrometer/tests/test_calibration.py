@@ -116,8 +116,7 @@ def test_calibration_recovers_hg_wavelength_mapping():
         f"Mean error: {mean_error:.2f} nm"
     )
     assert mean_error < 3.0, (
-        f"Mean wavelength error {mean_error:.2f} nm exceeds 3 nm. "
-        f"Max error: {max_error:.2f} nm"
+        f"Mean wavelength error {mean_error:.2f} nm exceeds 3 nm. Max error: {max_error:.2f} nm"
     )
 
 
@@ -188,10 +187,7 @@ def test_hg_peak_based_calibration_4_peaks():
     peak_pixels = [int(np.argmin(np.abs(wl_true - wl))) for wl in hg_nm]
     peak_pixels = sorted(peak_pixels)
 
-    peaks = [
-        Peak(index=p, wavelength=float(wl_true[p]), intensity=0.9)
-        for p in peak_pixels
-    ]
+    peaks = [Peak(index=p, wavelength=float(wl_true[p]), intensity=0.9) for p in peak_pixels]
 
     cal_mode = CalibrationMode()
     cal_mode.select_source(ReferenceSource.HG)
@@ -232,10 +228,7 @@ def test_hg_peak_based_4_measured_5_reference():
     peak_pixels = [int(np.argmin(np.abs(wl_true - wl))) for wl in hg_4]
     peak_pixels = sorted(peak_pixels)
 
-    peaks = [
-        Peak(index=p, wavelength=float(wl_true[p]), intensity=0.9)
-        for p in peak_pixels
-    ]
+    peaks = [Peak(index=p, wavelength=float(wl_true[p]), intensity=0.9) for p in peak_pixels]
 
     cal_mode = CalibrationMode()
     cal_mode.select_source(ReferenceSource.HG)
@@ -253,9 +246,7 @@ def test_hg_peak_based_4_measured_5_reference():
     poly = np.poly1d(coeffs)
     for px, wl_ref in zip(peak_pixels, hg_4):
         wl_cal = poly(px)
-        assert abs(wl_cal - wl_ref) < 6.0, (
-            f"Pixel {px} -> {wl_cal:.1f} nm, expected ~{wl_ref} nm"
-        )
+        assert abs(wl_cal - wl_ref) < 6.0, f"Pixel {px} -> {wl_cal:.1f} nm, expected ~{wl_ref} nm"
 
 
 def test_correlation_wavelength_range_sensible():
@@ -281,7 +272,7 @@ def test_correlation_wavelength_range_sensible():
     wl_start = poly(0)
     wl_end = poly(n_pixels - 1)
     assert 360 <= wl_start <= 440, f"Pixel 0 -> {wl_start:.1f} nm, should be 360-440"
-    assert 660 <= wl_end <= 780, f"Pixel {n_pixels-1} -> {wl_end:.1f} nm, should be 660-780"
+    assert 660 <= wl_end <= 780, f"Pixel {n_pixels - 1} -> {wl_end:.1f} nm, should be 660-780"
     assert wl_start < wl_end - 50, "Wavelength must increase with pixel"
 
 
@@ -324,13 +315,19 @@ def test_hg_csv_calibration_monotonic_no_explosion():
     from ..data.reference_spectra import ReferenceSource
     from ..processing.peak_detection import find_peak_indexes_scipy
 
-    csv_path = Path(__file__).resolve().parent.parent.parent.parent / "data" / "Spectrum-20260309--010902.csv"
+    csv_path = (
+        Path(__file__).resolve().parent.parent.parent.parent
+        / "data"
+        / "Spectrum-20260309--010902.csv"
+    )
     if not csv_path.exists():
         pytest.skip(f"CSV not found: {csv_path}")
 
     data = np.loadtxt(csv_path, delimiter=",", skiprows=1)
     pixels_arr = data[:, 0].astype(int)
-    intensity = data[:, 2].astype(np.float32)  # Use Intensity only (Wavelength column is from failed cal)
+    intensity = data[:, 2].astype(
+        np.float32
+    )  # Use Intensity only (Wavelength column is from failed cal)
     width = int(pixels_arr[-1]) + 1
 
     # Placeholder wavelengths for PeakDetector (not used for matching)
@@ -389,6 +386,4 @@ def test_hg_csv_calibration_monotonic_no_explosion():
     px_span = cal_points[-1][0] - cal_points[0][0]
     wl_span = abs(cal_points[-1][1] - cal_points[0][1])
     disp = wl_span / max(px_span, 1)
-    assert 0.15 <= disp <= 0.6, (
-        f"Dispersion {disp:.3f} nm/px outside typical prism range 0.15-0.6"
-    )
+    assert 0.15 <= disp <= 0.6, f"Dispersion {disp:.3f} nm/px outside typical prism range 0.15-0.6"

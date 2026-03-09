@@ -1,7 +1,6 @@
 """Unit tests for graph scaling utilities."""
 
 import numpy as np
-import pytest
 
 from ..utils.graph_scale import scale_intensity_to_graph
 
@@ -15,9 +14,7 @@ def test_scale_intensity_to_graph_array_default_margin():
 
 def test_scale_intensity_to_graph_array_margin_one():
     """Array input with margin=1: use full height (height-1)."""
-    result = scale_intensity_to_graph(
-        np.array([0.0, 0.5, 1.0]), graph_height=320, margin=1
-    )
+    result = scale_intensity_to_graph(np.array([0.0, 0.5, 1.0]), graph_height=320, margin=1)
     expected = np.array([0.0, 159.5, 319.0], dtype=np.float32)  # 319 scale
     np.testing.assert_array_almost_equal(result, expected)
 

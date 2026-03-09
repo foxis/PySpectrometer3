@@ -11,9 +11,9 @@ All transforms use cv2.getRotationMatrix2D and cv2.warpAffine (no manual math).
 """
 
 from dataclasses import dataclass
-from typing import Optional, Union
-import numpy as np
+
 import cv2
+import numpy as np
 
 
 @dataclass
@@ -36,9 +36,9 @@ class SpectrumTransformParams:
 
 def detect_orientation_and_offset(
     frame: np.ndarray,
-    ksize: Optional[int] = None,
+    ksize: int | None = None,
     return_debug: bool = False,
-) -> Union[tuple[float, float, int], tuple[float, float, int, np.ndarray, np.ndarray, np.ndarray]]:
+) -> tuple[float, float, int] | tuple[float, float, int, np.ndarray, np.ndarray, np.ndarray]:
     """Detect stripe orientation and spectrum center offset from frame center.
 
     Uses gradient analysis + PCA on spectrum stripe edges.
@@ -106,8 +106,7 @@ def detect_orientation_and_offset(
     center = (width / 2, height / 2)
     rot_matrix = cv2.getRotationMatrix2D(center, -orientation, 1.0)
     rotated_gray = cv2.warpAffine(
-        gray, rot_matrix, (width, height),
-        flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+        gray, rot_matrix, (width, height), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
     )
     rotated_grad_x = cv2.Sobel(rotated_gray, cv2.CV_64F, 1, 0, ksize=ksize)
     row_sums = np.sum(np.abs(rotated_grad_x), axis=1)
@@ -117,7 +116,14 @@ def detect_orientation_and_offset(
     y_offset_from_center = float(spectrum_y_rotated - frame_center_y)
 
     if return_debug:
-        return orientation, y_offset_from_center, spectrum_y_rotated, strong_mask, gray, rotated_gray
+        return (
+            orientation,
+            y_offset_from_center,
+            spectrum_y_rotated,
+            strong_mask,
+            gray,
+            rotated_gray,
+        )
     return orientation, y_offset_from_center, spectrum_y_rotated
 
 
@@ -155,8 +161,7 @@ def apply_forward_transform(
         return frame
     M = build_forward_matrix(width, height, params)
     return cv2.warpAffine(
-        frame, M, (width, height),
-        flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
+        frame, M, (width, height), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE
     )
 
 
@@ -222,12 +227,15 @@ def get_crop_corners_rotated(
     half = crop_height // 2
     y_top = center_y - half
     y_bot = center_y + half
-    return np.array([
-        [0, y_top],
-        [width, y_top],
-        [width, y_bot],
-        [0, y_bot],
-    ], dtype=np.float32)
+    return np.array(
+        [
+            [0, y_top],
+            [width, y_top],
+            [width, y_bot],
+            [0, y_bot],
+        ],
+        dtype=np.float32,
+    )
 
 
 def params_from_saved(

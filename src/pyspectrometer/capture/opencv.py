@@ -1,13 +1,12 @@
 """OpenCV capture backend for webcam, V4L, RTSP, and HTTP MJPEG streams."""
 
-from typing import Optional, Union
-import numpy as np
 import cv2
+import numpy as np
 
 from .base import CameraInterface
 
 
-def _parse_source(source: Union[int, str]) -> Union[int, str]:
+def _parse_source(source: int | str) -> int | str:
     """Parse to OpenCV-compatible value (int index or str path/URL)."""
     if isinstance(source, int):
         return source
@@ -41,6 +40,7 @@ def list_cameras(max_index: int = 10) -> list[tuple[int, str]]:
             desc = f"Index {i}"
             try:
                 import platform
+
                 if platform.system() == "Linux":
                     desc = f"/dev/video{i}"
             except Exception:
@@ -74,7 +74,7 @@ class Capture(CameraInterface):
 
     def __init__(
         self,
-        source: Union[int, str],
+        source: int | str,
         width: int = 800,
         height: int = 600,
         gain: float = 10.0,
@@ -97,7 +97,7 @@ class Capture(CameraInterface):
         self._exposure = 10000
         self._fps = fps
         self._running = False
-        self._cap: Optional[cv2.VideoCapture] = None
+        self._cap: cv2.VideoCapture | None = None
 
     @property
     def width(self) -> int:
@@ -141,9 +141,7 @@ class Capture(CameraInterface):
         self._cap = cv2.VideoCapture(self._source)
 
         if not self._cap.isOpened():
-            raise RuntimeError(
-                f"Failed to open camera source: {self._source}"
-            )
+            raise RuntimeError(f"Failed to open camera source: {self._source}")
 
         # Set requested resolution and fps (best-effort)
         self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)

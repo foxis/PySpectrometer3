@@ -1,11 +1,10 @@
 """Graph scaling utilities. Pure functions, no display dependencies."""
 
-from typing import Union
 import numpy as np
 
 
 def scale_intensity_to_graph(
-    intensity: Union[np.ndarray, float],
+    intensity: np.ndarray | float,
     graph_height: int,
     margin: int = 10,
 ) -> np.ndarray:

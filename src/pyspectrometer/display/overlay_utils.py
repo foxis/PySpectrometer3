@@ -1,6 +1,5 @@
 """Shared utilities for overlay rendering."""
 
-from typing import Optional
 import cv2
 import numpy as np
 
@@ -9,7 +8,7 @@ def render_polyline_overlay(
     graph: np.ndarray,
     intensity: np.ndarray,
     color: tuple[int, int, int],
-    resample_to_width: Optional[int] = None,
+    resample_to_width: int | None = None,
     thickness: int = 2,
 ) -> None:
     """Render intensity as polyline on graph.

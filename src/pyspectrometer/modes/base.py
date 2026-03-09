@@ -1,9 +1,11 @@
 """Base class for operating modes."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Callable, Literal, Optional
+from typing import TYPE_CHECKING, Literal, Optional
+
 import numpy as np
 
 if TYPE_CHECKING:
@@ -14,7 +16,7 @@ if TYPE_CHECKING:
 
 class ModeType(Enum):
     """Available operating modes."""
-    
+
     CALIBRATION = auto()
     MEASUREMENT = auto()
     RAMAN = auto()
@@ -29,17 +31,17 @@ class ModeState:
     frozen: bool = False
     integration_mode: Literal["none", "avg", "acc"] = "none"
     accumulated_frames: int = 0
-    accumulated_intensity: Optional[np.ndarray] = None
-    
+    accumulated_intensity: np.ndarray | None = None
+
     # References
-    black_reference: Optional[np.ndarray] = None
-    white_reference: Optional[np.ndarray] = None
-    
+    black_reference: np.ndarray | None = None
+    white_reference: np.ndarray | None = None
+
     # Auto controls
     auto_gain_enabled: bool = False
     auto_gain_target_min: int = 200
     auto_gain_target_max: int = 240
-    
+
     # GPIO
     lamp_enabled: bool = False
 
@@ -58,41 +60,41 @@ class ButtonDefinition:
 
 class BaseMode(ABC):
     """Abstract base class for operating modes.
-    
+
     Each mode defines its own:
     - Control bar buttons
     - Processing pipeline modifications
     - Overlay rendering
     - State management
     """
-    
+
     def __init__(self):
         """Initialize base mode."""
         self.state = ModeState()
         self._callbacks: dict[str, Callable[[], None]] = {}
-        self._ctx: Optional["ModeContext"] = None
-    
+        self._ctx: ModeContext | None = None
+
     @property
     @abstractmethod
     def mode_type(self) -> ModeType:
         """Get the mode type."""
         pass
-    
+
     @property
     @abstractmethod
     def name(self) -> str:
         """Get human-readable mode name."""
         pass
-    
+
     @abstractmethod
     def get_buttons(self) -> list[ButtonDefinition]:
         """Get button definitions for this mode's control bar.
-        
+
         Returns:
             List of button definitions for row 1 and row 2
         """
         pass
-    
+
     @abstractmethod
     def process_spectrum(
         self,
@@ -100,28 +102,28 @@ class BaseMode(ABC):
         wavelengths: np.ndarray,
     ) -> np.ndarray:
         """Process spectrum data according to mode logic.
-        
+
         Args:
             intensity: Raw intensity array
             wavelengths: Wavelength array
-            
+
         Returns:
             Processed intensity array
         """
         pass
-    
+
     @abstractmethod
     def get_overlay(
         self,
         wavelengths: np.ndarray,
         graph_height: int,
-    ) -> Optional[tuple[np.ndarray, tuple[int, int, int]]]:
+    ) -> tuple[np.ndarray, tuple[int, int, int]] | None:
         """Get overlay spectrum to render on graph.
-        
+
         Args:
             wavelengths: Current wavelength calibration array
             graph_height: Height of the graph in pixels
-            
+
         Returns:
             Tuple of (intensity array scaled to graph height, BGR color) or None
         """
@@ -153,7 +155,7 @@ class BaseMode(ABC):
                 processed.wavelengths, processed.intensity
             )
             ctx.display.state.reference_spectrum = ref_intensity
-    
+
     def setup(self, ctx: "ModeContext") -> None:
         """Register handlers using the given context. Subclasses override to add mode-specific handlers."""
         self._ctx = ctx
@@ -231,7 +233,7 @@ class BaseMode(ABC):
 
     def handle_action(self, action_name: str) -> bool:
         """Handle a button action.
-        
+
         Returns:
             True if action was handled
         """
@@ -240,12 +242,12 @@ class BaseMode(ABC):
             callback()
             return True
         return False
-    
+
     def toggle_freeze(self) -> bool:
         """Toggle spectrum freeze state."""
         self.state.frozen = not self.state.frozen
         return self.state.frozen
-    
+
     def toggle_averaging(self) -> bool:
         """Toggle averaging mode (mutually exclusive with accumulation)."""
         if self.state.integration_mode == "avg":
@@ -286,10 +288,9 @@ class BaseMode(ABC):
             self.state.accumulated_intensity = intensity.astype(np.float64)
             self.state.accumulated_frames = 1
         else:
-            self.state.accumulated_intensity = (
-                self.state.accumulated_intensity.astype(np.float64)
-                + np.asarray(intensity, dtype=np.float64)
-            )
+            self.state.accumulated_intensity = self.state.accumulated_intensity.astype(
+                np.float64
+            ) + np.asarray(intensity, dtype=np.float64)
             self.state.accumulated_frames += 1
 
         acc = self.state.accumulated_intensity
@@ -300,23 +301,23 @@ class BaseMode(ABC):
         if m < 1e-9:
             return acc.astype(np.float32)
         return (acc / m).astype(np.float32)
-    
+
     def set_black_reference(self, intensity: np.ndarray) -> None:
         """Set black/dark reference spectrum."""
         self.state.black_reference = intensity.copy()
         print(f"[{self.name}] Black reference set")
-    
+
     def set_white_reference(self, intensity: np.ndarray) -> None:
         """Set white reference spectrum."""
         self.state.white_reference = intensity.copy()
         print(f"[{self.name}] White reference set")
-    
+
     def clear_references(self) -> None:
         """Clear all references."""
         self.state.black_reference = None
         self.state.white_reference = None
         print(f"[{self.name}] References cleared")
-    
+
     def apply_references(self, intensity: np.ndarray) -> np.ndarray:
         """Apply black/white reference correction.
 
@@ -329,12 +330,13 @@ class BaseMode(ABC):
             Corrected intensity in 0-1 range
         """
         from ..processing.reference_correction import apply_dark_white_correction
+
         return apply_dark_white_correction(
             intensity,
             self.state.black_reference,
             self.state.white_reference,
         )
-    
+
     def calculate_auto_gain_adjustment(
         self,
         current_max: float,
@@ -342,24 +344,24 @@ class BaseMode(ABC):
         step: float = 0.5,
     ) -> float:
         """Calculate gain adjustment for auto-gain.
-        
+
         Args:
             current_max: Current maximum intensity
             current_gain: Current camera gain
             step: Gain adjustment step
-            
+
         Returns:
             New gain value
         """
         if not self.state.auto_gain_enabled:
             return current_gain
-        
+
         target_min = self.state.auto_gain_target_min
         target_max = self.state.auto_gain_target_max
-        
+
         if current_max > target_max:
             return max(0, current_gain - step)
         elif current_max < target_min:
             return min(50, current_gain + step)
-        
+
         return current_gain

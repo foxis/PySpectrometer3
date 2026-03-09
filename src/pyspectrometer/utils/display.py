@@ -1,10 +1,9 @@
 """Display-related utilities (scaling, etc). Pure functions, no UI dependencies."""
 
-from typing import Optional
 import numpy as np
 
 
-def scale_to_uint8(arr: np.ndarray, max_val: Optional[float] = None) -> np.ndarray:
+def scale_to_uint8(arr: np.ndarray, max_val: float | None = None) -> np.ndarray:
     """Scale array to 8-bit (0-255) for display.
 
     Handles uint8 (passthrough copy), uint16 (scale by max_val).

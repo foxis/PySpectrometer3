@@ -1,6 +1,7 @@
 """Auto gain and auto exposure controllers for spectrum peak leveling."""
 
-from typing import Callable, Optional
+from collections.abc import Callable
+
 import numpy as np
 
 from ..core.spectrum import SpectrumData
@@ -13,7 +14,7 @@ def _compute_adjustment_ratio(
     threshold_low_frac: float = 0.50,
     ratio_min: float = 0.7,
     ratio_max: float = 1.5,
-) -> Optional[float]:
+) -> float | None:
     """Compute gain/exposure adjustment ratio from spectrum peak level.
 
     Returns None if peak is in acceptable range (no adjustment needed).

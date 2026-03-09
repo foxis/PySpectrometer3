@@ -1,7 +1,5 @@
 """Unit tests for capture.opencv backend."""
 
-import pytest
-
 from ..capture.opencv import Capture, _parse_source
 
 
