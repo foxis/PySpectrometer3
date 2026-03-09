@@ -422,27 +422,28 @@ Synthetic cases: horizontal (0°), rotated (10°), hot pixels, low signal, satur
 ### 5.1 Capture
 
 - **CameraInterface:** abstract API (width, height, gain, start, stop, capture). All backends return frames in the format the pipeline expects (see below).
-- **PicameraCapture:** Picamera2 implementation for Raspberry Pi cameras.  
+- **picamera.Capture:** Picamera2 implementation for Raspberry Pi cameras.  
   Output: raw 2D frames; extraction uses calibration geometry.
-- **OpenCVCapture:** OpenCV VideoCapture for webcam, V4L, or RTSP. *(Planned.)*  
-  Selected via CLI `--camera SOURCE`; substitutes PicameraCapture with no other code changes.  
+- **opencv.Capture:** OpenCV VideoCapture for webcam, V4L, RTSP, or HTTP MJPEG.  
+  Selected via CLI `--camera SOURCE`; substitutes default with no other code changes.  
   - **List cameras:** `--list-cameras` enumerates available devices (e.g. on Windows: index + name; Linux: /dev/video*).
   - **Capabilities on start:** On `start()`, log camera info and capabilities (resolution, fps, format) similar to Picamera2.
   - **Gain / exposure:** No-op; setters accept values but have no effect (many webcam/RTSP sources do not support them).
 
-**Pipeline frame contract:** Capture backends must output **10-bit grayscale** frames: 2D `uint16` array, shape `(height, width)`, values 0–1023. Picamera provides this natively in monochrome mode; OpenCVCapture must convert BGR/grayscale to this format (e.g. `gray.astype(np.uint16) * 1023 / 255`).
+**Pipeline frame contract:** Capture backends must output **10-bit grayscale** frames: 2D `uint16` array, shape `(height, width)`, values 0–1023. Picamera provides this natively in monochrome mode; opencv.Capture must convert BGR/grayscale to this format (e.g. `gray.astype(np.uint16) * 1023 / 255`).
 
 **CLI camera selection:**
 
 | Parameter | Values | Backend | Example |
 |-----------|--------|---------|---------|
-| (default) | — | PicameraCapture | Pi camera |
+| (default) | — | picamera.Capture | Pi camera |
 | `--list-cameras` | flag | — | Enumerate available cameras (OpenCV backend); exit after listing |
-| `--camera 0` | int (device index) | OpenCVCapture | Webcam /dev/video0 |
-| `--camera v4l:/dev/video2` | v4l:path | OpenCVCapture | V4L2 device |
-| `--camera rtsp://host/stream` | rtsp://... | OpenCVCapture | RTSP stream |
+| `--camera 0` | int (device index) | opencv.Capture | Webcam /dev/video0 |
+| `--camera v4l:/dev/video2` | v4l:path | opencv.Capture | V4L2 device |
+| `--camera rtsp://host/stream` | rtsp://... | opencv.Capture | RTSP stream |
+| `--camera http://host:8000/stream.mjpg` | http://... | opencv.Capture | HTTP MJPEG (e.g. Pi stream) |
 
-When `--camera` is set, `__main__` constructs `OpenCVCapture(source=..., width=..., height=...)` and passes it to `Spectrometer(camera=...)`. No other code changes; the rest of the app uses only `CameraInterface`.
+When `--camera` is set, `__main__` constructs `opencv.Capture(source=..., ...)` and passes it to `Spectrometer(camera=...)`. No other code changes; the rest of the app uses only `CameraInterface`.
 
 ### 5.2 Calibration
 
@@ -512,8 +513,8 @@ src/pyspectrometer/
 ├── spectrometer.py         # Orchestrator: capture, extraction, calibration, pipeline, mode, display, export, input
 ├── capture/
 │   ├── base.py              # CameraInterface
-│   ├── picamera.py          # PicameraCapture (Pi cameras)
-│   └── opencv_capture.py    # OpenCVCapture (webcam, v4l, rtsp) [planned]
+│   ├── picamera.py          # Capture (Pi cameras)
+│   └── opencv.py    # Capture (webcam, v4l, rtsp, http)
 ├── processing/
 │   ├── base.py              # ProcessorInterface
 │   ├── extraction.py        # SpectrumExtractor, ExtractionMethod
@@ -628,7 +629,7 @@ cd /home/pi/PySpectrometer3
 2. **Common features:** Dark/white ref, averaging, auto gain, GPIO (lamp).
 3. **Calibration mode:** calibration.py, reference data, peak matching, 4-point min, auto-level/center/calibrate.
 4. **Measurement mode:** measurement.py, ref normalization, overlay, LED, I2C.
-5. **OpenCV capture:** capture/opencv_capture.py, CLI `--camera` and `--list-cameras`, 10-bit grayscale, gain/exposure no-op, log capabilities on start, substitutable via Spectrometer(camera=...).
+5. **OpenCV capture:** capture/opencv.py, CLI `--camera` and `--list-cameras`, 10-bit grayscale, gain/exposure no-op, log capabilities on start, substitutable via Spectrometer(camera=...).
 6. **Waterfall mode:** waterfall.py, waterfall display, CSV stream (timestamp + spectrum), optional stepper.
 7. **Raman mode:** raman.py, wavenumber conversion, laser detection, zero cm⁻¹; (future) bond/compound matching.
 8. **Color Science mode:** colorscience/ (CIE data, XYZ, CRI, CCT), modes/colorscience.py, swatches, xy diagram.
@@ -644,7 +645,7 @@ cd /home/pi/PySpectrometer3
 - **Raman mode:** Pending.
 - **Color Science mode:** Pending.
 - **Spectrum extraction:** Implemented (processing/extraction.py, ExtractionConfig, calibration file extension, keyboard e/E/[/]).
-- **OpenCV capture:** Pending (capture/opencv_capture.py; --camera, --list-cameras; 10-bit grayscale; gain/exposure no-op; log capabilities on start).
+- **OpenCV capture:** Pending (capture/opencv.py; --camera, --list-cameras; 10-bit grayscale; gain/exposure no-op; log capabilities on start).
 
 ---
 

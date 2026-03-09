@@ -1,6 +1,6 @@
 """Camera capture backends for PySpectrometer3."""
 
 from .base import CameraInterface
-from .picamera import PicameraCapture
+from .picamera import Capture
 
-__all__ = ["CameraInterface", "PicameraCapture"]
+__all__ = ["CameraInterface", "Capture"]

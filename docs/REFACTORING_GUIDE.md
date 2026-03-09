@@ -136,7 +136,7 @@ This document is a **task list** for refactoring the codebase to improve **expan
 
 ### 6.1 Spectrometer constructor
 
-- [ ] **6.1.1** Extend `Spectrometer.__init__` to accept optional `camera: Optional[CameraInterface] = None`, `display_factory: Optional[Callable[..., DisplayInterface]] = None`, `exporter: Optional[ExportInterface] = None`. If None, construct default (PicameraCapture, DisplayManager, CSVExporter). This allows tests and alternative UIs to inject mocks or stubs.
+- [ ] **6.1.1** Extend `Spectrometer.__init__` to accept optional `camera: Optional[CameraInterface] = None`, `display_factory: Optional[Callable[..., DisplayInterface]] = None`, `exporter: Optional[ExportInterface] = None`. If None, construct default (picamera.Capture, DisplayManager, CSVExporter). This allows tests and alternative UIs to inject mocks or stubs.
 - [ ] **6.1.2** Use the injected display type only via the narrow interface (e.g. `DisplayInterface`); no reliance on `DisplayManager`-specific attributes outside that interface.
 
 ### 6.2 Export and camera
@@ -146,12 +146,12 @@ This document is a **task list** for refactoring the codebase to improve **expan
 
 ### 6.3 OpenCV capture backend (ARCHITECTURE §5.1)
 
-- [ ] **6.3.1** Add `capture/opencv_capture.py` — `OpenCVCapture` implementing `CameraInterface`. Source: webcam (int index), v4l path, or rtsp URL, from CLI `--camera SOURCE`.
-- [ ] **6.3.2** Convert frames to **10-bit grayscale**: 2D `uint16`, shape `(height, width)`, values 0–1023. BGR/grayscale from OpenCV → `gray.astype(np.uint16) * 1023 / 255`.
-- [ ] **6.3.3** **Gain / exposure:** No-op (setters accept but have no effect).
-- [ ] **6.3.4** **List cameras:** `--list-cameras` enumerates available devices; log index/name or path; exit after listing.
-- [ ] **6.3.5** **Capabilities on start:** On `start()`, log camera info and capabilities (resolution, fps, format) like Picamera2.
-- [ ] **6.3.6** Add `--camera SOURCE` and `--list-cameras` to `__main__.py`. When `--camera` set, create `OpenCVCapture` and pass to `Spectrometer(camera=...)`. No other code changes.
+- [x] **6.3.1** Add `capture/opencv.py` — `Capture` implementing `CameraInterface`. Source: webcam (int index), v4l path, or rtsp/http URL, from CLI `--camera SOURCE`.
+- [x] **6.3.2** Convert frames to **10-bit grayscale**: 2D `uint16`, shape `(height, width)`, values 0–1023. BGR/grayscale from OpenCV → `(gray * 1023 / 255).astype(uint16)`.
+- [x] **6.3.3** **Gain / exposure:** No-op (setters accept but have no effect).
+- [x] **6.3.4** **List cameras:** `--list-cameras` enumerates available devices; log index/path; exit after listing.
+- [x] **6.3.5** **Capabilities on start:** On `start()`, log camera info (resolution, fps); gain/exposure noted as no-op.
+- [x] **6.3.6** Add `--camera SOURCE` and `--list-cameras` to `__main__.py`. When `--camera` set, create `opencv.Capture` and pass to `Spectrometer(camera=...)`. No other code changes.
 
 ---
 
@@ -186,7 +186,7 @@ After each phase (or at the end), verify:
 | 10 | Mode contract: `process_spectrum` 0–1; use `apply_references` in MeasurementMode | 5.1–5.2 |
 | 11 | Extract `CorrelationCalibrator`, `PeakMatchCalibrator`, `SensitivityCorrector` from CalibrationMode (4-pt min per ARCHITECTURE) | 5.2 |
 | 12 | Optional: constructor injection for camera, display factory, exporter | 6.1–6.2 |
-| 13 | OpenCVCapture: webcam/v4l/rtsp, 10-bit grayscale, --camera/--list-cameras; gain/exposure no-op; log capabilities on start | 6.3 |
+| 13 | opencv.Capture: webcam/v4l/rtsp, 10-bit grayscale, --camera/--list-cameras; gain/exposure no-op; log capabilities on start | 6.3 |
 
 ---
 
@@ -197,8 +197,8 @@ After each phase (or at the end), verify:
 - **Modes:** Refactoring supports all **five** modes (Calibration, Measurement, Waterfall, Raman, Color Science). Button layouts and actions follow ARCHITECTURE §3 button tables (e.g. FL12, SaveCal, LoadCal, LED, I2C…).
 - **Layers:** Controller (Spectrometer + EventHandlerRegistry + ModeCoordinator), Viewer (display + gui), Data/Logic (core, processing, modes) — refactor keeps these boundaries clear.
 - **Calibration:** 4-point minimum, `match_peaks_to_reference`, Auto-Level, Auto-Center Y as in ARCHITECTURE §3.2.
-- **Module map:** ARCHITECTURE §8 is authoritative; new modules (e.g. `modes/waterfall.py`, `capture/opencv_capture.py`) appear there when planned/implemented.
-- **Capture:** OpenCVCapture (webcam, v4l, rtsp) in `capture/`; selected via `--camera`; outputs 10-bit grayscale; substitutes via `Spectrometer(camera=...)` with no other code changes (ARCHITECTURE §5.1).
+- **Module map:** ARCHITECTURE §8 is authoritative; new modules (e.g. `modes/waterfall.py`, `capture/opencv.py`) appear there when planned/implemented.
+- **Capture:** opencv.Capture (webcam, v4l, rtsp) in `capture/`; selected via `--camera`; outputs 10-bit grayscale; substitutes via `Spectrometer(camera=...)` with no other code changes (ARCHITECTURE §5.1).
 
 ---
 

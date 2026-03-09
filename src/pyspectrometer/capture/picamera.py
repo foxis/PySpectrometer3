@@ -6,7 +6,7 @@ import numpy as np
 from .base import CameraInterface
 
 
-class PicameraCapture(CameraInterface):
+class Capture(CameraInterface):
     """Camera capture implementation using Picamera2.
     
     This backend is designed for Raspberry Pi camera modules and uses
@@ -118,7 +118,7 @@ class PicameraCapture(CameraInterface):
             print(f"  [{i}] {fmt} {size[0]}x{size[1]} {bit_depth}-bit")
         
         frame_duration = 1_000_000 // self._fps
-        video_config = self._configure_camera(frame_duration)
+        video_config = self._configure(frame_duration)
         
         self._camera.configure(video_config)
         
@@ -139,87 +139,72 @@ class PicameraCapture(CameraInterface):
         
         self._running = True
     
-    def _configure_camera(self, frame_duration: int) -> dict:
-        """Configure camera based on requested mode and available formats."""
-        # Try formats in order of preference for monochrome high bit-depth
-        if self._monochrome:
-            # OV9281 and similar monochrome sensors often support SRGGB10 or similar raw formats
-            # We can use raw capture to get higher bit depth
-            
-            # First, check what formats are available
-            sensor_modes = self._camera.sensor_modes
-            
-            # Find best monochrome/raw mode based on requested bit depth
-            best_mode = None
-            for mode in sensor_modes:
-                mode_bit_depth = mode.get("bit_depth", 8)
-                if mode_bit_depth >= self._bit_depth:
-                    if best_mode is None or mode_bit_depth < best_mode.get("bit_depth", 99):
-                        best_mode = mode
-            
-            # If we found a high bit-depth mode, use raw capture
-            if best_mode and best_mode.get("bit_depth", 8) >= 10:
-                raw_format = best_mode.get("format")
-                raw_size = best_mode.get("size", (self._width, self._height))
-                
-                print(f"Using raw capture: {raw_format} {raw_size} {best_mode.get('bit_depth')}-bit")
-                
-                # Create config with raw stream for high bit-depth
-                video_config = self._camera.create_video_configuration(
-                    main={
-                        "format": "YUV420",  # Main stream still needs standard format
-                        "size": (self._width, self._height),
-                    },
-                    raw={
-                        "format": raw_format,
-                        "size": raw_size,
-                    },
-                    controls={
-                        "FrameDurationLimits": (frame_duration, frame_duration),
-                    },
-                )
-                self._actual_bit_depth = best_mode.get("bit_depth", 10)
-                self._use_raw = True
-                return video_config
-            
-            # Fallback: Try standard monochrome formats (Y10, Y16, etc.)
-            for fmt in ["Y16", "Y10", "Y8", "YUV420"]:
-                try:
-                    video_config = self._camera.create_video_configuration(
-                        main={
-                            "format": fmt,
-                            "size": (self._width, self._height),
-                        },
-                        controls={
-                            "FrameDurationLimits": (frame_duration, frame_duration),
-                        },
-                    )
-                    match fmt:
-                        case "Y16":
-                            self._actual_bit_depth = 16
-                        case "Y10":
-                            self._actual_bit_depth = 10
-                        case _:
-                            self._actual_bit_depth = 8
-                    print(f"Using monochrome format: {fmt}")
-                    return video_config
-                except Exception:
-                    continue
-        
-        # Color mode or final fallback: use RGB888 (8-bit per channel)
-        video_config = self._camera.create_video_configuration(
-            main={
-                "format": "RGB888",
-                "size": (self._width, self._height),
-            },
-            controls={
-                "FrameDurationLimits": (frame_duration, frame_duration),
-            },
+    def _configure(self, frame_duration: int) -> dict:
+        """Configure based on requested mode and available formats."""
+        if not self._monochrome:
+            return self._config_color(frame_duration)
+        sensor_modes = self._camera.sensor_modes
+        best_mode = self._find_best_monochrome_mode(sensor_modes)
+        if best_mode and best_mode.get("bit_depth", 8) >= 10:
+            return self._config_raw(best_mode, frame_duration)
+        result = self._try_monochrome_formats(frame_duration)
+        if result is not None:
+            return result
+        return self._config_color(frame_duration)
+
+    def _find_best_monochrome_mode(self, sensor_modes: list) -> Optional[dict]:
+        """Find best monochrome mode meeting bit depth, preferring minimal depth."""
+        best = None
+        for mode in sensor_modes:
+            mode_bit_depth = mode.get("bit_depth", 8)
+            if mode_bit_depth >= self._bit_depth:
+                if best is None or mode_bit_depth < best.get("bit_depth", 99):
+                    best = mode
+        return best
+
+    def _config_raw(self, best_mode: dict, frame_duration: int) -> dict:
+        """Create config for raw capture (10+ bit)."""
+        raw_format = best_mode.get("format")
+        raw_size = best_mode.get("size", (self._width, self._height))
+        print(f"Using raw capture: {raw_format} {raw_size} {best_mode.get('bit_depth')}-bit")
+        self._actual_bit_depth = best_mode.get("bit_depth", 10)
+        self._use_raw = True
+        return self._camera.create_video_configuration(
+            main={"format": "YUV420", "size": (self._width, self._height)},
+            raw={"format": raw_format, "size": raw_size},
+            controls={"FrameDurationLimits": (frame_duration, frame_duration)},
         )
+
+    def _try_monochrome_formats(self, frame_duration: int) -> Optional[dict]:
+        """Try Y16, Y10, Y8, YUV420; return config or None."""
+        for fmt in ["Y16", "Y10", "Y8", "YUV420"]:
+            try:
+                config = self._camera.create_video_configuration(
+                    main={"format": fmt, "size": (self._width, self._height)},
+                    controls={"FrameDurationLimits": (frame_duration, frame_duration)},
+                )
+                match fmt:
+                    case "Y16":
+                        self._actual_bit_depth = 16
+                    case "Y10":
+                        self._actual_bit_depth = 10
+                    case _:
+                        self._actual_bit_depth = 8
+                print(f"Using monochrome format: {fmt}")
+                return config
+            except Exception:
+                continue
+        return None
+
+    def _config_color(self, frame_duration: int) -> dict:
+        """Create config for RGB888 color (8-bit)."""
         self._actual_bit_depth = 8
         self._monochrome = False
         print("Using RGB888 (8-bit color)")
-        return video_config
+        return self._camera.create_video_configuration(
+            main={"format": "RGB888", "size": (self._width, self._height)},
+            controls={"FrameDurationLimits": (frame_duration, frame_duration)},
+        )
     
     def stop(self) -> None:
         """Stop Picamera2 capture."""

@@ -21,9 +21,6 @@ Features:
 import argparse
 import sys
 
-from .config import Config
-from .spectrometer import Spectrometer
-
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
@@ -59,6 +56,9 @@ Examples:
   pyspectrometer --waveshare --mode measurement  # Waveshare display
   pyspectrometer --fullscreen               # Fullscreen mode
   pyspectrometer --gain 15                  # Custom camera gain
+  pyspectrometer --list-cameras             # List available cameras
+  pyspectrometer --camera 0                 # Use webcam
+  pyspectrometer --camera http://pi:8000/stream.mjpg  # Remote Pi stream
 """,
     )
     
@@ -137,6 +137,20 @@ Examples:
     )
     
     parser.add_argument(
+        "--camera",
+        type=str,
+        default=None,
+        metavar="SOURCE",
+        help="OpenCV camera source: 0 (webcam), v4l:/dev/video0, rtsp://..., http://... (Pi stream)",
+    )
+    
+    parser.add_argument(
+        "--list-cameras",
+        action="store_true",
+        help="List available OpenCV camera devices and exit",
+    )
+    
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s 3.0.0",
@@ -145,9 +159,32 @@ Examples:
     return parser.parse_args()
 
 
+def _parse_source(value: str) -> int | str:
+    """Parse --camera arg to int or str for capture.opencv.Capture."""
+    v = value.strip()
+    if v.isdigit():
+        return int(v)
+    return v
+
+
 def main() -> int:
     """Main entry point for PySpectrometer 3."""
     args = parse_args()
+    
+    if args.list_cameras:
+        from .capture.opencv import list_cameras
+        cameras = list_cameras()
+        if not cameras:
+            print("No cameras found.")
+        else:
+            print("Available cameras:")
+            for idx, desc in cameras:
+                print(f"  {idx}: {desc}")
+        return 0
+    
+    # Full imports (needed only when running spectrometer)
+    from .config import Config
+    from .spectrometer import Spectrometer
     
     mode_names = {
         "calibration": "Calibration",
@@ -185,8 +222,26 @@ def main() -> int:
         bit_depth=args.bit_depth,
     )
     
+    camera = None
+    if args.camera is not None:
+        from .capture.opencv import Capture
+        source = _parse_source(args.camera)
+        camera = Capture(
+            source=source,
+            width=config.camera.frame_width,
+            height=config.camera.frame_height,
+            gain=config.camera.gain,
+            fps=config.camera.fps,
+        )
+        print(f"Using camera: {args.camera}")
+    
     try:
-        spectrometer = Spectrometer(config, mode=args.mode, laser_nm=args.laser)
+        spectrometer = Spectrometer(
+            config,
+            camera=camera,
+            mode=args.mode,
+            laser_nm=args.laser,
+        )
         spectrometer.run()
         return 0
     except KeyboardInterrupt:

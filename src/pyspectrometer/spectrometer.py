@@ -11,7 +11,7 @@ from .core.spectrum import SpectrumData
 from .core.calibration import Calibration
 from .core.reference_spectrum import ReferenceSpectrumManager
 from .capture.base import CameraInterface
-from .capture.picamera import PicameraCapture
+from .capture.picamera import Capture
 from .processing.pipeline import ProcessingPipeline
 from .processing.filters import SavitzkyGolayFilter
 from .processing.auto_controls import AutoGainController, AutoExposureController
@@ -46,7 +46,7 @@ class Spectrometer:
         
         Args:
             config: Application configuration (uses defaults if None)
-            camera: Camera backend (creates PicameraCapture if None)
+            camera: Camera backend (creates Pi Capture if None)
             mode: Operating mode (calibration, measurement, raman, colorscience)
             laser_nm: Raman laser wavelength in nm (for raman mode)
         """
@@ -54,7 +54,7 @@ class Spectrometer:
         self.mode = mode if mode in self.VALID_MODES else "measurement"
         self.laser_nm = laser_nm
         
-        self._camera = camera or PicameraCapture(
+        self._camera = camera or Capture(
             width=self.config.camera.frame_width,
             height=self.config.camera.frame_height,
             gain=self.config.camera.gain,
