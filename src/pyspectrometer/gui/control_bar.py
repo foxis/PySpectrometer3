@@ -1,7 +1,10 @@
 """Control bar with two rows of buttons for the spectrum display."""
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
+
+if TYPE_CHECKING:
+    from ..modes.base import BaseMode
 import cv2
 import numpy as np
 
@@ -58,6 +61,7 @@ class ControlBar:
         config: Optional[ControlBarConfig] = None,
         mode: str = "measurement",
         buttons: Optional[list] = None,
+        mode_instance: Optional["BaseMode"] = None,
     ):
         """Initialize control bar.
 
@@ -66,12 +70,14 @@ class ControlBar:
             config: Configuration (uses defaults if None)
             mode: Operating mode
             buttons: Button definitions from mode.get_buttons() (required)
+            mode_instance: Mode instance for action dispatch (clicks routed through mode.handle_action)
         """
         if buttons is None:
             raise ValueError("buttons required; use mode.get_buttons()")
         self.width = width
         self.config = config or ControlBarConfig()
         self.mode = mode
+        self._mode_instance = mode_instance
 
         self._row1: Optional[ButtonBar] = None
         self._row2: Optional[ButtonBar] = None
@@ -246,25 +252,38 @@ class ControlBar:
         return hovered
     
     def handle_click(self, px: int, py: int) -> Optional[Button]:
-        """Handle mouse click event.
-        
+        """Handle mouse click event. Routes through mode.handle_action when mode_instance set.
+
         Args:
             px: Mouse X position (relative to control bar)
             py: Mouse Y position (relative to control bar)
-            
+
         Returns:
             Clicked button, or None
         """
+        btn = self._get_clicked_button(px, py)
+        if btn is None:
+            return None
+        print(f"[BUTTON] '{btn.label}' clicked -> action: {btn.action_name}")
+        if self._mode_instance is not None:
+            self._mode_instance.handle_action(btn.action_name)
+        elif btn.callback is not None:
+            btn.callback()
+        else:
+            if btn.is_toggle:
+                btn.is_active = not btn.is_active
+        return btn
+
+    def _get_clicked_button(self, px: int, py: int) -> Optional[Button]:
+        """Get button at position without invoking callback."""
         if self._row1 is not None:
-            btn = self._row1.handle_click(px, py)
+            btn = self._row1.get_button_at(px, py)
             if btn is not None:
                 return btn
-        
         if self._row2 is not None:
-            btn = self._row2.handle_click(px, py)
+            btn = self._row2.get_button_at(px, py)
             if btn is not None:
                 return btn
-        
         return None
     
     def get_button(self, action_name: str) -> Optional[Button]:

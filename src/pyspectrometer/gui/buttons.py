@@ -272,14 +272,21 @@ class ButtonBar:
         return hovered
     
     def handle_click(self, px: int, py: int) -> Optional[Button]:
-        """Handle mouse click.
-        
+        """Handle mouse click (invokes button callback).
+
         Returns:
             Clicked button, or None
         """
         for button in self._buttons:
             if button.contains(px, py):
                 button.on_click()
+                return button
+        return None
+
+    def get_button_at(self, px: int, py: int) -> Optional[Button]:
+        """Get button at position without invoking callback."""
+        for button in self._buttons:
+            if button.contains(px, py):
                 return button
         return None
     

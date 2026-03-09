@@ -92,6 +92,7 @@ class DisplayManager:
                 brightness=config.waterfall.brightness,
             )
         
+        self._mode_instance = mode_instance
         buttons = mode_instance.get_buttons() if mode_instance is not None else None
         self._control_bar = ControlBar(
             width=config.camera.frame_width,
@@ -101,6 +102,7 @@ class DisplayManager:
             ),
             mode=mode,
             buttons=buttons,
+            mode_instance=mode_instance,
         )
         
         # Slider panel for gain/exposure/LED (positioned on right side of graph area)

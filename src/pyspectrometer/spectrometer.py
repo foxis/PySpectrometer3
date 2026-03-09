@@ -19,7 +19,6 @@ from .processing.peak_detection import PeakDetector
 from .processing.extraction import SpectrumExtractor, ExtractionMethod
 from .display.renderer import DisplayManager
 from .export.csv_exporter import CSVExporter
-from .input.keyboard import KeyboardHandler, Action
 from .modes.base import BaseMode
 from .modes.calibration import CalibrationMode
 from .modes.measurement import MeasurementMode
@@ -119,20 +118,19 @@ class Spectrometer:
             self._peak_detector,
         ])
         
-        # Mode instance for button definitions (single source of truth)
-        mode_instance: Optional[BaseMode] = None
+        # Mode instance: owns button definitions and action handling
+        self._mode_instance: BaseMode
         match mode:
             case "calibration":
                 self._calibration_mode = CalibrationMode()
-                mode_instance = self._calibration_mode
+                self._mode_instance = self._calibration_mode
             case "measurement":
                 self._measurement_mode = MeasurementMode()
-                mode_instance = self._measurement_mode
+                self._mode_instance = self._measurement_mode
             case _:
-                mode_instance = MeasurementMode()  # Fallback for raman/colorscience
-        self._display = DisplayManager(self.config, self._calibration, mode=mode, mode_instance=mode_instance)
+                self._mode_instance = MeasurementMode()  # Fallback for raman/colorscience
+        self._display = DisplayManager(self.config, self._calibration, mode=mode, mode_instance=self._mode_instance)
         self._exporter = CSVExporter(output_dir=self.config.export.output_dir)
-        self._keyboard = KeyboardHandler()
         self._reference_manager = ReferenceSpectrumManager()
         
         # Mode-specific handlers (modes created above)
@@ -155,120 +153,83 @@ class Spectrometer:
         self._last_auto_calibrate_time: float = 0.0
         self._AUTO_CAL_DEBOUNCE_SEC: float = 1.5
 
-        self._register_key_callbacks()
-        self._register_button_callbacks()
+        self._register_mode_callbacks()
     
-    def _register_key_callbacks(self) -> None:
-        """Register keyboard action callbacks."""
-        self._keyboard.register(Action.QUIT, self._on_quit)
-        self._keyboard.register(Action.TOGGLE_HOLD_PEAKS, self._on_toggle_hold)
-        self._keyboard.register(Action.SAVE, self._on_save)
-        self._keyboard.register(Action.CALIBRATE, self._on_calibrate)
-        self._keyboard.register(Action.CLEAR_CLICKS, self._on_clear_clicks)
-        self._keyboard.register(Action.TOGGLE_MEASURE, self._on_toggle_measure)
-        self._keyboard.register(Action.TOGGLE_PIXEL_MODE, self._on_toggle_pixel_mode)
-        self._keyboard.register(Action.SAVGOL_UP, self._on_savgol_up)
-        self._keyboard.register(Action.SAVGOL_DOWN, self._on_savgol_down)
-        self._keyboard.register(Action.PEAK_WIDTH_UP, self._on_peak_width_up)
-        self._keyboard.register(Action.PEAK_WIDTH_DOWN, self._on_peak_width_down)
-        self._keyboard.register(Action.THRESHOLD_UP, self._on_threshold_up)
-        self._keyboard.register(Action.THRESHOLD_DOWN, self._on_threshold_down)
-        self._keyboard.register(Action.GAIN_UP, self._on_gain_up)
-        self._keyboard.register(Action.GAIN_DOWN, self._on_gain_down)
-        self._keyboard.register(Action.CYCLE_EXTRACTION_METHOD, self._on_cycle_extraction)
-        self._keyboard.register(Action.AUTO_DETECT_ANGLE, self._on_auto_detect_angle)
-        self._keyboard.register(Action.PERP_WIDTH_UP, self._on_perp_width_up)
-        self._keyboard.register(Action.PERP_WIDTH_DOWN, self._on_perp_width_down)
-        self._keyboard.register(Action.SAVE_EXTRACTION_PARAMS, self._on_save_extraction)
-        self._keyboard.register(Action.CYCLE_REFERENCE_SPECTRUM, self._on_cycle_reference)
-    
-    def _register_button_callbacks(self) -> None:
-        """Register callbacks for control bar buttons."""
+    def _register_mode_callbacks(self) -> None:
+        """Register callbacks on the mode instance (single source for button actions)."""
+        mode = self._mode_instance
         display = self._display
-        
+
         # Common buttons
-        display.register_button_callback("quit", self._on_quit)
-        display.register_button_callback("capture_peak", self._on_toggle_hold)
-        display.register_button_callback("cycle_preview", self._on_cycle_preview)
-        
+        mode.register_callback("quit", self._on_quit)
+        mode.register_callback("capture_peak", self._on_toggle_hold)
+        mode.register_callback("cycle_preview", self._on_cycle_preview)
+
         # Gain/Exposure slider toggles
-        display.register_button_callback("show_gain_slider", self._on_toggle_gain_slider)
-        display.register_button_callback("show_exposure_slider", self._on_toggle_exposure_slider)
-        display.register_button_callback("auto_gain", self._on_toggle_auto_gain)
-        display.register_button_callback("auto_exposure", self._on_toggle_auto_exposure)
-        
-        # Set up slider change callbacks
-        self._display.register_slider_callbacks(
+        mode.register_callback("show_gain_slider", self._on_toggle_gain_slider)
+        mode.register_callback("show_exposure_slider", self._on_toggle_exposure_slider)
+        mode.register_callback("auto_gain", self._on_toggle_auto_gain)
+        mode.register_callback("auto_exposure", self._on_toggle_auto_exposure)
+
+        # Set up slider change callbacks (remain on display)
+        display.register_slider_callbacks(
             gain_cb=self._on_gain_slider_change,
             exposure_cb=self._on_exposure_slider_change,
         )
-        
-        # Initialize slider values from camera
-        self._display.set_gain_value(self._camera.gain)
-        self._display.set_exposure_value(self._camera.exposure)
-        
+        display.set_gain_value(self._camera.gain)
+        display.set_exposure_value(self._camera.exposure)
+
         if self.mode == "calibration":
             self._register_calibration_callbacks()
         else:
             self._register_measurement_callbacks()
     
     def _register_measurement_callbacks(self) -> None:
-        """Register callbacks for measurement mode buttons."""
-        display = self._display
-        
-        # Capture and references
-        display.register_button_callback("capture", self._on_capture_current)
-        display.register_button_callback("toggle_averaging", self._on_toggle_averaging_meas)
-        display.register_button_callback("set_dark", self._on_set_dark)
-        display.register_button_callback("set_white", self._on_set_white)
-        display.register_button_callback("clear_refs", self._on_clear_refs)
-        display.register_button_callback("save", self._on_button_save)
-        display.register_button_callback("load", self._on_load_spectrum)
-        
-        # Display and control
-        display.register_button_callback("show_reference", self._on_toggle_show_reference)
-        display.register_button_callback("normalize", self._on_toggle_normalize)
-        display.register_button_callback("lamp_toggle", self._on_toggle_light)
+        """Register measurement mode button callbacks on mode."""
+        mode = self._mode_instance
+        mode.register_callback("capture", self._on_capture_current)
+        mode.register_callback("toggle_averaging", self._on_toggle_averaging_meas)
+        mode.register_callback("set_dark", self._on_set_dark)
+        mode.register_callback("set_white", self._on_set_white)
+        mode.register_callback("clear_refs", self._on_clear_refs)
+        mode.register_callback("save", self._on_button_save)
+        mode.register_callback("load", self._on_load_spectrum)
+        mode.register_callback("show_reference", self._on_toggle_show_reference)
+        mode.register_callback("normalize", self._on_toggle_normalize)
+        mode.register_callback("lamp_toggle", self._on_toggle_light)
     
     def _register_calibration_callbacks(self) -> None:
-        """Register callbacks for calibration mode buttons."""
-        display = self._display
-        
-        # Source selection
-        display.register_button_callback("source_fl", lambda: self._on_select_source(ReferenceSource.FL))
-        display.register_button_callback("source_fl2", lambda: self._on_select_source(ReferenceSource.FL2))
-        display.register_button_callback("source_fl3", lambda: self._on_select_source(ReferenceSource.FL3))
-        display.register_button_callback("source_fl4", lambda: self._on_select_source(ReferenceSource.FL4))
-        display.register_button_callback("source_fl5", lambda: self._on_select_source(ReferenceSource.FL5))
-        display.register_button_callback("source_a", lambda: self._on_select_source(ReferenceSource.A))
-        display.register_button_callback("source_hg", lambda: self._on_select_source(ReferenceSource.HG))
-        display.register_button_callback("source_d65", lambda: self._on_select_source(ReferenceSource.D65))
-        display.register_button_callback("source_led", lambda: self._on_select_source(ReferenceSource.LED))
-        display.register_button_callback("source_led2", lambda: self._on_select_source(ReferenceSource.LED2))
-        display.register_button_callback("source_led3", lambda: self._on_select_source(ReferenceSource.LED3))
-        
-        # Calibration actions
-        display.register_button_callback("toggle_overlay", self._on_toggle_overlay)
-        display.register_button_callback("toggle_sensitivity", self._on_toggle_sensitivity)
-        display.register_button_callback("correct_sensitivity", self._on_correct_sensitivity)
-        display.register_button_callback("auto_level", self._on_auto_level)
-        display.register_button_callback("auto_calibrate", self._on_auto_calibrate)
-        display.register_button_callback("reset_calibration", self._on_reset_calibration)
-        display.register_button_callback("save_cal", self._on_save_calibration)
-        display.register_button_callback("save_spectrum", self._on_button_save)
-        display.register_button_callback("load_cal", self._on_load_calibration)
-        
-        # Display and control
-        display.register_button_callback("freeze", self._on_toggle_freeze)
-        display.register_button_callback("toggle_averaging", self._on_toggle_averaging)
-        display.register_button_callback("clear_points", self._on_clear_cal_points)
-        
-        # Set initial button states
+        """Register calibration mode button callbacks on mode."""
+        mode = self._mode_instance
+        mode.register_callback("source_fl", lambda: self._on_select_source(ReferenceSource.FL))
+        mode.register_callback("source_fl2", lambda: self._on_select_source(ReferenceSource.FL2))
+        mode.register_callback("source_fl3", lambda: self._on_select_source(ReferenceSource.FL3))
+        mode.register_callback("source_fl4", lambda: self._on_select_source(ReferenceSource.FL4))
+        mode.register_callback("source_fl5", lambda: self._on_select_source(ReferenceSource.FL5))
+        mode.register_callback("source_a", lambda: self._on_select_source(ReferenceSource.A))
+        mode.register_callback("source_hg", lambda: self._on_select_source(ReferenceSource.HG))
+        mode.register_callback("source_d65", lambda: self._on_select_source(ReferenceSource.D65))
+        mode.register_callback("source_led", lambda: self._on_select_source(ReferenceSource.LED))
+        mode.register_callback("source_led2", lambda: self._on_select_source(ReferenceSource.LED2))
+        mode.register_callback("source_led3", lambda: self._on_select_source(ReferenceSource.LED3))
+        mode.register_callback("toggle_overlay", self._on_toggle_overlay)
+        mode.register_callback("toggle_sensitivity", self._on_toggle_sensitivity)
+        mode.register_callback("correct_sensitivity", self._on_correct_sensitivity)
+        mode.register_callback("auto_level", self._on_auto_level)
+        mode.register_callback("auto_calibrate", self._on_auto_calibrate)
+        mode.register_callback("reset_calibration", self._on_reset_calibration)
+        mode.register_callback("save_cal", self._on_save_calibration)
+        mode.register_callback("save_spectrum", self._on_button_save)
+        mode.register_callback("load_cal", self._on_load_calibration)
+        mode.register_callback("freeze", self._on_toggle_freeze)
+        mode.register_callback("toggle_averaging", self._on_toggle_averaging)
+        mode.register_callback("clear_points", self._on_clear_cal_points)
+
         if self._calibration_mode is not None:
-            display.set_button_active("toggle_overlay", self._calibration_mode.cal_state.overlay_visible)
-            display.set_button_active("toggle_sensitivity", self._calibration_mode.cal_state.sensitivity_correction_enabled)
+            self._display.set_button_active("toggle_overlay", self._calibration_mode.cal_state.overlay_visible)
+            self._display.set_button_active("toggle_sensitivity", self._calibration_mode.cal_state.sensitivity_correction_enabled)
             # Freeze button: active = record (live), inactive = stopped (frozen). Default: live = record
-            display.set_button_active("freeze", not self._frozen_spectrum)
+            self._display.set_button_active("freeze", not self._frozen_spectrum)
 
     def _on_correct_sensitivity(self) -> None:
         """Handle CORR button - placeholder for future sensitivity curve correction."""
@@ -310,23 +271,6 @@ class Spectrometer:
             )
         else:
             print("[CAPTURE] Spectrum captured")
-    
-    def _on_load_reference(self) -> None:
-        """Handle load reference button."""
-        print("[LOAD] Load reference spectrum (not implemented yet)")
-    
-    def _on_use_as_reference(self) -> None:
-        """Handle use current spectrum as reference."""
-        if self._last_data is not None:
-            self._display.state.reference_spectrum = self._last_data.intensity.copy()
-            self._display.state.reference_name = "Current"
-            print("[REF] Set current spectrum as reference")
-        else:
-            print("[REF] No spectrum data available")
-    
-    def _on_capture_dark(self) -> None:
-        """Handle capture dark spectrum."""
-        print("[DARK] Capture dark spectrum (not implemented yet)")
     
     def _on_toggle_auto_gain(self) -> None:
         """Handle toggle auto gain."""
@@ -399,10 +343,6 @@ class Spectrometer:
         """Handle toggle light control."""
         print("[LIGHT] Toggle light (GPIO not implemented yet)")
     
-    def _on_fit_xyz(self) -> None:
-        """Handle XYZ curve fitting."""
-        print("[XYZ] Fit XYZ curves (not implemented yet)")
-    
     # Measurement mode specific handlers
     
     def _on_toggle_averaging_meas(self) -> None:
@@ -457,16 +397,6 @@ class Spectrometer:
         
         enabled = self._measurement_mode.toggle_normalize()
         self._display.set_button_active("normalize", enabled)
-    
-    def _on_toggle_auto_gain_meas(self) -> None:
-        """Handle toggle auto gain in measurement mode."""
-        if self._measurement_mode is None:
-            return
-        
-        self._measurement_mode.state.auto_gain_enabled = not self._measurement_mode.state.auto_gain_enabled
-        enabled = self._measurement_mode.state.auto_gain_enabled
-        self._display.set_button_active("auto_gain", enabled)
-        print(f"[AUTO_GAIN] {'ON' if enabled else 'OFF'}")
     
     # Calibration mode specific handlers
     
@@ -530,16 +460,6 @@ class Spectrometer:
         enabled = self._calibration_mode.toggle_averaging()
         self._display.set_button_active("toggle_averaging", enabled)
         print(f"[AVG] Averaging {'ON' if enabled else 'OFF'}")
-    
-    def _on_toggle_auto_gain_cal(self) -> None:
-        """Handle toggle auto gain in calibration mode."""
-        if self._calibration_mode is None:
-            return
-        
-        self._calibration_mode.state.auto_gain_enabled = not self._calibration_mode.state.auto_gain_enabled
-        enabled = self._calibration_mode.state.auto_gain_enabled
-        self._display.set_button_active("auto_gain", enabled)
-        print(f"[AUTO_GAIN] {'ON' if enabled else 'OFF'}")
     
     def _on_auto_calibrate(self) -> None:
         """Handle auto-calibrate action (correlation-based optimization)."""
@@ -810,8 +730,6 @@ class Spectrometer:
             "colorscience": "Color Science",
         }
         print(f"Starting PySpectrometer 3 - {mode_names.get(self.mode, self.mode)} Mode...")
-        print(self._keyboard.get_help_text())
-        print()
         
         self._calibration.load()
         
@@ -954,10 +872,6 @@ class Spectrometer:
                     spectrum_y_center=self._extractor.spectrum_y_center,
                 )
                 
-                action = self._keyboard.poll()
-                if action == Action.SAVE and self._last_data is not None:
-                    self._save_snapshot(processed)
-
                 # Exit when user closes window (X button)
                 try:
                     if cv2.getWindowProperty(self.config.spectrograph_title, cv2.WND_PROP_VISIBLE) < 1:
