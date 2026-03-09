@@ -1,398 +1,195 @@
-# PySpectrometer3 Refactoring Guide
+# PySpectrometer3 Refactoring Guide — Task List
 
-This document explains how to refactor the PySpectrometer3 codebase for best practices: **SOLID principles**, **Single Responsibility**, **DRY**, and maintainability. It is a guide for incremental improvement, not a mandate to refactor everything at once.
+This document is a **task list** for refactoring the codebase to improve **expandability**, **maintainability**, and **reliability** by centralizing important controllers/logic and enforcing **Single Responsibility Principle (SRP)**. Use it as a step-by-step guide; complete tasks in order where dependencies are noted.
 
----
-
-## Table of Contents
-
-1. [Current Architecture Overview](#current-architecture-overview)
-2. [Single Responsibility Principle (SRP)](#single-responsibility-principle-srp)
-3. [Open/Closed Principle (OCP)](#openclosed-principle-ocp)
-4. [Liskov Substitution Principle (LSP)](#liskov-substitution-principle-lsp)
-5. [Interface Segregation Principle (ISP)](#interface-segregation-principle-isp)
-6. [Dependency Inversion Principle (DIP)](#dependency-inversion-principle-dip)
-7. [DRY (Don't Repeat Yourself)](#dry-dont-repeat-yourself)
-8. [Refactoring Priorities](#refactoring-priorities)
+**References:** [ARCHITECTURE.md](ARCHITECTURE.md) is the **single source of truth** for modes, button mappings, spectrum extraction, CLI, module map, and implementation status. MODES_SPEC.md and SPEC_SPECTRUM_EXTRACTION.md may be archived once ARCHITECTURE is adopted.
 
 ---
 
-## Current Architecture Overview
+## Goals
 
-```
-pyspectrometer/
-├── spectrometer.py      # Main orchestrator (~800 lines) – GOD CLASS
-├── config.py            # Configuration (well-structured)
-├── core/                # Spectrum, Calibration, ReferenceSpectrumManager
-├── capture/             # Camera abstraction (base + picamera)
-├── processing/          # Pipeline, filters, peak detection, extraction
-├── display/             # Renderer (~930 lines), graticule, waterfall
-├── gui/                 # Control bar, buttons, sliders
-├── modes/               # Calibration, Measurement (BaseMode)
-├── data/                # Reference spectra
-├── export/              # CSV exporter
-└── input/               # Keyboard handler
-```
+| Goal | How the task list addresses it |
+|------|--------------------------------|
+| **Expandability** | Single source of truth for buttons/modes; interfaces and extension points instead of editing god classes. |
+| **Maintainability** | Smaller, focused modules; one reason to change per class; clear boundaries. |
+| **Fewer mistakes** | Centralized logic (reference correction, overlay rendering, event wiring) so fixes and behavior live in one place. |
+| **SRP** | Extract responsibilities from `Spectrometer` and `DisplayManager` into dedicated components. |
 
 ---
 
-## Single Responsibility Principle (SRP)
+## Current Hotspots (from ARCHITECTURE.md + code)
 
-> Each class/module should have one reason to change.
-
-### 1. `Spectrometer` (spectrometer.py) – God Class
-
-**Problem:** `Spectrometer` handles:
-
-- Camera lifecycle
-- Calibration loading/saving
-- Extraction, pipeline, peak detection
-- Display setup and rendering coordination
-- Keyboard and button callback registration
-- Mode-specific logic (calibration vs measurement)
-- Auto-gain/exposure
-- Freeze, peak hold, averaging
-- Save/export
-- Status updates
-
-**Refactoring direction:**
-
-| Responsibility | Extract To | Notes |
-|----------------|------------|-------|
-| Main loop orchestration | `Spectrometer` (slim) | Keep only: run loop, wire components |
-| Event/callback registration | `EventHandlerRegistry` or `CallbackBinder` | Centralize `_register_*_callbacks` |
-| Auto-gain/exposure logic | `AutoGainController` | Move `_handle_auto_gain_exposure` |
-| Mode coordination | `ModeCoordinator` | Switch modes, delegate to mode handlers |
-| Freeze/peak hold | Keep in modes or `SpectrumStateManager` | Already partly in modes |
-
-**Example – extract AutoGainController:**
-
-```python
-# processing/auto_gain.py
-class AutoGainController:
-    """Adjusts gain/exposure to keep spectrum peak in target range."""
-    
-    def __init__(self, target_high: float = 0.95, target_low: float = 0.50):
-        self.target_high = target_high
-        self.target_low = target_low
-    
-    def adjust(
-        self,
-        data: SpectrumData,
-        camera: CameraInterface,
-        gain_callback: Callable[[float], None],
-        exposure_callback: Callable[[int], None],
-        auto_gain: bool,
-        auto_exposure: bool,
-    ) -> None:
-        """Adjust gain/exposure if peak is outside target range."""
-        # Move logic from _handle_auto_gain_exposure here
-        ...
-```
-
-### 2. `DisplayManager` (display/renderer.py) – Too Many Responsibilities
-
-**Problem:** `DisplayManager` handles:
-
-- Window creation and lifecycle
-- Mouse events (control bar, sliders, click points)
-- Graticule, spectrum, peaks, cursor, overlays
-- Preview modes (window, full, none)
-- Status bar, control bar, sliders
-- Autolevel overlay
-- Waterfall coordination
-
-**Refactoring direction:**
-
-| Responsibility | Extract To | Notes |
-|----------------|------------|-------|
-| Graph rendering | `SpectrumGraphRenderer` | `_render_spectrum`, `_render_peaks`, `_render_cursor`, `_render_click_points` |
-| Overlay rendering | `OverlayRenderer` | `_render_mode_overlay`, `_render_sensitivity_overlay`, `_render_reference_spectrum` – share common polyline logic |
-| Preview composition | `PreviewComposer` | `render()` preview-mode switch, `_draw_rotated_crop_box` |
-| Status display | `StatusDisplay` | `_draw_status_bar`, `_draw_status_overlay`, `_update_control_bar_status` |
-| Mouse routing | Keep in DisplayManager or `InputRouter` | Route to control bar, sliders, graph |
-
-**Example – shared overlay rendering:**
-
-```python
-# display/overlay_renderer.py
-def render_polyline_overlay(
-    graph: np.ndarray,
-    intensity: np.ndarray,
-    color: tuple[int, int, int],
-    resample_to_width: Optional[int] = None,
-) -> None:
-    """Render intensity as polyline on graph. Reusable for mode, sensitivity, reference."""
-    height = graph.shape[0]
-    if resample_to_width and len(intensity) != resample_to_width:
-        x_old = np.linspace(0, resample_to_width - 1, num=len(intensity), dtype=np.float32)
-        x_new = np.arange(resample_to_width, dtype=np.float32)
-        intensity = np.interp(x_new, x_old, np.asarray(intensity, dtype=np.float32))
-    scale = float(height - 1) if height > 1 else 1.0
-    points = [(i, height - int(min(float(v) * scale, height - 1))) for i, v in enumerate(intensity)]
-    if len(points) > 1:
-        pts = np.array(points, dtype=np.int32)
-        cv2.polylines(graph, [pts], isClosed=False, color=color, thickness=2, lineType=cv2.LINE_AA)
-```
-
-### 3. `CalibrationMode` (modes/calibration.py)
-
-**Problem:** Calibration mode handles:
-
-- Reference source selection
-- Overlay visibility
-- Sensitivity correction (load CSV, apply, overlay)
-- Auto-calibrate (correlation optimization)
-- Peak-matching calibration
-- Calibration point management
-
-**Refactoring direction:**
-
-| Responsibility | Extract To | Notes |
-|----------------|------------|-------|
-| Correlation-based calibration | `CorrelationCalibrator` | `_auto_calibrate_correlation` |
-| Peak-matching calibration | `PeakMatchCalibrator` | `calibrate_from_peaks`, `_match_peaks_to_reference` |
-| CMOS sensitivity | `SensitivityCorrector` | Load CSV, `apply_sensitivity_correction`, `get_sensitivity_curve` |
-| Overlay generation | Keep in mode or `CalibrationOverlayProvider` | `get_overlay`, `get_sensitivity_curve` |
+- **`spectrometer.py`** — Orchestrator; also owns callback registration, auto-gain wiring, mode branching, freeze/peak hold, status updates. *Target: slim orchestrator + central controllers (Controller in a Controller/Viewer/Data split).*
+- **`display/renderer.py`** — Window lifecycle, graph, overlays, status, control bar, sliders, mouse routing. *Target: delegate rendering and status to focused components (Viewer).*
+- **`gui/control_bar.py`** — Button layout from **hardcoded** `CALIBRATION_BUTTONS` / `MEASUREMENT_BUTTONS`; modes define `get_buttons()` but control bar does **not** use it. *Target: one source of truth (mode `get_buttons()`), aligned with ARCHITECTURE §3 button tables.*
+- **Modes** — Five modes per ARCHITECTURE: Calibration, Measurement, **Waterfall**, Raman, Color Science. `process_spectrum` output range inconsistent (0–1 vs 0–255); dark/white logic centralized in `processing/reference_correction.py` — keep single path. *Target: standardize mode output contract; no duplicate reference logic; new modes (Waterfall, Raman, Color Science) additive via BaseMode.*
 
 ---
 
-## Open/Closed Principle (OCP)
+## Phase 1: Single Source of Truth & DRY
 
-> Open for extension, closed for modification.
+*Reduces mistakes by centralizing definitions and shared logic.*
 
-### 1. Button Layouts
+### 1.1 Button layout — mode as single source
 
-**Problem:** `control_bar.py` uses hardcoded `CALIBRATION_BUTTONS` and `MEASUREMENT_BUTTONS`. Adding a new mode requires editing this file.
+- [ ] **1.1.1** In `gui/control_bar.py`, change `_setup_buttons_for_mode(mode, ...)` to accept an optional `mode_instance: Optional[BaseMode] = None`. When `mode_instance` is provided, call `mode_instance.get_buttons()` and map each `ButtonDefinition` to `ButtonDef` (label, action_name, is_toggle, shortcut, row; add `icon_type` from mode if needed). When `mode_instance` is None, keep current fallback to `CALIBRATION_BUTTONS` / `MEASUREMENT_BUTTONS` for backward compatibility.
+- [ ] **1.1.2** Where `ControlBar` is constructed (e.g. `DisplayManager`), pass the current mode instance so the control bar can call `get_buttons()`. Update `DisplayManager.__init__` and any `set_mode`/mode-switch path to pass the mode instance into the control bar.
+- [ ] **1.1.3** Align each mode’s `get_buttons()` with (a) the actions implemented in Spectrometer (e.g. `_register_calibration_callbacks` / `_register_measurement_callbacks`) and (b) the button → action mapping in **ARCHITECTURE.md §3** (e.g. Calibration: FL12, HG, LED, D65, SaveCal, LoadCal, AutoCal, Overlay, Freeze, etc.; Measurement: Capture, Dark, White, ClrRef, Save, Load, ShowRef, Norm, LED, I2C…). Remove or reconcile duplicate definitions so control bar and modes stay in sync with ARCHITECTURE.
+- [ ] **1.1.4** After verification, deprecate or remove hardcoded `CALIBRATION_BUTTONS` and `MEASUREMENT_BUTTONS` in favor of mode-driven layout (or keep as fallback only when no mode instance is available).
 
-**Refactoring:** Modes already define `get_buttons()` returning `ButtonDefinition`. Use that as the single source of truth:
+### 1.2 Reference correction — already centralized
 
-```python
-# control_bar.py – use mode's get_buttons()
-def _setup_buttons_for_mode(self, mode: str, mode_instance: Optional[BaseMode] = None) -> None:
-    if mode_instance is not None:
-        buttons = [self._button_def_to_control_def(b) for b in mode_instance.get_buttons()]
-    else:
-        buttons = DEFAULT_BUTTONS  # fallback
-```
+- [x] **1.2.1** Dark/white correction lives in `processing/reference_correction.py` (`apply_dark_white_correction`). `BaseMode.apply_references` and `MeasurementMode` use it. **No duplicate logic.** Ensure any new mode that needs dark/white uses `apply_references` or `apply_dark_white_correction` only — no new in-mode implementations.
+- [ ] **1.2.2** If any remaining code path still does manual dark subtract / white divide outside this module, refactor it to call `apply_dark_white_correction` (or `BaseMode.apply_references`).
 
-**Action:** Align `control_bar.py` button definitions with `modes/*.py` `get_buttons()` so there is one source of truth (prefer mode definitions).
+### 1.3 Overlay rendering — already centralized
 
-### 2. Processing Pipeline
+- [x] **1.3.1** `display/overlay_utils.py` provides `render_polyline_overlay`. Use it everywhere a polyline overlay is drawn (mode overlay, sensitivity overlay, reference spectrum). Audit `renderer.py` and ensure no duplicate “intensity → points → polylines” logic remains.
+- [ ] **1.3.2** If any overlay path still implements its own polyline drawing, replace it with a call to `render_polyline_overlay`.
 
-**Current:** Pipeline is already extensible – add processors without changing `ProcessingPipeline`. Good OCP.
+### 1.4 Intensity scaling to graph
 
-### 3. Modes
-
-**Current:** New modes extend `BaseMode` and implement abstract methods. Good OCP. Ensure Raman and Color Science modes follow the same pattern.
+- [ ] **1.4.1** Add a small helper (e.g. in `display/overlay_utils.py` or `display/scale_utils.py`) such as `scale_intensity_to_graph(intensity, graph_height, margin=10)` and use it wherever intensity is scaled to graph Y. Replace ad-hoc expressions like `intensity * (graph_height - 10)` with this helper.
 
 ---
 
-## Liskov Substitution Principle (LSP)
+## Phase 2: Encapsulation & Narrow Interfaces
 
-> Subtypes must be substitutable for their base types.
+*Reduces mistakes by hiding internals and depending on stable APIs.*
 
-### 1. `BaseMode.process_spectrum` vs Implementations
+### 2.1 Display — hide control bar and slider panel internals
 
-**Problem:** `CalibrationMode.process_spectrum` returns intensity; `MeasurementMode.process_spectrum` returns intensity scaled 0–255. Inconsistent output range.
+- [x] **2.1.1** `DisplayManager` already exposes `set_status(key, value)`. Spectrometer should use only `display.set_status()`, not `display._control_bar`.
+- [ ] **2.1.2** Spectrometer currently sets `self._display.slider_panel.gain_slider.on_change = ...` and `exposure_slider.on_change = ...`. Add `DisplayManager.register_gain_callback(cb)` and `register_exposure_callback(cb)` (or a single `register_slider_callbacks(gain_cb, exposure_cb)`) and implement them by wiring to the internal slider panel. Spectrometer then calls only these methods; no direct `slider_panel` access from Spectrometer.
+- [ ] **2.1.3** Remove or restrict public `slider_panel` property on `DisplayManager` so external code does not depend on slider internals. Keep `set_gain_value` / `set_exposure_value` and any other display API needed by Spectrometer.
 
-**Refactoring:** Define a clear contract:
+### 2.2 Display interface (optional but recommended)
 
-- Either all modes return normalized 0–1, and display handles scaling.
-- Or document that measurement mode returns 0–255 for legacy compatibility, and add a `normalized_output: bool` contract.
-
-**Recommendation:** Standardize on 0–1 float for all modes; display/renderer does final scaling.
-
-### 2. `BaseMode.apply_references` vs `MeasurementMode.process_spectrum`
-
-**Problem:** `BaseMode` has `apply_references()` (dark/white correction) but `MeasurementMode` reimplements this in `process_spectrum` with slightly different logic (e.g. `* 255`).
-
-**Refactoring:** Use `BaseMode.apply_references()` in measurement mode, or make it the single implementation:
-
-```python
-# In MeasurementMode.process_spectrum
-result = self.accumulate_spectrum(intensity) if self.state.averaging_enabled else result
-result = self.apply_references(result)  # Reuse base implementation
-if self.meas_state.normalize_to_reference and self.meas_state.reference_spectrum is not None:
-    result = self._normalize_to_reference(result)
-return np.clip(result, 0, 1).astype(np.float32)  # Standard 0-1 output
-```
+- [ ] **2.2.1** Define `DisplayInterface` (e.g. in `display/base.py`) with the methods Spectrometer needs: `setup_windows`, `render`, `set_status`, `register_button_callback`, `set_button_active`, `set_gain_value`, `set_exposure_value`, `register_gain_callback` / `register_exposure_callback`, and any other required. Make `DisplayManager` implement this interface. This prepares for dependency injection and testing.
 
 ---
 
-## Interface Segregation Principle (ISP)
+## Phase 3: Centralize Controllers (Spectrometer slim-down)
 
-> Clients should not depend on methods they don't use.
+*Reduces mistakes by having one place for event wiring and mode coordination.*
 
-### 1. DisplayManager Exposure
+### 3.1 Event / callback registration
 
-**Problem:** `Spectrometer` uses `self._display._control_bar.set_status()` – reaching into internals.
+- [ ] **3.1.1** Introduce an `EventHandlerRegistry` or `CallbackBinder` (e.g. in `input/` or a small `core/` module). Responsibility: register keyboard actions, register button callbacks, and optionally slider callbacks from a single configuration (e.g. mode + spectrometer refs). Spectrometer passes this registry the callbacks it provides; the registry wires them to `KeyboardHandler` and `DisplayManager` (and sliders via display API). Spectrometer no longer contains long `_register_key_callbacks` / `_register_button_callbacks` / `_register_calibration_callbacks` / `_register_measurement_callbacks` blocks — instead it builds a list of (action, callback) and the registry applies them.
+- [ ] **3.1.2** Move registration logic from Spectrometer into this component. Spectrometer only: creates the registry, supplies callbacks, and calls something like `registry.bind_for_mode(mode, self)` so that adding a new mode or new action does not require editing Spectrometer’s private methods.
 
-**Refactoring:** Add a narrow interface on `DisplayManager`:
+### 3.2 Mode coordination
 
-```python
-def set_status(self, key: str, value: str) -> None:
-    """Set status for control bar. Preferred over accessing _control_bar."""
-    self._control_bar.set_status(key, value)
-```
+- [ ] **3.2.1** Introduce a `ModeCoordinator` (or use the same module as the registry). Responsibility: hold current mode, switch mode, and delegate “current mode” queries (e.g. which mode object, which status fields to show). Spectrometer asks the coordinator for the current mode and delegates mode-specific behavior (e.g. overlay, status, process_spectrum) to it, instead of branching on `self.mode == "calibration"` / `"measurement"` / `"waterfall"` / etc. Supports all five modes (Calibration, Measurement, Waterfall, Raman, Color Science) per ARCHITECTURE.
+- [ ] **3.2.2** Spectrometer’s main loop and high-level flow use only the coordinator and the current mode interface; no duplicated if/else on mode name in multiple places.
 
-Spectrometer should call `display.set_status()`, not `display._control_bar.set_status()`.
+### 3.3 Auto-gain / auto-exposure
 
-### 2. Camera Interface
-
-**Current:** `CameraInterface` in `capture/base.py` is a good abstraction. Ensure all camera operations go through it.
-
-### 3. Mode Interface
-
-**Current:** `BaseMode` defines `process_spectrum`, `get_overlay`, `get_buttons`. Modes that don't need overlays can return `None`. Interface is already reasonably small.
+- [x] **3.3.1** Auto-gain and auto-exposure are already in `processing/auto_controls.py` (`AutoGainController`, `AutoExposureController`). Spectrometer uses them. Keep this; ensure all auto-adjustment logic stays in these controllers and Spectrometer only invokes them (no in-orchestrator gain math).
 
 ---
 
-## Dependency Inversion Principle (DIP)
+## Phase 4: DisplayManager — Split Responsibilities (SRP)
 
-> Depend on abstractions, not concretions.
+*One reason to change per component.*
 
-### 1. Spectrometer Construction
+### 4.1 Graph and overlay rendering
 
-**Problem:** `Spectrometer` directly constructs `PicameraCapture`, `DisplayManager`, `CSVExporter`, etc. Hard to test and swap implementations.
+- [ ] **4.1.1** Extract `SpectrumGraphRenderer`: responsibilities = draw spectrum line, peaks, cursor, click points on the graph. `DisplayManager.render()` delegates graph drawing to this class (pass graph buffer, spectrum data, display state). Move `_render_spectrum`, `_render_peaks`, `_render_cursor`, `_render_click_points` (or equivalent) into it.
+- [ ] **4.1.2** Ensure overlay drawing (mode overlay, sensitivity, reference) uses `overlay_utils.render_polyline_overlay` and, if useful, an `OverlayRenderer` that only composes overlays (no window or control bar logic).
 
-**Refactoring:** Accept dependencies via constructor (optional for backward compatibility):
+### 4.2 Preview and status
 
-```python
-def __init__(
-    self,
-    config: Optional[Config] = None,
-    camera: Optional[CameraInterface] = None,
-    display_factory: Optional[Callable[[Config, Calibration, str], DisplayInterface]] = None,
-    exporter: Optional[ExportInterface] = None,
-    mode: str = "measurement",
-    ...
-):
-    self._camera = camera or PicameraCapture(...)
-    self._display = (display_factory or DisplayManager)(config, calibration, mode)
-    self._exporter = exporter or CSVExporter(...)
-```
+- [ ] **4.2.1** Extract `PreviewComposer`: responsibility = compose the preview image (window/full/none, rotated crop box, etc.). `DisplayManager` calls it with frame and config and gets back the preview image to show.
+- [ ] **4.2.2** Extract or isolate `StatusDisplay`: responsibility = produce status bar text and any status overlay. `DisplayManager` gets status from control bar and/or this component and draws it in one place.
 
-### 2. Display Interface
+### 4.3 Mouse routing
 
-**Refactoring:** Define `DisplayInterface` with the methods Spectrometer needs:
-
-```python
-# display/base.py
-from abc import ABC, abstractmethod
-
-class DisplayInterface(ABC):
-    @abstractmethod
-    def setup_windows(self) -> None: ...
-    
-    @abstractmethod
-    def render(self, data: SpectrumData, **kwargs) -> None: ...
-    
-    def set_status(self, key: str, value: str) -> None: ...
-    
-    def register_button_callback(self, action_name: str, callback: Callable[[], None]) -> bool: ...
-    
-    def set_button_active(self, action_name: str, active: bool) -> bool: ...
-```
-
-`DisplayManager` implements `DisplayInterface`.
+- [ ] **4.3.1** Keep mouse routing in `DisplayManager` or move to a thin `InputRouter` that routes (x, y) to control bar, slider panel, or graph. Single place for “where did the click go?” so behavior is consistent and easy to extend.
 
 ---
 
-## DRY (Don't Repeat Yourself)
+## Phase 5: Mode Layer — Contracts & Calibration Split
 
-### 1. Overlay Rendering
+*Consistent behavior and SRP for modes.*
 
-**Problem:** `_render_mode_overlay`, `_render_sensitivity_overlay`, and `_render_reference_spectrum` in `renderer.py` repeat the same pattern: intensity → points → polylines/lines.
+### 5.1 Mode output contract (LSP)
 
-**Refactoring:** Use a shared helper (see `render_polyline_overlay` example under DisplayManager).
+- [ ] **5.1.1** Define and document the contract: all modes’ `process_spectrum` return intensity in **normalized 0–1** float. Display/renderer does final scaling to 0–255 or graph height. Audit `CalibrationMode.process_spectrum` and `MeasurementMode.process_spectrum`; if either returns 0–255, change it to 0–1 and move scaling to the display layer.
+- [ ] **5.1.2** Ensure `MeasurementMode` uses `BaseMode.apply_references` (or `apply_dark_white_correction`) for dark/white and does not reimplement it. Remove any duplicate `* 255` or scaling that belongs in the display.
 
-### 2. Dark/White Reference Logic
+### 5.2 CalibrationMode — extract calibrators (SRP)
 
-**Problem:** `BaseMode.apply_references` and `MeasurementMode.process_spectrum` both implement dark subtraction and white normalization.
+- [ ] **5.2.1** Extract `CorrelationCalibrator`: move correlation-based auto-calibrate logic (e.g. `_auto_calibrate_correlation`) from `CalibrationMode` into this class. It takes spectrum/reference data and returns updated calibration or fit result. CalibrationMode calls it instead of containing the algorithm.
+- [ ] **5.2.2** Extract `PeakMatchCalibrator` (or keep in `processing/peak_detection.py`): peak-matching calibration (`calibrate_from_peaks`, `match_peaks_to_reference`) in one place. CalibrationMode delegates to it. Respect ARCHITECTURE rules: **4 calibration points minimum** (cubic fit); matching algorithm as in ARCHITECTURE §3.2.
+- [ ] **5.2.3** Extract `SensitivityCorrector` (or a dedicated helper): load CMOS sensitivity CSV (or derive from reference spectrum per ARCHITECTURE §1.3), apply sensitivity correction, and provide the curve for overlay. CalibrationMode uses it for “sensitivity” feature; no CSV loading or curve logic inside the mode class.
 
-**Refactoring:** Use `BaseMode.apply_references` everywhere, or extract to a `ReferenceCorrector`:
+### 5.3 Accumulate spectrum naming
 
-```python
-# processing/reference_correction.py
-def apply_dark_white_correction(
-    intensity: np.ndarray,
-    dark: Optional[np.ndarray],
-    white: Optional[np.ndarray],
-) -> np.ndarray:
-    result = intensity.astype(np.float64)
-    if dark is not None:
-        result = np.maximum(result - dark, 0)
-    if white is not None:
-        w = np.maximum(white - (dark or 0), 1)
-        result = (result / w)
-    return np.clip(result, 0, 1).astype(np.float32)
-```
-
-### 3. Accumulate Spectrum
-
-**Problem:** `CalibrationMode.process_spectrum` calls `self.accumulate_frame(intensity)` but `BaseMode` only defines `accumulate_spectrum` – `accumulate_frame` does not exist. This is a bug (would raise `AttributeError` if `process_spectrum` were ever called for calibration mode). The main loop calls `accumulate_spectrum` directly for calibration mode, so `CalibrationMode.process_spectrum` is currently unused.
-
-**Refactoring:** In `CalibrationMode.process_spectrum`, change `accumulate_frame` → `accumulate_spectrum`. Use `BaseMode.accumulate_spectrum` consistently.
-
-### 4. Button Definitions Duplication
-
-**Problem:** `modes/calibration.py` `get_buttons()` and `control_bar.py` `CALIBRATION_BUTTONS` define similar buttons but are not identical. Two sources of truth.
-
-**Refactoring:** Use mode's `get_buttons()` as the single source. Map `ButtonDefinition` to `ButtonDef` in the control bar. Remove hardcoded `CALIBRATION_BUTTONS` / `MEASUREMENT_BUTTONS` in favor of mode-driven setup.
-
-### 5. Intensity Scaling to Graph Height
-
-**Problem:** Multiple places scale intensity (0–1) to graph Y: `scaled = intensity * (graph_height - 10)` or similar.
-
-**Refactoring:** Centralize in a helper:
-
-```python
-# display/scale_utils.py
-def scale_intensity_to_graph(intensity: np.ndarray, graph_height: int, margin: int = 10) -> np.ndarray:
-    return intensity * (graph_height - margin)
-```
+- [ ] **5.3.1** In `CalibrationMode.process_spectrum` (if it ever uses accumulation), use `accumulate_spectrum` consistently. The refactoring guide previously noted a possible `accumulate_frame` typo; ensure only `BaseMode.accumulate_spectrum` is used and that both modes behave consistently for averaging.
 
 ---
 
-## Refactoring Priorities
+## Phase 6: Dependency Injection (Testability & Swap)
 
-### High impact, lower risk
+*Depend on abstractions; optional for backward compatibility.*
 
-1. **DRY – overlay rendering:** Extract `render_polyline_overlay` and reuse. Low risk, clear win.
-2. **ISP – DisplayManager encapsulation:** Add `set_status()` and avoid `_control_bar` access from Spectrometer.
-3. **DRY – reference correction:** Unify dark/white logic in `BaseMode.apply_references` or `ReferenceCorrector`.
+### 6.1 Spectrometer constructor
 
-### Medium impact, medium effort
+- [ ] **6.1.1** Extend `Spectrometer.__init__` to accept optional `camera: Optional[CameraInterface] = None`, `display_factory: Optional[Callable[..., DisplayInterface]] = None`, `exporter: Optional[ExportInterface] = None`. If None, construct default (PicameraCapture, DisplayManager, CSVExporter). This allows tests and alternative UIs to inject mocks or stubs.
+- [ ] **6.1.2** Use the injected display type only via the narrow interface (e.g. `DisplayInterface`); no reliance on `DisplayManager`-specific attributes outside that interface.
 
-4. **SRP – AutoGainController:** Extract auto-gain logic from Spectrometer.
-5. **DIP – constructor injection:** Allow injecting camera, display, exporter for tests.
-6. **Button source of truth:** Use mode `get_buttons()` in control bar.
+### 6.2 Export and camera
 
-### Higher effort
-
-7. **SRP – Spectrometer split:** Extract `EventHandlerRegistry`, `ModeCoordinator`.
-8. **SRP – DisplayManager split:** Extract `SpectrumGraphRenderer`, `OverlayRenderer`, `PreviewComposer`.
-9. **SRP – CalibrationMode split:** Extract `CorrelationCalibrator`, `SensitivityCorrector`.
+- [ ] **6.2.1** Ensure `ExportInterface` (if not already) defines the methods Spectrometer needs (e.g. save spectrum, path). `CSVExporter` implements it. Spectrometer depends on `ExportInterface`, not `CSVExporter`.
+- [ ] **6.2.2** Camera: `CameraInterface` is already the abstraction. Spectrometer should type-hint and use only `CameraInterface` in its public flow.
 
 ---
 
-## Summary Checklist
+## Verification Checklist
 
-| Principle | Area | Action |
-|-----------|------|--------|
-| SRP | Spectrometer | Extract AutoGainController, consider EventHandlerRegistry |
-| SRP | DisplayManager | Extract overlay/graph rendering helpers |
-| SRP | CalibrationMode | Extract SensitivityCorrector, CorrelationCalibrator |
-| OCP | Buttons | Use mode get_buttons() as single source |
-| LSP | process_spectrum | Standardize 0–1 output; reuse apply_references |
-| ISP | DisplayManager | Add set_status(), hide _control_bar |
-| DIP | Spectrometer | Optional constructor injection for camera, display, exporter |
-| DRY | Overlays | Shared render_polyline_overlay |
-| DRY | Dark/white | Single apply_references or ReferenceCorrector |
-| DRY | Buttons | One source: mode get_buttons() |
+After each phase (or at the end), verify:
+
+| Check | How |
+|-------|-----|
+| No duplicate dark/white logic | Grep for manual dark subtract / white divide; only `reference_correction.apply_dark_white_correction` or `BaseMode.apply_references`. |
+| Single button source | Control bar layout comes from mode `get_buttons()` when mode instance is available; no divergent hardcoded list. |
+| Spectrometer does not touch display internals | No `_display._control_bar` or `_display.slider_panel` in Spectrometer; use `set_status`, `register_*_callback`, `set_gain_value`, etc. |
+| Mode output 0–1 | All `process_spectrum` return 0–1 float; display does scaling. |
+| New mode is additive | Adding Waterfall/Raman/Color Science mode = new file under `modes/`, implement `BaseMode`, add to mode list; no edits to Spectrometer’s long callback lists if Phase 3 is done. |
+| Tests | Run existing tests; add or adjust tests for extracted components (e.g. `EventHandlerRegistry`, `ReferenceCorrector`, calibrators) as needed. |
 
 ---
 
-*Document Version: 1.0*  
-*Created: 2026-03-08*
+## Summary Task List (Quick Reference)
+
+| # | Task | Phase |
+|---|------|--------|
+| 1 | Button layout from mode `get_buttons()`; control bar accepts mode instance | 1.1 |
+| 2 | No duplicate dark/white logic; all paths use `reference_correction` / `apply_references` | 1.2 |
+| 3 | All overlay polylines via `overlay_utils.render_polyline_overlay` | 1.3 |
+| 4 | Central helper for intensity → graph Y scaling | 1.4 |
+| 5 | Display: no direct `_control_bar`/`slider_panel` from Spectrometer; add register_slider_callbacks | 2.1 |
+| 6 | Optional: `DisplayInterface` and implement on DisplayManager | 2.2 |
+| 7 | `EventHandlerRegistry` / `CallbackBinder` centralizes key and button registration | 3.1 |
+| 8 | `ModeCoordinator` holds current mode and delegates mode-specific behavior | 3.2 |
+| 9 | Extract `SpectrumGraphRenderer` (and optionally `OverlayRenderer`, `PreviewComposer`, `StatusDisplay`) | 4.1–4.3 |
+| 10 | Mode contract: `process_spectrum` 0–1; use `apply_references` in MeasurementMode | 5.1–5.2 |
+| 11 | Extract `CorrelationCalibrator`, `PeakMatchCalibrator`, `SensitivityCorrector` from CalibrationMode (4-pt min per ARCHITECTURE) | 5.2 |
+| 12 | Optional: constructor injection for camera, display factory, exporter | 6.1–6.2 |
+
+---
+
+---
+
+## Alignment with ARCHITECTURE.md
+
+- **Modes:** Refactoring supports all **five** modes (Calibration, Measurement, Waterfall, Raman, Color Science). Button layouts and actions follow ARCHITECTURE §3 button tables (e.g. FL12, SaveCal, LoadCal, LED, I2C…).
+- **Layers:** Controller (Spectrometer + EventHandlerRegistry + ModeCoordinator), Viewer (display + gui), Data/Logic (core, processing, modes) — refactor keeps these boundaries clear.
+- **Calibration:** 4-point minimum, `match_peaks_to_reference`, Auto-Level, Auto-Center Y as in ARCHITECTURE §3.2.
+- **Module map:** ARCHITECTURE §8 is authoritative; new modules (e.g. `modes/waterfall.py`) appear there when planned/implemented.
+
+---
+
+*Document Version: 2.1 — Task list aligned with ARCHITECTURE.md (five modes, button tables, Controller/Viewer/Data).*  
+*Last updated: 2026-03-09*
