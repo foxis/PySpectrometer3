@@ -57,6 +57,7 @@ class ModeContext:
     last_data: Optional[SpectrumData] = None
     last_frame: Optional[np.ndarray] = None
     last_intensity_pre_sensitivity: Optional[np.ndarray] = None
+    last_raw_intensity: Optional[np.ndarray] = None  # Pre-process_spectrum for dark capture
 
     # Mutable state (modes read/write; orchestrator reads for loop logic)
     running: bool = True

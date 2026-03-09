@@ -3,10 +3,11 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Callable, Literal, Optional
 import numpy as np
 
 if TYPE_CHECKING:
+    from ..core.calibration import GraticuleData
     from ..core.mode_context import ModeContext
     from ..core.spectrum import SpectrumData
 
@@ -23,11 +24,10 @@ class ModeType(Enum):
 @dataclass
 class ModeState:
     """Common state shared across modes."""
-    
+
     # Spectrum capture
     frozen: bool = False
-    averaging_enabled: bool = False
-    averaging_count: int = 1
+    integration_mode: Literal["none", "avg", "acc"] = "none"
     accumulated_frames: int = 0
     accumulated_intensity: Optional[np.ndarray] = None
     
@@ -130,6 +130,14 @@ class BaseMode(ABC):
     def on_start(self, ctx: "ModeContext") -> None:
         """Called when the main loop starts. Override for mode-specific startup (e.g. default source)."""
         pass
+
+    def transform_spectrum_data(self, data: "SpectrumData") -> "SpectrumData":
+        """Transform spectrum data for display/export. Override for Raman (wavelength→wavenumber)."""
+        return data
+
+    def get_graticule(self, data: "SpectrumData") -> Optional["GraticuleData"]:
+        """Custom graticule for display. Override for Raman (wavenumber axis). Returns None to use calibration default."""
+        return None
 
     def update_display(
         self,
@@ -239,33 +247,59 @@ class BaseMode(ABC):
         return self.state.frozen
     
     def toggle_averaging(self) -> bool:
-        """Toggle averaging mode."""
-        self.state.averaging_enabled = not self.state.averaging_enabled
-        if not self.state.averaging_enabled:
+        """Toggle averaging mode (mutually exclusive with accumulation)."""
+        if self.state.integration_mode == "avg":
+            self.state.integration_mode = "none"
             self.state.accumulated_frames = 0
             self.state.accumulated_intensity = None
-        return self.state.averaging_enabled
-    
+            return False
+        self.state.integration_mode = "avg"
+        self.state.accumulated_frames = 0
+        self.state.accumulated_intensity = None
+        return True
+
+    def toggle_accumulation(self) -> bool:
+        """Toggle accumulation mode (mutually exclusive with averaging)."""
+        if self.state.integration_mode == "acc":
+            self.state.integration_mode = "none"
+            self.state.accumulated_frames = 0
+            self.state.accumulated_intensity = None
+            return False
+        self.state.integration_mode = "acc"
+        self.state.accumulated_frames = 0
+        self.state.accumulated_intensity = None
+        return True
+
     def accumulate_spectrum(self, intensity: np.ndarray) -> np.ndarray:
-        """Accumulate spectrum intensity for averaging.
-        
+        """Accumulate spectrum intensity. Avg: sum/N. Acc: sum normalized by max for display.
+
         Args:
             intensity: Current spectrum intensity (1D array)
-            
+
         Returns:
-            Averaged spectrum intensity
+            Processed intensity (0-1 for pipeline)
         """
-        if not self.state.averaging_enabled:
+        if self.state.integration_mode == "none":
             return intensity
-        
+
         if self.state.accumulated_intensity is None:
             self.state.accumulated_intensity = intensity.astype(np.float64)
             self.state.accumulated_frames = 1
         else:
-            self.state.accumulated_intensity = self.state.accumulated_intensity.astype(np.float32) + np.asarray(intensity, dtype=np.float32)
+            self.state.accumulated_intensity = (
+                self.state.accumulated_intensity.astype(np.float64)
+                + np.asarray(intensity, dtype=np.float64)
+            )
             self.state.accumulated_frames += 1
-        
-        return (self.state.accumulated_intensity / self.state.accumulated_frames).astype(np.float32)
+
+        acc = self.state.accumulated_intensity
+        if self.state.integration_mode == "avg":
+            return (acc / self.state.accumulated_frames).astype(np.float32)
+        # Acc: normalize by max for 0-1 display
+        m = float(np.max(acc))
+        if m < 1e-9:
+            return acc.astype(np.float32)
+        return (acc / m).astype(np.float32)
     
     def set_black_reference(self, intensity: np.ndarray) -> None:
         """Set black/dark reference spectrum."""

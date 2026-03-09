@@ -116,6 +116,7 @@ class CalibrationMode(BaseMode):
         self.register_callback("load_cal", lambda: self._on_load_calibration(ctx))
         self.register_callback("freeze", lambda: self._on_toggle_freeze(ctx))
         self.register_callback("toggle_averaging", lambda: self._on_toggle_averaging(ctx))
+        self.register_callback("toggle_accumulation", lambda: self._on_toggle_accumulation(ctx))
         self.register_callback("clear_points", lambda: self._on_clear_points(ctx))
         ctx.display.set_button_active("toggle_overlay", self.cal_state.overlay_visible)
         ctx.display.set_button_active("toggle_sensitivity", self.cal_state.sensitivity_correction_enabled)
@@ -142,8 +143,8 @@ class CalibrationMode(BaseMode):
         ctx.display.set_status("Pts", str(len(self.cal_state.calibration_points)))
         if ctx.frozen_spectrum:
             ctx.display.set_status("Status", "FROZEN")
-        elif self.state.averaging_enabled:
-            ctx.display.set_status("Status", f"AVG:{self.state.accumulated_frames}")
+        elif self.state.integration_mode != "none":
+            ctx.display.set_status("Status", f"{self.state.integration_mode.upper()}:{self.state.accumulated_frames}")
         else:
             ctx.display.set_status("Status", "LIVE")
 
@@ -277,10 +278,18 @@ class CalibrationMode(BaseMode):
         print(f"[FREEZE] Spectrum {'FROZEN' if frozen else 'LIVE'}")
 
     def _on_toggle_averaging(self, ctx: ModeContext) -> None:
-        """Toggle averaging."""
+        """Toggle averaging (off Acc if on)."""
         enabled = self.toggle_averaging()
         ctx.display.set_button_active("toggle_averaging", enabled)
+        ctx.display.set_button_active("toggle_accumulation", False)
         print(f"[AVG] Averaging {'ON' if enabled else 'OFF'}")
+
+    def _on_toggle_accumulation(self, ctx: ModeContext) -> None:
+        """Toggle accumulation (off Avg if on)."""
+        enabled = self.toggle_accumulation()
+        ctx.display.set_button_active("toggle_accumulation", enabled)
+        ctx.display.set_button_active("toggle_averaging", False)
+        print(f"[ACC] Accumulation {'ON' if enabled else 'OFF'}")
 
     def _on_clear_points(self, ctx: ModeContext) -> None:
         """Clear calibration points."""
@@ -322,6 +331,7 @@ class CalibrationMode(BaseMode):
             ButtonDefinition("Play", "freeze", is_toggle=True, row=2, icon_type="playback"),
             ButtonDefinition("Peak", "capture_peak", is_toggle=True, row=2),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=2),
+            ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=2),
             ButtonDefinition("G", "show_gain_slider", is_toggle=True, row=2),
             ButtonDefinition("E", "show_exposure_slider", is_toggle=True, row=2),
             ButtonDefinition("AG", "auto_gain", is_toggle=True, row=2),
@@ -345,8 +355,7 @@ class CalibrationMode(BaseMode):
         if self.state.frozen and self.cal_state.frozen_intensity is not None:
             return self.cal_state.frozen_intensity
         
-        # Apply averaging if enabled
-        if self.state.averaging_enabled:
+        if self.state.integration_mode != "none":
             intensity = self.accumulate_spectrum(intensity)
         
         # Store for freeze

@@ -27,6 +27,8 @@ from .export.csv_exporter import CSVExporter
 from .modes.base import BaseMode
 from .modes.calibration import CalibrationMode
 from .modes.measurement import MeasurementMode
+from .modes.raman import RamanMode
+from .modes.colorscience import ColorScienceMode
 
 
 class Spectrometer:
@@ -103,6 +105,8 @@ class Spectrometer:
         self._reference_manager = ReferenceSpectrumManager()
 
         self._mode_instance: BaseMode
+        self._calibration_mode: Optional[CalibrationMode] = None
+        self._measurement_mode: Optional[MeasurementMode] = None
         match mode:
             case "calibration":
                 self._calibration_mode = CalibrationMode()
@@ -110,8 +114,13 @@ class Spectrometer:
             case "measurement":
                 self._measurement_mode = MeasurementMode()
                 self._mode_instance = self._measurement_mode
+            case "raman":
+                self._mode_instance = RamanMode(laser_nm=self.laser_nm)
+            case "colorscience":
+                self._mode_instance = ColorScienceMode()
             case _:
-                self._mode_instance = MeasurementMode()
+                self._measurement_mode = MeasurementMode()
+                self._mode_instance = self._measurement_mode
 
         self._display = DisplayManager(
             self.config, self._calibration, mode=mode, mode_instance=self._mode_instance
@@ -164,8 +173,9 @@ class Spectrometer:
 
         if self._calibration_mode is not None and not self._ctx.frozen_spectrum:
             intensity = self._calibration_mode.accumulate_spectrum(intensity)
-        elif self._measurement_mode is not None:
-            intensity = self._measurement_mode.process_spectrum(
+        else:
+            self._ctx.last_raw_intensity = intensity.copy()
+            intensity = self._mode_instance.process_spectrum(
                 intensity, self._calibration.wavelengths
             )
 
@@ -263,6 +273,7 @@ class Spectrometer:
                 frame = self._capture_frame()
                 intensity, cropped = self._process_intensity(frame)
                 processed = self._run_pipeline(frame, intensity, cropped)
+                processed = self._mode_instance.transform_spectrum_data(processed)
                 self._ctx.last_data = processed
                 self._ctx.handle_auto_gain_exposure(processed)
                 self._mode_instance.update_display(

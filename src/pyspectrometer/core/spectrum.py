@@ -46,6 +46,7 @@ class SpectrumData:
     peaks: list[Peak] = field(default_factory=list)
     raw_frame: Optional[np.ndarray] = field(default=None, repr=False)
     cropped_frame: Optional[np.ndarray] = field(default=None, repr=False)
+    x_axis_label: str = "Wavelength (nm)"
     
     @property
     def width(self) -> int:
@@ -88,6 +89,7 @@ class SpectrumData:
             peaks=self.peaks,
             raw_frame=self.raw_frame,
             cropped_frame=self.cropped_frame,
+            x_axis_label=self.x_axis_label,
         )
     
     def with_peaks(self, peaks: list[Peak]) -> "SpectrumData":
@@ -99,6 +101,7 @@ class SpectrumData:
             peaks=peaks,
             raw_frame=self.raw_frame,
             cropped_frame=self.cropped_frame,
+            x_axis_label=self.x_axis_label,
         )
     
     def to_csv_rows(self) -> list[tuple[float, float]]:

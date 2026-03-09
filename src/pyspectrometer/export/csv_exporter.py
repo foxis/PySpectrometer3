@@ -63,10 +63,12 @@ class CSVExporter(ExporterInterface):
         
         path.parent.mkdir(parents=True, exist_ok=True)
         
+        x_label = getattr(data, "x_axis_label", "Wavelength (nm)")
+        col_name = "Wavenumber" if "cm" in x_label else "Wavelength"
         with open(path, "w") as f:
-            f.write("Pixel,Wavelength,Intensity\r\n")
-            for pixel_idx, (wavelength, intensity) in enumerate(data.to_csv_rows()):
-                f.write(f"{pixel_idx},{wavelength},{intensity}\r\n")
+            f.write(f"Pixel,{col_name},Intensity\r\n")
+            for pixel_idx, (x_val, intensity) in enumerate(data.to_csv_rows()):
+                f.write(f"{pixel_idx},{x_val},{intensity}\r\n")
         
         return path
     

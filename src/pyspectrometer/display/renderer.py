@@ -267,8 +267,13 @@ class DisplayManager:
         
         graph = np.zeros([graph_height, width, 3], dtype=np.uint8)
         graph.fill(255)
-        
-        self._graticule.render_on_graph(graph, self.calibration.graticule)
+
+        graticule = None
+        if self._mode_instance is not None and hasattr(self._mode_instance, "get_graticule"):
+            graticule = self._mode_instance.get_graticule(data)
+        if graticule is None:
+            graticule = self.calibration.graticule
+        self._graticule.render_on_graph(graph, graticule)
         self._graticule.render_horizontal_lines(graph)
         
         self._render_reference_spectrum(graph, data)

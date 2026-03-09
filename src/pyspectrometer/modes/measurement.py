@@ -43,6 +43,7 @@ class MeasurementState:
     
     # Loaded spectrum info
     loaded_spectrum_name: str = ""
+    load_as: str = "overlay"  # overlay, black, white
 
 
 class MeasurementMode(BaseMode):
@@ -62,11 +63,13 @@ class MeasurementMode(BaseMode):
         """Register measurement mode button handlers."""
         self.register_callback("capture", lambda: self._on_capture(ctx))
         self.register_callback("toggle_averaging", lambda: self._on_toggle_averaging(ctx))
+        self.register_callback("toggle_accumulation", lambda: self._on_toggle_accumulation(ctx))
         self.register_callback("set_dark", lambda: self._on_set_dark(ctx))
         self.register_callback("set_white", lambda: self._on_set_white(ctx))
         self.register_callback("clear_refs", lambda: self._on_clear_refs(ctx))
         self.register_callback("save", lambda: self._on_save(ctx))
         self.register_callback("load", lambda: self._on_load(ctx))
+        self.register_callback("cycle_load_as", lambda: self._on_cycle_load_as(ctx))
         self.register_callback("show_reference", lambda: self._on_toggle_show_reference(ctx))
         self.register_callback("normalize", lambda: self._on_toggle_normalize(ctx))
         self.register_callback("lamp_toggle", lambda: self._on_toggle_light(ctx))
@@ -80,23 +83,32 @@ class MeasurementMode(BaseMode):
         self.set_reference_spectrum(ctx.last_data.intensity, "Captured")
 
     def _on_toggle_averaging(self, ctx: ModeContext) -> None:
-        """Toggle averaging."""
+        """Toggle averaging (off Acc if on)."""
         enabled = self.toggle_averaging()
         ctx.display.set_button_active("toggle_averaging", enabled)
+        ctx.display.set_button_active("toggle_accumulation", False)
+
+    def _on_toggle_accumulation(self, ctx: ModeContext) -> None:
+        """Toggle accumulation (off Avg if on)."""
+        enabled = self.toggle_accumulation()
+        ctx.display.set_button_active("toggle_accumulation", enabled)
+        ctx.display.set_button_active("toggle_averaging", False)
 
     def _on_set_dark(self, ctx: ModeContext) -> None:
-        """Set dark reference."""
-        if ctx.last_data is None:
+        """Set dark reference from raw intensity (pre-correction)."""
+        raw = ctx.last_raw_intensity if ctx.last_raw_intensity is not None else (ctx.last_data.intensity if ctx.last_data is not None else None)
+        if raw is None:
             print("[DARK] No spectrum data available")
             return
-        self.set_dark_reference(ctx.last_data.intensity)
+        self.set_dark_reference(raw)
 
     def _on_set_white(self, ctx: ModeContext) -> None:
-        """Set white reference."""
-        if ctx.last_data is None:
+        """Set white reference from raw intensity (pre-correction)."""
+        raw = ctx.last_raw_intensity if ctx.last_raw_intensity is not None else (ctx.last_data.intensity if ctx.last_data is not None else None)
+        if raw is None:
             print("[WHITE] No spectrum data available")
             return
-        self.set_white_reference(ctx.last_data.intensity)
+        self.set_white_reference(raw)
 
     def _on_clear_refs(self, ctx: ModeContext) -> None:
         """Clear all references."""
@@ -111,9 +123,17 @@ class MeasurementMode(BaseMode):
         else:
             print("[SAVE] No spectrum data available")
 
+    def _on_cycle_load_as(self, ctx: ModeContext) -> None:
+        """Cycle load target: overlay -> black -> white -> overlay."""
+        order = ["overlay", "black", "white"]
+        idx = order.index(self.meas_state.load_as)
+        self.meas_state.load_as = order[(idx + 1) % len(order)]
+        ctx.display.set_status("LoadAs", self.meas_state.load_as.capitalize())
+        print(f"[LOAD] Load as: {self.meas_state.load_as}")
+
     def _on_load(self, ctx: ModeContext) -> None:
-        """Handle load spectrum - placeholder."""
-        print("[LOAD] Load spectrum (file dialog not implemented yet)")
+        """Load spectrum into overlay, black, or white per load_as."""
+        print(f"[LOAD] Load spectrum as {self.meas_state.load_as} (file dialog not implemented yet)")
 
     def _on_toggle_show_reference(self, ctx: ModeContext) -> None:
         """Toggle reference overlay."""
@@ -157,6 +177,7 @@ class MeasurementMode(BaseMode):
             ButtonDefinition("Capture", "capture", row=1),
             ButtonDefinition("Peak", "capture_peak", is_toggle=True, shortcut="h", row=1),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=1),
+            ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=1),
             ButtonDefinition("Dark", "set_dark", row=1),
             ButtonDefinition("White", "set_white", row=1),
             ButtonDefinition("ClrRef", "clear_refs", row=1),
@@ -171,6 +192,7 @@ class MeasurementMode(BaseMode):
             ButtonDefinition("Lamp", "lamp_toggle", is_toggle=True, row=2),
             ButtonDefinition("Save", "save", shortcut="s", row=2),
             ButtonDefinition("Load", "load", row=2),
+            ButtonDefinition("LoadAs", "cycle_load_as", row=2),
             ButtonDefinition("Quit", "quit", row=2),
             ButtonDefinition("__spacer__", "__spacer_right__", row=2),
         ]
@@ -186,8 +208,7 @@ class MeasurementMode(BaseMode):
         """
         result = intensity.astype(np.float64)
 
-        # Apply averaging if enabled
-        if self.state.averaging_enabled:
+        if self.state.integration_mode != "none":
             result = self.accumulate_spectrum(result)
 
         # Apply dark/white reference correction (shared logic)
@@ -284,8 +305,9 @@ class MeasurementMode(BaseMode):
             status["White"] = "SET"
         if self.meas_state.reference_spectrum is not None:
             status["Ref"] = self.meas_state.loaded_spectrum_name or "SET"
-        
-        if self.state.averaging_enabled:
-            status["Avg"] = str(self.state.accumulated_frames)
+        status["LoadAs"] = self.meas_state.load_as.capitalize()
+
+        if self.state.integration_mode != "none":
+            status[self.state.integration_mode.capitalize()] = str(self.state.accumulated_frames)
         
         return status

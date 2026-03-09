@@ -57,9 +57,10 @@ class GraticuleRenderer:
                 (0, 0, 0),
                 1,
             )
+            unit = getattr(graticule, "unit", "nm")
             cv2.putText(
                 graph,
-                f"{label}nm",
+                f"{label}{unit}",
                 (pos - self.text_offset, 12),
                 self.font,
                 self.font_scale,
@@ -123,9 +124,10 @@ class GraticuleRenderer:
                     1,
                 )
             
+            unit = getattr(graticule, "unit", "nm")
             cv2.putText(
                 waterfall,
-                f"{label}nm",
+                f"{label}{unit}",
                 (pos - self.text_offset, height - 5),
                 self.font,
                 self.font_scale,
@@ -135,7 +137,7 @@ class GraticuleRenderer:
             )
             cv2.putText(
                 waterfall,
-                f"{label}nm",
+                f"{label}{unit}",
                 (pos - self.text_offset, height - 5),
                 self.font,
                 self.font_scale,

@@ -53,9 +53,10 @@ class CalibrationResult:
 @dataclass
 class GraticuleData:
     """Data for rendering calibrated graticule lines."""
-    
+
     tens: list[int] = field(default_factory=list)
     fifties: list[tuple[int, int]] = field(default_factory=list)
+    unit: str = "nm"
 
 
 class Calibration:
@@ -478,3 +479,38 @@ class Calibration:
                 tens.append(position[0])
         
         return GraticuleData(tens=tens, fifties=fifties)
+
+
+def graticule_from_x_axis(
+    x_values: np.ndarray,
+    step: int = 50,
+    unit_suffix: str = "nm",
+) -> GraticuleData:
+    """Generate graticule from arbitrary x-axis (wavelength or wavenumber).
+
+    Args:
+        x_values: X-axis values (same length as spectrum)
+        step: Step for major ticks (e.g. 50 for nm, 500 for cm⁻¹)
+        unit_suffix: Suffix for labels (e.g. "nm" or " cm⁻¹")
+
+    Returns:
+        GraticuleData for display
+    """
+    low = int(round(float(np.min(x_values)))) - step // 2
+    high = int(round(float(np.max(x_values)))) + step // 2
+    tens: list[int] = []
+    fifties: list[tuple[int, int]] = []
+    for target in range(low, high):
+        if target % (step // 5) != 0 and target % step != 0:
+            continue
+        position = min(
+            enumerate(x_values),
+            key=lambda x: abs(target - x[1]),
+        )
+        if abs(target - position[1]) >= step / 10:
+            continue
+        if target % step == 0:
+            fifties.append((position[0], target))
+        else:
+            tens.append(position[0])
+    return GraticuleData(tens=tens, fifties=fifties, unit=unit_suffix)
