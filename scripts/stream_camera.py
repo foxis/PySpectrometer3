@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
-"""MJPEG HTTP stream from camera (Picamera2 on Pi, OpenCV elsewhere).
+"""MJPEG HTTP stream from Picamera2 on Raspberry Pi.
 
-Uses same config as main app. Supports 1280x720-Y10_1X10/RAW on OV9281.
+Uses pyspectrometer: Config, Capture (picamera), SpectrumExtractor,
+AutoGainController, AutoExposureController, Calibration, scale_to_uint8.
+Only this script implements the MJPEG HTTP server; all capture and processing
+comes from the library.
 
-Run on the Raspberry Pi, then from your desktop use OpenCV:
-    cap = cv2.VideoCapture("http://<Pi-IP>:8000/stream.mjpg")
-
-Or run PySpectrometer3 with:
+Connect from desktop:
     python -m pyspectrometer --camera http://<Pi-IP>:8000/stream.mjpg
 
 Usage:
-    poetry run stream              # Pi: Picamera2 (config resolution), port 8000
-    poetry run stream --ag --ae    # Auto gain and exposure (center of frame)
-    poetry run stream 0            # OpenCV camera 0, port 8000
-    poetry run stream 0 9000       # OpenCV camera 0, port 9000
-    poetry run stream --config /path/to/config.toml
+    poetry run stream              # Port 8000, config resolution
+    poetry run stream --port 9000
+    poetry run stream --ag --ae    # Auto gain and exposure
 """
 
 import argparse
 import io
 import logging
+import socket
 import socketserver
 import sys
 import threading
@@ -27,10 +26,12 @@ from http import server
 from pathlib import Path
 
 import cv2
-import numpy as np
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# --- MJPEG streamer (only custom code) ---
 
 
 class StreamingOutput(io.BufferedIOBase):
@@ -48,7 +49,7 @@ class StreamingOutput(io.BufferedIOBase):
 
 
 class StreamingHandler(server.BaseHTTPRequestHandler):
-    """HTTP handler for MJPEG stream and simple status page."""
+    """HTTP handler for MJPEG stream and status page."""
 
     def do_GET(self) -> None:
         if self.path == "/":
@@ -56,25 +57,23 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
             self.send_header("Location", "/index.html")
             self.end_headers()
             return
-
         if self.path == "/index.html":
             self._serve_index()
             return
-
         if self.path == "/stream.mjpg":
             self._serve_stream()
             return
-
         self.send_error(404)
         self.end_headers()
 
     def _serve_index(self) -> None:
+        port = self.server.stream_port
         content = (
-            "<html><head><title>PySpectrometer3 Camera Stream</title></head>"
+            "<html><head><title>PySpectrometer3 Stream</title></head>"
             "<body><h1>MJPEG Stream</h1>"
-            "<p>OpenCV: <code>cv2.VideoCapture(\"http://&lt;this-ip&gt;:{port}/stream.mjpg\")</code></p>"
+            "<p><code>cv2.VideoCapture(\"http://&lt;this-ip&gt;:{port}/stream.mjpg\")</code></p>"
             "<img src=\"/stream.mjpg\" width=\"800\" /></body></html>"
-        ).format(port=self.server.stream_port).encode("utf-8")
+        ).format(port=port).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.send_header("Content-Length", len(content))
@@ -86,9 +85,7 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
         self.send_header("Age", "0")
         self.send_header("Cache-Control", "no-cache, private")
         self.send_header("Pragma", "no-cache")
-        self.send_header(
-            "Content-Type", "multipart/x-mixed-replace; boundary=FRAME"
-        )
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=FRAME")
         self.end_headers()
         try:
             while True:
@@ -103,21 +100,17 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(frame)
                 self.wfile.write(b"\r\n")
-        except (BrokenPipeError, ConnectionResetError) as e:
-            logger.debug("Client disconnected: %s", e)
+        except (BrokenPipeError, ConnectionResetError):
+            logger.debug("Client disconnected")
         except Exception as e:
-            logger.warning(
-                "Streaming client %s disconnected: %s",
-                self.client_address,
-                str(e),
-            )
+            logger.warning("Stream client %s: %s", self.client_address, e)
 
     def log_message(self, format: str, *args: object) -> None:
         logger.debug("%s - %s", self.address_string(), format % args)
 
 
 class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
-    """Threaded HTTP server with streaming output and port info."""
+    """Threaded HTTP server for MJPEG."""
 
     allow_reuse_address = True
     daemon_threads = True
@@ -125,283 +118,151 @@ class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
     stream_port: int
 
 
-def _parse_camera(source: str) -> int | str:
-    """Parse camera source to int or str for OpenCV."""
-    s = source.strip()
-    if s.isdigit():
-        return int(s)
-    if s.lower().startswith("v4l:"):
-        return s[4:].strip()
-    return s
+# --- Capture loop (all from pyspectrometer) ---
 
 
-def _run_opencv_stream(
+def _capture_loop(
     output: StreamingOutput,
-    source: int | str,
-    width: int,
-    height: int,
+    config_path: Path | None,
+    auto_gain: bool,
+    auto_exposure: bool,
 ) -> None:
-    """Capture from OpenCV and write JPEG frames to output."""
-    cap = cv2.VideoCapture(source)
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open camera {source}")
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    try:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                continue
-            _, jpeg = cv2.imencode(".jpg", frame)
-            output.write(jpeg.tobytes())
-    finally:
-        cap.release()
-
-
-def _extract_center_for_ae_ag(frame: np.ndarray, extractor, max_val: float) -> np.ndarray:
-    """Crop center 10% of frame, run SpectrumExtractor, return intensity 0-1 for AE/AG."""
-    h, w = frame.shape[:2]
-    crop_h = max(5, int(h * 0.10))
-    y0 = (h - crop_h) // 2
-    y1 = y0 + crop_h
-    crop = frame[y0:y1, :]
-    result = extractor.extract(crop, max_val=max_val)
-    return result.intensity
-
-
-def _run_picamera_stream(
-    output: StreamingOutput,
-    width: int,
-    height: int,
-    monochrome: bool = True,
-    bit_depth: int = 10,
-    auto_gain: bool = False,
-    auto_exposure: bool = False,
-) -> None:
-    """Capture from Picamera2 (raw when monochrome 10-bit) and write JPEG frames."""
+    """Capture pure camera frames, optionally run AE/AG, write JPEGs to output."""
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+    import numpy as np
+
     from pyspectrometer.capture.picamera import Capture
+    from pyspectrometer.config import load_config
     from pyspectrometer.core.spectrum import SpectrumData
     from pyspectrometer.processing.auto_controls import AutoExposureController, AutoGainController
     from pyspectrometer.processing.extraction import ExtractionMethod, SpectrumExtractor
     from pyspectrometer.utils.display import scale_to_uint8
 
-    cap = Capture(
-        width=width,
-        height=height,
-        monochrome=monochrome,
-        bit_depth=bit_depth,
+    config, _ = load_config(config_path)
+    camera = Capture(
+        width=config.camera.frame_width,
+        height=config.camera.frame_height,
+        gain=config.camera.gain,
+        fps=config.camera.fps,
+        monochrome=config.camera.monochrome,
+        bit_depth=config.camera.bit_depth,
     )
-    cap.start()
-    max_val = float((1 << cap.bit_depth) - 1)
 
-    ag_controller = AutoGainController(verbose=True) if auto_gain else None
-    ae_controller = AutoExposureController(verbose=True) if auto_exposure else None
+    auto_gain_ctrl = AutoGainController(verbose=True) if auto_gain else None
+    auto_exposure_ctrl = AutoExposureController(verbose=True) if auto_exposure else None
+    extractor: SpectrumExtractor | None = None
+    if auto_gain or auto_exposure:
+        extractor = SpectrumExtractor(
+            frame_width=config.camera.frame_width,
+            frame_height=config.camera.frame_height,
+            method=ExtractionMethod.MEDIAN,
+            rotation_angle=0.0,
+            perpendicular_width=config.extraction.perpendicular_width,
+            spectrum_y_center=config.camera.frame_height // 2,
+        )
 
-    # Extractor for center 10% crop - no calibration, no rotation
-    crop_h = max(5, int(height * 0.10))
-    extractor = SpectrumExtractor(
-        frame_width=width,
-        frame_height=crop_h,
-        method=ExtractionMethod.MEDIAN,
-        rotation_angle=0.0,
-        perpendicular_width=min(crop_h, 100),
-        spectrum_y_center=crop_h // 2,
-    )
+    camera.start()
+    actual_w, actual_h = camera.width, camera.height
+    if extractor is not None and (actual_w != config.camera.frame_width or actual_h != config.camera.frame_height):
+        config.camera.frame_width = actual_w
+        config.camera.frame_height = actual_h
+        extractor.set_dimensions(actual_w, actual_h)
+
+    max_val = float((1 << camera.bit_depth) - 1)
 
     def noop(_: float | int) -> None:
         pass
 
     try:
         while True:
-            frame = cap.capture()
-            if auto_gain or auto_exposure:
-                intensity = _extract_center_for_ae_ag(frame, extractor, max_val)
+            frame = camera.capture()
+
+            if (auto_gain or auto_exposure) and extractor is not None:
+                extraction = extractor.extract(frame, max_val=max_val)
+                intensity = extraction.intensity.astype("float32")
+                n = len(intensity)
                 data = SpectrumData(
                     intensity=intensity,
-                    wavelengths=np.linspace(0.0, 1.0, len(intensity)),
+                    wavelengths=np.linspace(0.0, 1.0, n),
+                    raw_frame=frame,
+                    cropped_frame=extraction.cropped_frame,
                 )
-                if ae_controller:
-                    ae_controller.adjust(
+                if auto_exposure_ctrl:
+                    auto_exposure_ctrl.adjust(
                         data,
-                        lambda: cap.exposure,
-                        lambda v: setattr(cap, "exposure", v),
+                        lambda: camera.exposure,
+                        lambda v: setattr(camera, "exposure", v),
                         noop,
                     )
-                if ag_controller:
-                    ag_controller.adjust(
+                if auto_gain_ctrl:
+                    auto_gain_ctrl.adjust(
                         data,
-                        lambda: cap.gain,
-                        lambda v: setattr(cap, "gain", v),
+                        lambda: camera.gain,
+                        lambda v: setattr(camera, "gain", v),
                         noop,
                     )
-            if frame.ndim == 2:
-                display = scale_to_uint8(frame, max_val)
+
+            display = scale_to_uint8(frame, max_val)
+            if display.ndim == 2:
                 display = cv2.cvtColor(display, cv2.COLOR_GRAY2BGR)
             else:
-                display = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                display = cv2.cvtColor(display, cv2.COLOR_RGB2BGR)
             _, jpeg = cv2.imencode(".jpg", display)
             output.write(jpeg.tobytes())
     finally:
-        cap.stop()
+        camera.stop()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Stream camera as MJPEG over HTTP (Picamera2 on Pi, OpenCV elsewhere)."
+        description="MJPEG stream from Picamera2 (Pi only). Uses pyspectrometer pipeline."
     )
-    parser.add_argument(
-        "--port",
-        type=int,
-        default=8000,
-        help="HTTP port (default: 8000)",
-    )
-    parser.add_argument(
-        "--camera",
-        type=str,
-        default=None,
-        help="Camera source for OpenCV (0, v4l:/dev/video0). Omit for Picamera2 on Pi.",
-    )
-    parser.add_argument(
-        "--config",
-        type=str,
-        default=None,
-        help="Path to config file (TOML). Uses same config as main app.",
-    )
-    parser.add_argument(
-        "--width",
-        type=int,
-        default=None,
-        help="Frame width (default: from config or 1280)",
-    )
-    parser.add_argument(
-        "--height",
-        type=int,
-        default=None,
-        help="Frame height (default: from config or 720)",
-    )
-    parser.add_argument(
-        "--monochrome",
-        action="store_true",
-        default=True,
-        help="Use monochrome mode (default: True)",
-    )
-    parser.add_argument(
-        "--color",
-        action="store_true",
-        help="Use color mode (disables monochrome)",
-    )
-    parser.add_argument(
-        "--bit-depth",
-        type=int,
-        default=10,
-        choices=[8, 10, 16],
-        help="Bit depth for monochrome (default: 10)",
-    )
-    parser.add_argument(
-        "--ag",
-        action="store_true",
-        help="Enable auto gain (uses center of frame)",
-    )
-    parser.add_argument(
-        "--ae",
-        action="store_true",
-        help="Enable auto exposure (uses center of frame)",
-    )
+    parser.add_argument("--port", type=int, default=8000, help="HTTP port (default: 8000)")
+    parser.add_argument("--config", type=str, default=None, help="Config file path (TOML)")
+    parser.add_argument("--ag", action="store_true", help="Enable auto gain")
+    parser.add_argument("--ae", action="store_true", help="Enable auto exposure")
+    parser.add_argument("--camera", type=str, default=None, help="Ignored (Pi only)")
     args = parser.parse_args()
 
-    # Load config (same as main app)
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-    from pyspectrometer.config import load_config
+    if args.camera is not None:
+        logger.warning("--camera ignored. Stream is Pi-only (Picamera2).")
+        logger.info("Connect from desktop: python -m pyspectrometer --camera http://<Pi-IP>:%d/stream.mjpg", args.port)
+
+    try:
+        from picamera2 import Picamera2  # noqa: F401
+    except ImportError as e:
+        logger.error("Picamera2 not found. Run this script on Raspberry Pi.")
+        return 1
 
     config_path = Path(args.config) if args.config else None
-    config, config_loaded = load_config(config_path)
-    if config_loaded:
-        logger.info("Config: %s", config_loaded)
-
-    width = args.width or config.camera.frame_width
-    height = args.height or config.camera.frame_height
-    monochrome = args.monochrome and not args.color
-
     output = StreamingOutput()
 
-    if args.camera is not None:
-        source = _parse_camera(args.camera)
-        thread = threading.Thread(
-            target=_run_opencv_stream,
-            args=(output, source, width, height),
-            daemon=True,
-        )
-        thread.start()
-    else:
-        try:
-            from picamera2 import Picamera2  # noqa: F401
-        except ImportError as e:
-            logger.error(
-                "Picamera2 not found. Use --camera 0 for webcam: poetry run stream 0"
-            )
-            raise SystemExit(1) from e
-
-        logger.info(
-            "Picamera2: %dx%d monochrome=%s bit_depth=%d (supports 1280x720-Y10 raw)",
-            width,
-            height,
-            monochrome,
-            args.bit_depth,
-        )
-        if args.ag or args.ae:
-            logger.info("Auto: AG=%s AE=%s (center 10%% extract)", args.ag, args.ae)
-        thread = threading.Thread(
-            target=_run_picamera_stream,
-            args=(
-                output,
-                width,
-                height,
-                monochrome,
-                args.bit_depth,
-                args.ag,
-                args.ae,
-            ),
-            daemon=True,
-        )
-        thread.start()
-
-    server_instance = StreamingServer(
-        ("", args.port),
-        StreamingHandler,
+    thread = threading.Thread(
+        target=_capture_loop,
+        args=(output, config_path, args.ag, args.ae),
+        daemon=True,
     )
+    thread.start()
+
+    server_instance = StreamingServer(("", args.port), StreamingHandler)
     server_instance.output = output
     server_instance.stream_port = args.port
 
-    try:
-        import socket
+    def _lan_ip() -> str:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+        except OSError:
+            return "127.0.0.1"
+        finally:
+            s.close()
 
-        def _lan_ip() -> str:
-            """Get LAN IP (not loopback) for stream URL."""
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            try:
-                s.connect(("8.8.8.8", 80))
-                return s.getsockname()[0]
-            except OSError:
-                return "127.0.0.1"
-            finally:
-                s.close()
-
-        addr = _lan_ip()
-        logger.info(
-            "MJPEG stream at http://%s:%d/stream.mjpg",
-            addr,
-            args.port,
-        )
-        logger.info(
-            "Connect: --camera http://%s:%d/stream.mjpg",
-            addr,
-            args.port,
-        )
-        server_instance.serve_forever()
-    finally:
-        pass
-
+    addr = _lan_ip()
+    logger.info("MJPEG stream: http://%s:%d/stream.mjpg", addr, args.port)
+    logger.info("Connect: python -m pyspectrometer --camera http://%s:%d/stream.mjpg", addr, args.port)
+    server_instance.serve_forever()
     return 0
 
 

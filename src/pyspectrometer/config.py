@@ -33,7 +33,7 @@ def load_config(path: Path | None = None) -> tuple["Config", Path | None]:
         (Config, loaded_path). loaded_path is None if no file was loaded.
     """
     config = Config()
-    for p in _config_search_paths(path):
+    for p in config_search_paths(path):
         if p.exists():
             with open(p, "rb") as f:
                 data = tomllib.load(f)
