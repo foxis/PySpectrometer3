@@ -37,6 +37,7 @@ class SliderStyle:
 DEFAULT_SLIDER_STYLE = SliderStyle()
 
 
+
 class VerticalSlider:
     """A vertical draggable slider control."""
 
@@ -241,6 +242,7 @@ class VerticalSlider:
             if track_height > 0:
                 delta_py = self._ref_py - py  # Up = positive
                 value_range = self.max_val - self.min_val
+                # 10px drag on 100px track = 10% of range (e.g. 5 for 0-50, 0.1 for 0-1)
                 delta_val = (delta_py / track_height) * value_range
                 new_val = max(
                     self.min_val,
@@ -562,6 +564,7 @@ class HorizontalSlider:
             if track_width > 0:
                 delta_px = px - self._ref_px  # Right = positive
                 value_range = self.max_val - self.min_val
+                # 10px drag on 100px track = 10% of range (e.g. 5 for 0-50, 0.1 for 0-1)
                 delta_val = (delta_px / track_width) * value_range
                 new_val = max(
                     self.min_val,

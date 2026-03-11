@@ -932,9 +932,9 @@ class DisplayManager:
                 cv2.LINE_AA,
             )
 
-        # Peak vertical lines: black
+        # Peak vertical lines: black, thickness 2
         for sx, label_x1, label_x2, box_y1, box_y2, peak, _ in placements:
-            cv2.line(graph, (sx, 0), (sx, height), (0, 0, 0), 1)
+            cv2.line(graph, (sx, 0), (sx, height), (0, 0, 0), 2)
 
     def _render_cursor(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render measurement cursor if active."""
