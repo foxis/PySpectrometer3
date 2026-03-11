@@ -131,6 +131,29 @@ class Spectrometer:
         self._ctx = self._build_context()
         self._mode_instance.setup(self._ctx)
 
+    def _sync_to_camera_dimensions(self) -> None:
+        """Sync config, extractor, calibration, and display to actual camera dimensions.
+
+        The capturer returns frames at the actual sensor size (e.g. from raw stream).
+        This ensures all pipeline components use that size rather than config defaults.
+        """
+        actual_width = self._camera.width
+        actual_height = self._camera.height
+        if actual_width == self.config.camera.frame_width and actual_height == self.config.camera.frame_height:
+            return
+
+        self.config.camera.frame_width = actual_width
+        self.config.camera.frame_height = actual_height
+        self._extractor.set_dimensions(actual_width, actual_height)
+        self._calibration.width = actual_width
+        self._calibration.height = actual_height
+
+        # Update default pixels for new width (used when calibration file missing)
+        self.config.calibration.default_pixels = (0, actual_width // 2, actual_width)
+
+        # Update display components that cache width
+        self._display.set_frame_dimensions(actual_width, actual_height)
+
     def _build_context(self) -> ModeContext:
         """Build mode context with services and callbacks."""
         ctx = ModeContext(
@@ -269,6 +292,7 @@ class Spectrometer:
             prompt_calibrate()
 
         self._camera.start()
+        self._sync_to_camera_dimensions()
         self._display.setup_windows()
         self._ctx.running = True
         self._ctx.last_data = None

@@ -91,6 +91,10 @@ class ControlBar:
 
         self._setup_buttons(buttons)
 
+    def set_width(self, width: int) -> None:
+        """Update control bar width (e.g. after camera reports actual dimensions)."""
+        self.width = width
+
     def _setup_buttons(self, buttons: list) -> None:
         """Set up buttons from list (ButtonDefinition from mode.get_buttons())."""
         cfg = self.config

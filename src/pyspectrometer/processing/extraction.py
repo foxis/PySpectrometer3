@@ -95,6 +95,11 @@ class SpectrumExtractor:
 
         self._last_gaussian_params: np.ndarray | None = None
 
+    def set_dimensions(self, frame_width: int, frame_height: int) -> None:
+        """Update frame dimensions (e.g. after camera reports actual size)."""
+        self.frame_width = frame_width
+        self.frame_height = frame_height
+
     def _transform_params(self) -> SpectrumTransformParams:
         """Build transform params from saved rotation_angle and spectrum_y_center."""
         return params_from_saved(

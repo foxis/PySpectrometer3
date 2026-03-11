@@ -56,7 +56,7 @@ def format_src() -> int:
 
 
 def stream() -> int:
-    """Stream MJPEG from camera. Usage: poetry run stream [camera] [port]"""
+    """Stream MJPEG from camera. Usage: poetry run stream [camera] [port] [--config PATH]"""
     camera = _camera_arg()
     port = "8000"
     rest = [a for a in sys.argv[1:] if a != camera]

@@ -93,7 +93,7 @@ Examples:
         type=int,
         default=None,
         metavar="PIXELS",
-        help="Frame width in pixels (default: 800)",
+        help="Frame width in pixels (default: 1280)",
     )
 
     parser.add_argument(
@@ -101,7 +101,7 @@ Examples:
         type=int,
         default=None,
         metavar="PIXELS",
-        help="Frame height in pixels (default: 600)",
+        help="Frame height in pixels (default: 720)",
     )
 
     parser.add_argument(
@@ -151,6 +151,20 @@ Examples:
     )
 
     parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to config file (TOML). Overrides PYSPECTROMETER_CONFIG.",
+    )
+
+    parser.add_argument(
+        "--show-config",
+        action="store_true",
+        help="Print config file path and exit",
+    )
+
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s 3.0.0",
@@ -170,6 +184,26 @@ def _parse_source(value: str) -> int | str:
 def main() -> int:
     """Main entry point for PySpectrometer 3."""
     args = parse_args()
+
+    from .config import default_config_path, load_config
+
+    from pathlib import Path
+
+    config_path = Path(args.config) if args.config else None
+    if args.show_config:
+        from .config import config_search_paths
+
+        print("Config search order:")
+        for i, p in enumerate(config_search_paths(config_path), 1):
+            exists = " (exists)" if p.exists() else ""
+            print(f"  {i}. {p}{exists}")
+        config, loaded = load_config(config_path)
+        if loaded:
+            print(f"\nLoaded: {loaded}")
+            print(f"  camera: {config.camera.frame_width}x{config.camera.frame_height}")
+        else:
+            print("\nNo config file found, using defaults.")
+        return 0
 
     if args.list_cameras:
         from .capture.opencv import list_cameras
@@ -212,7 +246,12 @@ def main() -> int:
     else:
         print("Color camera mode (RGB888, 8-bit)")
 
+    config, config_loaded = load_config(config_path)
+    if config_loaded:
+        print(f"Config: {config_loaded}")
+    # Apply CLI overrides (takes precedence over file)
     config = Config.from_args(
+        base=config,
         fullscreen=args.fullscreen,
         waterfall=args.waterfall,
         waveshare=args.waveshare,

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """MJPEG HTTP stream from camera (Picamera2 on Pi, OpenCV elsewhere).
 
+Uses same config as main app. Supports 1280x720-Y10_1X10/RAW on OV9281.
+
 Run on the Raspberry Pi, then from your desktop use OpenCV:
     cap = cv2.VideoCapture("http://<Pi-IP>:8000/stream.mjpg")
 
@@ -8,19 +10,24 @@ Or run PySpectrometer3 with:
     python -m pyspectrometer --camera http://<Pi-IP>:8000/stream.mjpg
 
 Usage:
-    poetry run stream              # Pi: Picamera2, port 8000
+    poetry run stream              # Pi: Picamera2 (config resolution), port 8000
+    poetry run stream --ag --ae    # Auto gain and exposure (center of frame)
     poetry run stream 0            # OpenCV camera 0, port 8000
     poetry run stream 0 9000       # OpenCV camera 0, port 9000
+    poetry run stream --config /path/to/config.toml
 """
 
 import argparse
 import io
 import logging
 import socketserver
+import sys
 import threading
 from http import server
+from pathlib import Path
 
 import cv2
+import numpy as np
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -128,7 +135,12 @@ def _parse_camera(source: str) -> int | str:
     return s
 
 
-def _run_opencv_stream(output: StreamingOutput, source: int | str, width: int, height: int) -> None:
+def _run_opencv_stream(
+    output: StreamingOutput,
+    source: int | str,
+    width: int,
+    height: int,
+) -> None:
     """Capture from OpenCV and write JPEG frames to output."""
     cap = cv2.VideoCapture(source)
     if not cap.isOpened():
@@ -144,6 +156,94 @@ def _run_opencv_stream(output: StreamingOutput, source: int | str, width: int, h
             output.write(jpeg.tobytes())
     finally:
         cap.release()
+
+
+def _extract_center_for_ae_ag(frame: np.ndarray, extractor, max_val: float) -> np.ndarray:
+    """Crop center 10% of frame, run SpectrumExtractor, return intensity 0-1 for AE/AG."""
+    h, w = frame.shape[:2]
+    crop_h = max(5, int(h * 0.10))
+    y0 = (h - crop_h) // 2
+    y1 = y0 + crop_h
+    crop = frame[y0:y1, :]
+    result = extractor.extract(crop, max_val=max_val)
+    return result.intensity
+
+
+def _run_picamera_stream(
+    output: StreamingOutput,
+    width: int,
+    height: int,
+    monochrome: bool = True,
+    bit_depth: int = 10,
+    auto_gain: bool = False,
+    auto_exposure: bool = False,
+) -> None:
+    """Capture from Picamera2 (raw when monochrome 10-bit) and write JPEG frames."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+    from pyspectrometer.capture.picamera import Capture
+    from pyspectrometer.core.spectrum import SpectrumData
+    from pyspectrometer.processing.auto_controls import AutoExposureController, AutoGainController
+    from pyspectrometer.processing.extraction import ExtractionMethod, SpectrumExtractor
+    from pyspectrometer.utils.display import scale_to_uint8
+
+    cap = Capture(
+        width=width,
+        height=height,
+        monochrome=monochrome,
+        bit_depth=bit_depth,
+    )
+    cap.start()
+    max_val = float((1 << cap.bit_depth) - 1)
+
+    ag_controller = AutoGainController(verbose=True) if auto_gain else None
+    ae_controller = AutoExposureController(verbose=True) if auto_exposure else None
+
+    # Extractor for center 10% crop - no calibration, no rotation
+    crop_h = max(5, int(height * 0.10))
+    extractor = SpectrumExtractor(
+        frame_width=width,
+        frame_height=crop_h,
+        method=ExtractionMethod.MEDIAN,
+        rotation_angle=0.0,
+        perpendicular_width=min(crop_h, 100),
+        spectrum_y_center=crop_h // 2,
+    )
+
+    def noop(_: float | int) -> None:
+        pass
+
+    try:
+        while True:
+            frame = cap.capture()
+            if auto_gain or auto_exposure:
+                intensity = _extract_center_for_ae_ag(frame, extractor, max_val)
+                data = SpectrumData(
+                    intensity=intensity,
+                    wavelengths=np.linspace(0.0, 1.0, len(intensity)),
+                )
+                if ae_controller:
+                    ae_controller.adjust(
+                        data,
+                        lambda: cap.exposure,
+                        lambda v: setattr(cap, "exposure", v),
+                        noop,
+                    )
+                if ag_controller:
+                    ag_controller.adjust(
+                        data,
+                        lambda: cap.gain,
+                        lambda v: setattr(cap, "gain", v),
+                        noop,
+                    )
+            if frame.ndim == 2:
+                display = scale_to_uint8(frame, max_val)
+                display = cv2.cvtColor(display, cv2.COLOR_GRAY2BGR)
+            else:
+                display = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+            _, jpeg = cv2.imencode(".jpg", display)
+            output.write(jpeg.tobytes())
+    finally:
+        cap.stop()
 
 
 def main() -> int:
@@ -163,48 +263,108 @@ def main() -> int:
         help="Camera source for OpenCV (0, v4l:/dev/video0). Omit for Picamera2 on Pi.",
     )
     parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to config file (TOML). Uses same config as main app.",
+    )
+    parser.add_argument(
         "--width",
         type=int,
-        default=800,
-        help="Frame width (default: 800)",
+        default=None,
+        help="Frame width (default: from config or 1280)",
     )
     parser.add_argument(
         "--height",
         type=int,
-        default=600,
-        help="Frame height (default: 600)",
+        default=None,
+        help="Frame height (default: from config or 720)",
+    )
+    parser.add_argument(
+        "--monochrome",
+        action="store_true",
+        default=True,
+        help="Use monochrome mode (default: True)",
+    )
+    parser.add_argument(
+        "--color",
+        action="store_true",
+        help="Use color mode (disables monochrome)",
+    )
+    parser.add_argument(
+        "--bit-depth",
+        type=int,
+        default=10,
+        choices=[8, 10, 16],
+        help="Bit depth for monochrome (default: 10)",
+    )
+    parser.add_argument(
+        "--ag",
+        action="store_true",
+        help="Enable auto gain (uses center of frame)",
+    )
+    parser.add_argument(
+        "--ae",
+        action="store_true",
+        help="Enable auto exposure (uses center of frame)",
     )
     args = parser.parse_args()
 
+    # Load config (same as main app)
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+    from pyspectrometer.config import load_config
+
+    config_path = Path(args.config) if args.config else None
+    config, config_loaded = load_config(config_path)
+    if config_loaded:
+        logger.info("Config: %s", config_loaded)
+
+    width = args.width or config.camera.frame_width
+    height = args.height or config.camera.frame_height
+    monochrome = args.monochrome and not args.color
+
     output = StreamingOutput()
-    picam2 = None
 
     if args.camera is not None:
         source = _parse_camera(args.camera)
         thread = threading.Thread(
             target=_run_opencv_stream,
-            args=(output, source, args.width, args.height),
+            args=(output, source, width, height),
             daemon=True,
         )
         thread.start()
     else:
         try:
-            from picamera2 import Picamera2
-            from picamera2.encoders import JpegEncoder
-            from picamera2.outputs import FileOutput
+            from picamera2 import Picamera2  # noqa: F401
         except ImportError as e:
             logger.error(
                 "Picamera2 not found. Use --camera 0 for webcam: poetry run stream 0"
             )
             raise SystemExit(1) from e
 
-        picam2 = Picamera2()
-        picam2.configure(
-            picam2.create_video_configuration(
-                main={"size": (args.width, args.height)}
-            )
+        logger.info(
+            "Picamera2: %dx%d monochrome=%s bit_depth=%d (supports 1280x720-Y10 raw)",
+            width,
+            height,
+            monochrome,
+            args.bit_depth,
         )
-        picam2.start_recording(JpegEncoder(), FileOutput(output))
+        if args.ag or args.ae:
+            logger.info("Auto: AG=%s AE=%s (center 10%% extract)", args.ag, args.ae)
+        thread = threading.Thread(
+            target=_run_picamera_stream,
+            args=(
+                output,
+                width,
+                height,
+                monochrome,
+                args.bit_depth,
+                args.ag,
+                args.ae,
+            ),
+            daemon=True,
+        )
+        thread.start()
 
     server_instance = StreamingServer(
         ("", args.port),
@@ -216,8 +376,18 @@ def main() -> int:
     try:
         import socket
 
-        hostname = socket.gethostname()
-        addr = socket.gethostbyname(hostname)
+        def _lan_ip() -> str:
+            """Get LAN IP (not loopback) for stream URL."""
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s.connect(("8.8.8.8", 80))
+                return s.getsockname()[0]
+            except OSError:
+                return "127.0.0.1"
+            finally:
+                s.close()
+
+        addr = _lan_ip()
         logger.info(
             "MJPEG stream at http://%s:%d/stream.mjpg",
             addr,
@@ -230,8 +400,7 @@ def main() -> int:
         )
         server_instance.serve_forever()
     finally:
-        if picam2 is not None:
-            picam2.stop_recording()
+        pass
 
     return 0
 

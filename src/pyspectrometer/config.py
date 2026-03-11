@@ -1,15 +1,80 @@
 """Configuration management for PySpectrometer3."""
 
+import os
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
 
+def config_search_paths(explicit: Path | None = None) -> list[Path]:
+    """Return paths to try for config, in order."""
+    if explicit is not None:
+        return [explicit.expanduser()]
+    paths = []
+    if p := os.environ.get("PYSPECTROMETER_CONFIG"):
+        paths.append(Path(p).expanduser())
+    paths.append(Path.cwd() / "pyspectrometer.toml")
+    paths.append(Path.home() / ".config" / "pyspectrometer" / "config.toml")
+    return paths
+
+
+def default_config_path(explicit: Path | None = None) -> Path:
+    """Return primary config path (for display). First in search order."""
+    return config_search_paths(explicit)[0]
+
+
+def load_config(path: Path | None = None) -> tuple["Config", Path | None]:
+    """Load config from file, merging with defaults.
+
+    Args:
+        path: Explicit config file path. If None, searches default locations.
+
+    Returns:
+        (Config, loaded_path). loaded_path is None if no file was loaded.
+    """
+    config = Config()
+    for p in _config_search_paths(path):
+        if p.exists():
+            with open(p, "rb") as f:
+                data = tomllib.load(f)
+            _apply_config(config, data)
+            return config, p
+    return config, None
+
+
+def _apply_config(config: "Config", data: dict) -> None:
+
+    def apply(obj: object, d: dict) -> None:
+        for k, v in d.items():
+            if isinstance(v, dict) and k != "data_file" and hasattr(obj, k):
+                apply(getattr(obj, k), v)
+            elif hasattr(obj, k):
+                setattr(obj, k, v)
+
+    if "camera" in data:
+        apply(config.camera, data["camera"])
+    if "display" in data:
+        apply(config.display, data["display"])
+    if "calibration" in data:
+        cal = data["calibration"]
+        if "data_file" in cal:
+            config.calibration.data_file = Path(cal["data_file"])
+        if "default_pixels" in cal:
+            config.calibration.default_pixels = tuple(cal["default_pixels"])
+        if "default_wavelengths" in cal:
+            config.calibration.default_wavelengths = tuple(cal["default_wavelengths"])
+
+
 @dataclass
 class CameraConfig:
-    """Camera-related configuration."""
+    """Camera-related configuration.
 
-    frame_width: int = 800
-    frame_height: int = 600
+    Default 1280x720 matches OV9281 and common spectrometer sensors.
+    OV9281 modes: 640x400, 1280x720, 1280x800 (no 800x600).
+    """
+
+    frame_width: int = 1280
+    frame_height: int = 720
     gain: float = 10.0
     gain_min: float = 0.0
     gain_max: float = 50.0
@@ -31,14 +96,14 @@ class DisplayConfig:
     message_height: int = 80
 
     # Window size (canvas will be scaled to fit)
-    window_width: int = 800
-    window_height: int = 480
+    window_width: int = 1280
+    window_height: int = 720
 
     # UI scaling for small displays
     font_scale: float = 0.4
     text_thickness: int = 1
     status_col1_x: int = 490
-    status_col2_x: int = 640
+    status_col2_x: int = 800
 
     @property
     def stack_height(self) -> int:
@@ -71,7 +136,7 @@ class CalibrationConfig:
     """Calibration-related configuration."""
 
     data_file: Path = field(default_factory=lambda: Path("caldata.txt"))
-    default_pixels: tuple[int, ...] = (0, 400, 800)
+    default_pixels: tuple[int, ...] = (0, 640, 1280)
     default_wavelengths: tuple[float, ...] = (380.0, 560.0, 750.0)
 
 
@@ -128,6 +193,7 @@ class Config:
     @classmethod
     def from_args(
         cls,
+        base: "Config | None" = None,
         fullscreen: bool = False,
         waterfall: bool = False,
         waveshare: bool = False,
@@ -137,8 +203,8 @@ class Config:
         monochrome: bool = False,
         bit_depth: int = 10,
     ) -> "Config":
-        """Create configuration from command-line arguments."""
-        config = cls()
+        """Create or merge configuration from command-line arguments."""
+        config = base if base is not None else cls()
 
         config.display.fullscreen = fullscreen
         config.display.waterfall_enabled = waterfall

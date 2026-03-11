@@ -135,6 +135,13 @@ class DisplayManager:
         # Track mouse button state for slider dragging
         self._mouse_down = False
 
+    def set_frame_dimensions(self, width: int, height: int) -> None:
+        """Update dimensions (e.g. after camera reports actual size)."""
+        self._control_bar.set_width(width)
+        if self._waterfall is not None:
+            self._waterfall.set_dimensions(width, self.config.display.graph_height)
+        self._slider_panel.x = width - 170
+
     def setup_windows(self) -> None:
         """Create and configure OpenCV windows.
 
@@ -299,12 +306,16 @@ class DisplayManager:
         # Handle preview mode
         cropped = data.cropped_frame
 
-        # Ensure cropped frame is exactly preview_height for windowed mode
+        # Ensure all arrays match (width, height) for vstack - camera may report different size than config
         if cropped is not None:
-            if cropped.shape[0] != preview_height:
+            if cropped.shape[1] != width or cropped.shape[0] != preview_height:
                 cropped = cv2.resize(cropped, (width, preview_height))
         else:
             cropped = np.zeros([preview_height, width, 3], dtype=np.uint8)
+
+        # Defensive: resize messages if control bar width differs (e.g. before sync took effect)
+        if messages.shape[1] != width:
+            messages = cv2.resize(messages, (width, messages.shape[0]))
 
         # Get status text for overlay
         status_text = self._control_bar.get_status_text()
@@ -386,6 +397,9 @@ class DisplayManager:
             # Use cropped preview for waterfall if available
             if cropped is None:
                 cropped = np.zeros([preview_height, width, 3], dtype=np.uint8)
+            # Defensive: ensure waterfall matches width for vstack
+            if waterfall_img.shape[1] != width:
+                waterfall_img = cv2.resize(waterfall_img, (width, waterfall_img.shape[0]))
             waterfall_vertical = np.vstack((messages, cropped, waterfall_img))
 
             self._graticule.render_on_waterfall(

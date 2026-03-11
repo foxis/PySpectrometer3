@@ -37,6 +37,14 @@ class WaterfallDisplay:
 
         self._buffer = np.zeros([height, width, 3], dtype=np.uint8)
 
+    def set_dimensions(self, width: int, height: int) -> None:
+        """Update dimensions (e.g. after camera reports actual size). Recreates buffer."""
+        if width == self.width and height == self.height:
+            return
+        self.width = width
+        self.height = height
+        self._buffer = np.zeros([height, width, 3], dtype=np.uint8)
+
     def update(self, data: SpectrumData) -> None:
         """Add a new spectrum line to the waterfall.
 

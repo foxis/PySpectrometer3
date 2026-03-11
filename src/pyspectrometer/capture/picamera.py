@@ -152,14 +152,27 @@ class Capture(CameraInterface):
         return self._config_color(frame_duration)
 
     def _find_best_monochrome_mode(self, sensor_modes: list) -> dict | None:
-        """Find best monochrome mode meeting bit depth, preferring minimal depth."""
-        best = None
-        for mode in sensor_modes:
-            mode_bit_depth = mode.get("bit_depth", 8)
-            if mode_bit_depth >= self._bit_depth:
-                if best is None or mode_bit_depth < best.get("bit_depth", 99):
-                    best = mode
-        return best
+        """Find best monochrome mode: sufficient bit depth, best match to requested size.
+
+        Among modes meeting bit_depth, prefers the one closest to (width, height).
+        Ties broken by preferring higher resolution (more pixels). No hardcoded sizes.
+        """
+        candidates = [
+            m for m in sensor_modes
+            if m.get("bit_depth", 8) >= self._bit_depth
+        ]
+        if not candidates:
+            return None
+
+        def score(mode: dict) -> tuple:
+            w, h = mode.get("size", (0, 0))
+            # Prefer match to requested size: smaller distance = better
+            dist = abs(w - self._width) + abs(h - self._height)
+            # Secondary: prefer more pixels (higher resolution)
+            pixels = w * h
+            return (dist, -pixels)
+
+        return min(candidates, key=score)
 
     def _config_raw(self, best_mode: dict, frame_duration: int) -> dict:
         """Create config for raw capture (10+ bit)."""
