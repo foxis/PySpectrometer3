@@ -128,6 +128,7 @@ class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
 def _capture_loop(
     output: StreamingOutput,
     config_path: Path | None,
+    width: int,
     auto_gain: bool,
     auto_exposure: bool,
 ) -> None:
@@ -144,9 +145,10 @@ def _capture_loop(
     from pyspectrometer.utils.display import scale_to_uint8
 
     config, _ = load_config(config_path)
+    height = 400 if width == 640 else 720
     camera = Capture(
-        width=config.camera.frame_width,
-        height=config.camera.frame_height,
+        width=width,
+        height=height,
         gain=config.camera.gain,
         fps=config.camera.fps,
         monochrome=config.camera.monochrome,
@@ -229,6 +231,13 @@ def main() -> int:
     parser.add_argument("--ag", action="store_true", help="Enable auto gain")
     parser.add_argument("--ae", action="store_true", help="Enable auto exposure")
     parser.add_argument("--camera", type=str, default=None, help="Ignored (Pi only)")
+    parser.add_argument(
+        "--width",
+        type=int,
+        default=1280,
+        choices=[640, 1280],
+        help="Frame width (default: 1280)",
+    )
     args = parser.parse_args()
 
     if args.camera is not None:
@@ -249,7 +258,7 @@ def main() -> int:
 
     thread = threading.Thread(
         target=_capture_loop,
-        args=(output, config_path, args.ag, args.ae),
+        args=(output, config_path, args.width, args.ag, args.ae),
         daemon=True,
     )
     thread.start()
