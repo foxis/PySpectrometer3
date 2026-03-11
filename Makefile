@@ -23,7 +23,13 @@ endif
         install-link uninstall run run-fullscreen run-waterfall run-waveshare \
         run-calibration run-measurement run-raman run-colorscience \
         calibrate measure raman colors \
+        setup-pi setup-overlays setup-config \
         stream clean help venv
+
+# Raspberry Pi setup (Waveshare 3.5" DPI LCD + OV9281 camera)
+WAVESHARE_OVERLAY_URL := https://files.waveshare.com/wiki/3.5inch%20DPI%20LCD/3.5DPI-dtbo.zip
+WAVESHARE_OVERLAY_ZIP := .cache/waveshare-35dpi-dtbo.zip
+WAVESHARE_OVERLAY_DIR := .cache/waveshare-35dpi-dtbo
 
 all: help
 
@@ -267,6 +273,57 @@ uninstall:
 	@rm -f pyspec-calibration.sh pyspec-measurement.sh pyspec-raman.sh pyspec-colorscience.sh
 	@echo "Uninstall complete. Dependencies not removed."
 
+## Raspberry Pi setup (Waveshare 3.5" DPI LCD + OV9281 camera)
+## Run on the Pi: make setup-pi && sudo reboot
+
+setup-pi: setup-overlays setup-config
+	@echo ""
+	@echo "Setup complete! Reboot to apply: sudo reboot"
+
+setup-overlays:
+	@echo "Downloading Waveshare 3.5\" DPI LCD overlays..."
+	@mkdir -p .cache
+	@if [ ! -f $(WAVESHARE_OVERLAY_ZIP) ]; then \
+		curl -sL -o $(WAVESHARE_OVERLAY_ZIP) "$(WAVESHARE_OVERLAY_URL)" || \
+		wget -q -O $(WAVESHARE_OVERLAY_ZIP) "$(WAVESHARE_OVERLAY_URL)" || \
+		{ echo "Failed to download. Get manually: $(WAVESHARE_OVERLAY_URL)"; exit 1; }; \
+	fi
+	@echo "Extracting overlays..."
+	@rm -rf $(WAVESHARE_OVERLAY_DIR)
+	@unzip -q -o $(WAVESHARE_OVERLAY_ZIP) -d $(WAVESHARE_OVERLAY_DIR)
+	@echo "Copying overlays to boot..."
+	@if [ -d /boot/firmware/overlays ]; then \
+		OVERLAYS_DIR=/boot/firmware/overlays; \
+	elif [ -d /boot/overlays ]; then \
+		OVERLAYS_DIR=/boot/overlays; \
+	else \
+		echo "Overlays directory not found (expected /boot/firmware/overlays or /boot/overlays)"; exit 1; \
+	fi; \
+	for f in $$(find $(WAVESHARE_OVERLAY_DIR) -name "*.dtbo" 2>/dev/null); do \
+		sudo cp "$$f" "$$OVERLAYS_DIR/" && echo "  Installed $$(basename $$f)"; \
+	done
+	@echo "Overlays installed."
+
+setup-config:
+	@echo "Updating boot config for Waveshare 3.5\" DPI LCD + OV9281..."
+	@if [ -f /boot/firmware/config.txt ]; then \
+		CONFIG=/boot/firmware/config.txt; \
+	elif [ -f /boot/config.txt ]; then \
+		CONFIG=/boot/config.txt; \
+	else \
+		echo "Config not found (expected /boot/firmware/config.txt or /boot/config.txt)"; exit 1; \
+	fi; \
+	if grep -q "# PySpectrometer3 setup" "$$CONFIG" 2>/dev/null; then \
+		echo "  Config already contains PySpectrometer3 setup (skipping)"; \
+	else \
+		{ echo ""; echo "# PySpectrometer3 setup - Waveshare 3.5\" DPI LCD + OV9281"; \
+		  echo "camera_auto_detect=0"; echo "display_auto_detect=0"; \
+		  echo "dtoverlay=vc4-kms-v3d"; echo "dtoverlay=waveshare-35dpi"; \
+		  echo "dtoverlay=waveshare-touch-35dpi"; echo "max_framebuffers=2"; \
+		  echo "dtoverlay=ov9281,arducam"; echo "enable_uart=1"; echo "gpio=22=op,dl"; } | sudo tee -a "$$CONFIG" > /dev/null; \
+		echo "  Config updated."; \
+	fi
+
 ## Run targets
 
 run: create-run-script
@@ -374,6 +431,11 @@ help:
 	@echo "  make install-waveshare-fullscreen - Create Waveshare fullscreen shortcut"
 	@echo "  make install-link              - Create mode-specific desktop shortcuts (RECOMMENDED)"
 	@echo "  make uninstall                 - Remove all desktop shortcuts"
+	@echo ""
+	@echo "Raspberry Pi setup (Waveshare 3.5\" + OV9281):"
+	@echo "  make setup-pi                  - Download overlays, update config (run on Pi, then reboot)"
+	@echo "  make setup-overlays            - Download and install Waveshare DPI LCD overlays"
+	@echo "  make setup-config              - Append display+camera config to boot config.txt"
 	@echo ""
 	@echo "Running (General):"
 	@echo "  make run                       - Run in windowed mode (800x480)"
