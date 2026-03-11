@@ -22,7 +22,9 @@ setup-packages:
 		python3-venv \
 		python3-opencv \
 		python3-numpy \
-		libatlas-base-dev \
+		python3-scipy \
+		python3-colour-science \
+		python3-poetry \
 		libcamera-dev \
 		python3-picamera2 \
 		curl \

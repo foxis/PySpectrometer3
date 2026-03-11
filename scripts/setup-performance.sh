@@ -27,17 +27,17 @@ sudo systemctl daemon-reload
 sudo systemctl enable cpu-performance.service
 sudo systemctl start cpu-performance.service 2>/dev/null || true
 
-# 2. config.txt: overclock + gpu_mem (Pi Zero 2 W friendly)
+# 2. config.txt: overclock + gpu_mem (Pi Zero 2 W, 45°C at 1GHz = plenty headroom)
 if ! grep -q "# PySpectrometer3 performance" "$CONFIG" 2>/dev/null; then
     echo "Adding performance config to config.txt..."
     {
         echo ""
         echo "# PySpectrometer3 performance"
-        echo "arm_freq=1100"
-        echo "over_voltage=2"
+        echo "arm_freq=1200"
+        echo "over_voltage=4"
         echo "gpu_mem=64"
     } | sudo tee -a "$CONFIG" > /dev/null
-    echo "  arm_freq=1100, over_voltage=2, gpu_mem=64"
+    echo "  arm_freq=1200, over_voltage=4, gpu_mem=64"
 fi
 
 # 3. Disable services (keep WiFi only)
