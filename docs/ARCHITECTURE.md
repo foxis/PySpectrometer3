@@ -172,7 +172,6 @@ This matching is reused for: material identification, reference spectrum alignme
 | Avg     | toggle_averaging | Toggle frame averaging |
 | AutoG   | auto_gain        | Toggle automatic gain control |
 | Gain+/- | gain_up/down     | Manual gain adjustment |
-| Clear   | clear_points     | Clear calibration points |
 | Quit    | quit             | Exit application |
 
 **Calibration workflow (steps):**  
@@ -183,7 +182,7 @@ This matching is reused for: material identification, reference spectrum alignme
 5. Click **Freeze** to lock current spectrum.  
 6. Click **AutoCal** to match peaks and compute calibration.  
 7. Verify overlay aligns with measured peaks.  
-8. Click **SaveCal** to save, or clear and retry.
+8. Click **SaveCal** to save, or retry with AutoCal.
 
 ---
 

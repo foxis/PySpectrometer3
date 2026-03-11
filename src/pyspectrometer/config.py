@@ -108,12 +108,14 @@ def _config_to_dict(config: "Config") -> dict:
             "savgol_poly": config.processing.savgol_poly,
             "peak_min_distance": config.processing.peak_min_distance,
             "peak_threshold": config.processing.peak_threshold,
+            "peak_max_count": config.processing.peak_max_count,
             "pixel_rows_to_average": config.processing.pixel_rows_to_average,
         },
         "export": {
             "output_dir": str(config.export.output_dir),
             "timestamp_format": config.export.timestamp_format,
             "time_format": config.export.time_format,
+            "reference_dirs": [str(p) for p in config.export.reference_dirs],
         },
         "waterfall": {
             "contrast": config.waterfall.contrast,
@@ -168,6 +170,8 @@ def _apply_config(config: "Config", data: dict) -> None:
             config.export.timestamp_format = exp["timestamp_format"]
         if "time_format" in exp:
             config.export.time_format = exp["time_format"]
+        if "reference_dirs" in exp:
+            config.export.reference_dirs = [Path(p) for p in exp["reference_dirs"]]
     if "waterfall" in data:
         apply(config.waterfall, data["waterfall"])
     if "extraction" in data:
@@ -233,9 +237,13 @@ class ProcessingConfig:
     peak_min_distance_min: int = 1
     peak_min_distance_max: int = 100
 
-    peak_threshold: int = 20
+    peak_threshold: int = 20  # Min height as % of range (0-100). Peaks below are ignored.
     peak_threshold_min: int = 0
     peak_threshold_max: int = 100
+
+    peak_max_count: int = 10  # Max peaks to display. All above threshold, sorted by size, top N shown.
+    peak_max_count_min: int = 1
+    peak_max_count_max: int = 50
 
     pixel_rows_to_average: int = 3
 
@@ -267,6 +275,9 @@ class ExportConfig:
     output_dir: Path = field(default_factory=lambda: Path("output"))
     timestamp_format: str = "%Y%m%d--%H%M%S"
     time_format: str = "%H:%M:%S"
+    reference_dirs: list[Path] = field(
+        default_factory=lambda: [Path("data/reference"), Path("output")]
+    )
 
 
 @dataclass

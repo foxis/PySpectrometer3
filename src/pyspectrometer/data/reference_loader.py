@@ -1,7 +1,7 @@
-"""Load reference spectra from data/reference folder.
+"""Load reference spectra from configurable directories.
 
-Scans data/reference/*.csv and loads spectra. Falls back to colour-science
-for sources not found in files. Supports adding custom references via UI later.
+Searches reference_dirs (default: data/reference, output) for CSV files.
+Falls back to colour-science for sources not found in files.
 """
 
 from pathlib import Path
@@ -10,14 +10,23 @@ import numpy as np
 
 from .reference_spectra import ReferenceSource
 
+# Configurable search dirs (relative to CWD). Set via set_reference_dirs().
+_reference_dirs: list[Path] = [
+    Path("data") / "reference",
+    Path("output"),
+]
 
-def _reference_dir() -> Path:
-    """Return path to data/reference. Tries CWD first (project root)."""
-    for base in [Path.cwd(), Path(__file__).resolve().parents[2]]:
-        ref = base / "data" / "reference"
-        if ref.is_dir():
-            return ref
-    return Path.cwd() / "data" / "reference"
+
+def set_reference_dirs(dirs: list[Path | str]) -> None:
+    """Set directories to search for reference CSV files."""
+    global _reference_dirs
+    _reference_dirs = [Path(d).expanduser() for d in dirs]
+
+
+def get_reference_dirs() -> list[Path]:
+    """Return current reference search directories (resolved relative to CWD)."""
+    cwd = Path.cwd()
+    return [(cwd / d) if not d.is_absolute() else d for d in _reference_dirs]
 
 
 # File name patterns and column mapping: (filename_pattern, column_index or None for single-col)
@@ -31,12 +40,31 @@ _FILE_SOURCE_MAP: list[tuple[str, ReferenceSource, int | None]] = [
 ]
 
 
-def _load_csv_spectrum(path: Path, col_idx: int | None = None) -> tuple[np.ndarray, np.ndarray] | None:
+def _detect_csv_columns(header_parts: list[str]) -> tuple[int, int] | None:
+    """Detect wavelength and value column indices from header. Returns (wl_col, val_col) or None."""
+    header_lower = [p.strip().lower() for p in header_parts]
+    if "reference_wavelength" in header_lower and "reference_intensity" in header_lower:
+        return (header_lower.index("reference_wavelength"), header_lower.index("reference_intensity"))
+    for wl in ("wavelength_nm", "wavelength"):
+        if wl in header_lower:
+            wl_col = header_lower.index(wl)
+            if wl_col + 1 < len(header_parts):
+                return (wl_col, wl_col + 1)
+    return None
+
+
+def _load_csv_spectrum(
+    path: Path,
+    col_idx: int | None = None,
+    wl_col: int | None = None,
+    val_col: int | None = None,
+) -> tuple[np.ndarray, np.ndarray] | None:
     """Load wavelength and intensity from CSV. Returns (wavelengths, values) or None."""
     if not path.exists():
         return None
     wl_list: list[float] = []
     val_list: list[float] = []
+    header_cols: tuple[int, int] | None = None
 
     with open(path) as f:
         for line in f:
@@ -46,20 +74,28 @@ def _load_csv_spectrum(path: Path, col_idx: int | None = None) -> tuple[np.ndarr
             parts = [p.strip() for p in line.split(",")]
             if len(parts) < 2:
                 continue
+            if header_cols is None and wl_col is None and val_col is None and col_idx is None:
+                detected = _detect_csv_columns(parts)
+                if detected is not None:
+                    header_cols = detected
             try:
-                w = float(parts[0])
-            except ValueError:
-                continue  # Skip header row
-            try:
-                if col_idx is not None:
+                if header_cols is not None:
+                    w, v = float(parts[header_cols[0]]), float(parts[header_cols[1]])
+                elif col_idx is not None:
+                    w = float(parts[0])
                     if col_idx >= len(parts):
                         continue
                     v = float(parts[col_idx])
+                elif wl_col is not None and val_col is not None:
+                    w, v = float(parts[wl_col]), float(parts[val_col])
                 else:
-                    v = float(parts[1])
+                    w, v = float(parts[0]), float(parts[1])
                 wl_list.append(w)
                 val_list.append(v)
             except (ValueError, IndexError):
+                if header_cols is None:
+                    continue
+                # Skip header row (non-numeric in data columns)
                 continue
 
     if len(wl_list) < 2:
@@ -86,17 +122,18 @@ def _load_from_files(source: ReferenceSource) -> tuple[np.ndarray, np.ndarray] |
     if source in _spectrum_cache:
         return _spectrum_cache[source]
 
-    ref_dir = _reference_dir()
-
-    for pattern, src, col_idx in _FILE_SOURCE_MAP:
-        if src != source:
+    for ref_dir in get_reference_dirs():
+        if not ref_dir.is_dir():
             continue
-        for p in ref_dir.glob("*.csv"):
-            if pattern in p.name:
-                data = _load_csv_spectrum(p, col_idx)
-                if data is not None:
-                    _spectrum_cache[source] = data
-                    return data
+        for pattern, src, col_idx in _FILE_SOURCE_MAP:
+            if src != source:
+                continue
+            for p in ref_dir.glob("*.csv"):
+                if pattern in p.name:
+                    data = _load_csv_spectrum(p, col_idx)
+                    if data is not None:
+                        _spectrum_cache[source] = data
+                        return data
 
     _spectrum_cache[source] = None
     return None
@@ -117,14 +154,19 @@ def get_reference_spectrum_from_files(
 
 
 def list_available_reference_files() -> list[tuple[str, str]]:
-    """List CSV files in reference folder. Returns [(filename, display_name), ...]."""
-    ref_dir = _reference_dir()
-    if not ref_dir.is_dir():
-        return []
+    """List CSV files in all reference dirs. Returns [(filename, display_name), ...]."""
+    seen: set[str] = set()
     result: list[tuple[str, str]] = []
-    for p in sorted(ref_dir.glob("*.csv")):
-        name = p.stem.replace("_", " ").replace("-", " ")
-        result.append((p.name, name))
+    for ref_dir in get_reference_dirs():
+        if not ref_dir.is_dir():
+            continue
+        for p in sorted(ref_dir.glob("*.csv")):
+            key = str(p.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            name = p.stem.replace("_", " ").replace("-", " ")
+            result.append((p.name, name))
     return result
 
 

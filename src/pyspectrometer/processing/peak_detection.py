@@ -146,27 +146,36 @@ class PeakDetector(ProcessorInterface):
         self,
         min_distance: int = 50,
         threshold: int = 20,
+        max_count: int = 10,
         min_distance_min: int = 0,
         min_distance_max: int = 100,
         threshold_min: int = 0,
         threshold_max: int = 100,
+        max_count_min: int = 1,
+        max_count_max: int = 50,
     ):
         """Initialize peak detector.
 
         Args:
             min_distance: Minimum distance between peaks in pixels
-            threshold: Detection threshold (0-100)
+            threshold: Detection threshold (0-100), min height as % of range
+            max_count: Max peaks to display (all above threshold, sorted by size, top N)
             min_distance_min: Minimum allowed min_distance value
             min_distance_max: Maximum allowed min_distance value
             threshold_min: Minimum allowed threshold value
             threshold_max: Maximum allowed threshold value
+            max_count_min: Minimum allowed max_count value
+            max_count_max: Maximum allowed max_count value
         """
         self._min_distance = min_distance
         self._threshold = threshold
+        self._max_count = max_count
         self._min_distance_min = min_distance_min
         self._min_distance_max = min_distance_max
         self._threshold_min = threshold_min
         self._threshold_max = threshold_max
+        self._max_count_min = max_count_min
+        self._max_count_max = max_count_max
         self._enabled = True
 
     @property
@@ -197,6 +206,14 @@ class PeakDetector(ProcessorInterface):
     def threshold(self, value: int) -> None:
         self._threshold = max(self._threshold_min, min(self._threshold_max, value))
 
+    @property
+    def max_count(self) -> int:
+        return self._max_count
+
+    @max_count.setter
+    def max_count(self, value: int) -> None:
+        self._max_count = max(self._max_count_min, min(self._max_count_max, value))
+
     def increase_min_distance(self) -> int:
         """Increase minimum distance by 1."""
         self.min_distance = self._min_distance + 1
@@ -220,6 +237,9 @@ class PeakDetector(ProcessorInterface):
     def process(self, data: SpectrumData) -> SpectrumData:
         """Detect peaks in spectrum data.
 
+        Algorithm: detect all peaks above threshold, sort by intensity descending,
+        display only top N largest.
+
         Args:
             data: Input spectrum data
 
@@ -239,8 +259,6 @@ class PeakDetector(ProcessorInterface):
         threshold_normalized = self._threshold / 100.0
 
         if _SCIPY_AVAILABLE:
-            # scipy find_peaks: better for sharp Hg/emission lines (1-5 px wide)
-            # prominence=0.01 to catch weaker lines (404, 577, 579 nm ~0.5 rel intensity)
             indexes = find_peak_indexes_scipy(
                 intensity,
                 threshold=threshold_normalized,
@@ -253,6 +271,12 @@ class PeakDetector(ProcessorInterface):
                 threshold=threshold_normalized,
                 min_dist=self._min_distance,
             )
+
+        # Sort by intensity descending, take top N
+        if len(indexes) > 0:
+            intensities_at_peaks = intensity[indexes]
+            order = np.argsort(intensities_at_peaks)[::-1]
+            indexes = indexes[order[: self._max_count]]
 
         peaks = [
             Peak(

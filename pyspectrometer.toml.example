@@ -53,6 +53,7 @@ savgol_window = 17
 savgol_poly = 7
 peak_min_distance = 15
 peak_threshold = 20
+peak_max_count = 10
 pixel_rows_to_average = 3
 
 [export]

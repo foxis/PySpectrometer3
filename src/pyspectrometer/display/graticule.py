@@ -1,9 +1,14 @@
 """Graticule rendering for spectrum display."""
 
+from typing import TYPE_CHECKING
+
 import cv2
 import numpy as np
 
 from ..core.calibration import GraticuleData
+
+if TYPE_CHECKING:
+    from .viewport import Viewport
 
 
 class GraticuleRenderer:
@@ -30,43 +35,42 @@ class GraticuleRenderer:
         self,
         graph: np.ndarray,
         graticule: GraticuleData,
+        viewport: "Viewport | None" = None,
     ) -> None:
         """Render graticule lines on a spectrum graph.
 
         Args:
             graph: Graph image to draw on (modified in place)
             graticule: Graticule data with line positions
+            viewport: Optional viewport for zoom. When set, only lines in range are drawn.
         """
         height = graph.shape[0]
+        width = graph.shape[1]
+
+        def draw_line(pos: int, color: tuple[int, int, int], label: str | None = None) -> None:
+            if viewport is not None:
+                if pos < viewport.x_start or pos > viewport.x_end:
+                    return
+                pos = viewport.data_x_to_screen(float(pos), width)
+            cv2.line(graph, (pos, 15), (pos, height), color, 1)
+            if label is not None:
+                unit = getattr(graticule, "unit", "nm")
+                cv2.putText(
+                    graph,
+                    f"{label}{unit}",
+                    (pos - self.text_offset, 12),
+                    self.font,
+                    self.font_scale,
+                    (0, 0, 0),
+                    1,
+                    cv2.LINE_AA,
+                )
 
         for position in graticule.tens:
-            cv2.line(
-                graph,
-                (position, 15),
-                (position, height),
-                (200, 200, 200),
-                1,
-            )
+            draw_line(position, (200, 200, 200))
 
         for pos, label in graticule.fifties:
-            cv2.line(
-                graph,
-                (pos, 15),
-                (pos, height),
-                (0, 0, 0),
-                1,
-            )
-            unit = getattr(graticule, "unit", "nm")
-            cv2.putText(
-                graph,
-                f"{label}{unit}",
-                (pos - self.text_offset, 12),
-                self.font,
-                self.font_scale,
-                (0, 0, 0),
-                1,
-                cv2.LINE_AA,
-            )
+            draw_line(pos, (0, 0, 0), str(label))
 
     def render_horizontal_lines(
         self,

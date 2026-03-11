@@ -370,3 +370,175 @@ class SliderPanel:
     def any_dragging(self) -> bool:
         """Check if any slider is being dragged."""
         return any(s.dragging for s in self._sliders)
+
+
+class HorizontalSlider:
+    """A horizontal draggable slider (e.g. for zoom)."""
+
+    def __init__(
+        self,
+        x: int,
+        y: int,
+        width: int,
+        min_val: float,
+        max_val: float,
+        value: float,
+        label: str = "",
+        style: SliderStyle | None = None,
+    ):
+        """Initialize horizontal slider.
+
+        Args:
+            x: X position (left edge)
+            y: Y position (top edge)
+            width: Width of the slider
+            min_val: Minimum value
+            max_val: Maximum value
+            value: Initial value
+            label: Label to display
+            style: Visual style
+        """
+        self.x = x
+        self.y = y
+        self.width = width
+        self.min_val = min_val
+        self.max_val = max_val
+        self._value = value
+        self.label = label
+        self.style = style or DEFAULT_SLIDER_STYLE
+
+        self.visible = False
+        self.dragging = False
+        self.hovered = False
+
+        self.on_change: Callable[[float], None] | None = None
+
+    @property
+    def value(self) -> float:
+        """Get current value."""
+        return self._value
+
+    @value.setter
+    def value(self, val: float) -> None:
+        """Set value (clamped to range)."""
+        self._value = max(self.min_val, min(self.max_val, val))
+
+    @property
+    def height(self) -> int:
+        """Total height including track."""
+        return self.style.track_width + 8
+
+    def _value_to_position(self, val: float) -> int:
+        """Convert value to X position."""
+        ratio = (
+            (val - self.min_val) / (self.max_val - self.min_val)
+            if self.max_val > self.min_val
+            else 0
+        )
+        ratio = max(0, min(1, ratio))
+        track_width = self.width - self.style.thumb_height
+        return int(self.x + track_width * ratio)
+
+    def _position_to_value(self, px: int) -> float:
+        """Convert X position to value."""
+        track_width = self.width - self.style.thumb_height
+        if track_width <= 0:
+            return self.min_val
+        ratio = (px - self.x) / track_width
+        ratio = max(0, min(1, ratio))
+        return self.min_val + ratio * (self.max_val - self.min_val)
+
+    def contains(self, px: int, py: int) -> bool:
+        """Check if point is inside slider area."""
+        return self.x <= px < self.x + self.width and self.y <= py < self.y + self.height
+
+    def render(self, image: np.ndarray) -> None:
+        """Render slider onto image."""
+        if not self.visible:
+            return
+
+        style = self.style
+        track_x = self.x
+        track_y = self.y + (self.height - style.track_width) // 2
+        track_w = self.width
+
+        cv2.rectangle(
+            image,
+            (track_x, track_y),
+            (track_x + track_w, track_y + style.track_width),
+            style.track_color,
+            -1,
+        )
+        cv2.rectangle(
+            image,
+            (track_x, track_y),
+            (track_x + track_w, track_y + style.track_width),
+            style.border_color,
+            style.border_width,
+        )
+
+        thumb_x = self._value_to_position(self._value)
+        thumb_color = (
+            style.thumb_hover_color if self.hovered or self.dragging else style.thumb_color
+        )
+        cv2.rectangle(
+            image,
+            (thumb_x, track_y),
+            (thumb_x + style.thumb_height, track_y + style.track_width),
+            thumb_color,
+            -1,
+        )
+
+        if self.label:
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            cv2.putText(
+                image,
+                self.label,
+                (self.x, self.y - 2),
+                font,
+                style.font_scale,
+                style.label_color,
+                style.font_thickness,
+                cv2.LINE_AA,
+            )
+
+    def handle_mouse_move(self, px: int, py: int) -> bool:
+        """Handle mouse move. Returns True if slider state changed."""
+        if not self.visible:
+            return False
+
+        was_hovered = self.hovered
+        self.hovered = self.contains(px, py)
+
+        if self.dragging:
+            new_val = self._position_to_value(px)
+            if new_val != self._value:
+                self._value = new_val
+                if self.on_change:
+                    self.on_change(self._value)
+                return True
+
+        return self.hovered != was_hovered
+
+    def handle_mouse_down(self, px: int, py: int) -> bool:
+        """Handle mouse down. Returns True if handled."""
+        if not self.visible:
+            return False
+
+        if self.contains(px, py):
+            self.dragging = True
+            new_val = self._position_to_value(px)
+            if new_val != self._value:
+                self._value = new_val
+                if self.on_change:
+                    self.on_change(self._value)
+            return True
+
+        return False
+
+    def handle_mouse_up(self) -> bool:
+        """Handle mouse up. Returns True if was dragging."""
+        if self.dragging:
+            self.dragging = False
+            return True
+        return False

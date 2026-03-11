@@ -98,15 +98,21 @@ class Spectrometer:
         self._peak_detector = PeakDetector(
             min_distance=self.config.processing.peak_min_distance,
             threshold=self.config.processing.peak_threshold,
+            max_count=self.config.processing.peak_max_count,
             min_distance_min=self.config.processing.peak_min_distance_min,
             min_distance_max=self.config.processing.peak_min_distance_max,
             threshold_min=self.config.processing.peak_threshold_min,
             threshold_max=self.config.processing.peak_threshold_max,
+            max_count_min=self.config.processing.peak_max_count_min,
+            max_count_max=self.config.processing.peak_max_count_max,
         )
         self._pipeline = ProcessingPipeline([self._savgol_filter, self._peak_detector])
 
         self._auto_gain = AutoGainController()
         self._auto_exposure = AutoExposureController()
+        from .data.reference_loader import set_reference_dirs
+
+        set_reference_dirs(self.config.export.reference_dirs)
         output_dir = self.config.export.output_dir
         if str(output_dir) == ".":
             output_dir = Path("output")

@@ -105,7 +105,6 @@ class CalibrationMode(BaseMode):
         self.register_callback("freeze", lambda: self._on_toggle_freeze(ctx))
         self.register_callback("toggle_averaging", lambda: self._on_toggle_averaging(ctx))
         self.register_callback("toggle_accumulation", lambda: self._on_toggle_accumulation(ctx))
-        self.register_callback("clear_points", lambda: self._on_clear_points(ctx))
         ctx.display.set_button_active("toggle_overlay", self.cal_state.overlay_visible)
         ctx.display.set_button_active(
             "toggle_sensitivity", self.cal_state.sensitivity_correction_enabled
@@ -135,7 +134,6 @@ class CalibrationMode(BaseMode):
         )
         ctx.display.set_sensitivity_overlay(sensitivity_overlay)
         ctx.display.set_status("Ref", self.get_current_source_name())
-        ctx.display.set_status("Pts", str(len(self.cal_state.calibration_points)))
         if ctx.frozen_spectrum:
             ctx.display.set_status("Status", "FROZEN")
         elif self.state.integration_mode != "none":
@@ -318,12 +316,6 @@ class CalibrationMode(BaseMode):
         ctx.display.set_button_active("toggle_averaging", False)
         print(f"[ACC] Accumulation {'ON' if enabled else 'OFF'}")
 
-    def _on_clear_points(self, ctx: ModeContext) -> None:
-        """Clear calibration points."""
-        self.clear_calibration_points()
-        ctx.display.state.click_points.clear()
-        print("[CAL] Points cleared")
-
     @property
     def mode_type(self) -> ModeType:
         return ModeType.CALIBRATION
@@ -352,7 +344,7 @@ class CalibrationMode(BaseMode):
             ButtonDefinition("LEVEL", "auto_level", is_toggle=True, row=1),
             ButtonDefinition("CALIB", "auto_calibrate", row=1),
             ButtonDefinition("R", "reset_calibration", row=1),
-            # Row 2: Playback (freeze), Peak, Avg, G, E, AG, AE, Prev, Clear, Save, CSV, Load
+            # Row 2: Playback (freeze), Peak, Avg, G, E, AG, AE, Prev, Save, CSV, Load
             ButtonDefinition("Play", "freeze", is_toggle=True, row=2, icon_type="playback"),
             ButtonDefinition("Peak", "capture_peak", is_toggle=True, row=2),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=2),
@@ -362,7 +354,6 @@ class CalibrationMode(BaseMode):
             ButtonDefinition("AG", "auto_gain", is_toggle=True, row=2),
             ButtonDefinition("AE", "auto_exposure", is_toggle=True, row=2),
             ButtonDefinition("Prev", "cycle_preview", shortcut="v", row=2),
-            ButtonDefinition("Clear", "clear_points", shortcut="x", row=2),
             ButtonDefinition("Save", "save_cal", shortcut="w", row=2),
             ButtonDefinition("CSV", "save_spectrum", shortcut="s", row=2),
             ButtonDefinition("Load", "load_cal", row=2),
@@ -473,11 +464,6 @@ class CalibrationMode(BaseMode):
             List of (pixel, wavelength) tuples
         """
         return self.cal_state.calibration_points.copy()
-
-    def clear_calibration_points(self) -> None:
-        """Clear all calibration points."""
-        self.cal_state.calibration_points.clear()
-        print("[Calibration] Points cleared")
 
     def get_current_source_name(self) -> str:
         """Get name of current reference source."""

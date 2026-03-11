@@ -34,7 +34,6 @@ Keyboard Shortcuts:
   h     Toggle peak hold
   s     Save spectrum (PNG + CSV)
   c     Perform calibration
-  x     Clear click points
   m     Toggle measure mode (wavelength)
   p     Toggle pixel mode (for calibration)
   o/l   Increase/decrease Savitzky-Golay order

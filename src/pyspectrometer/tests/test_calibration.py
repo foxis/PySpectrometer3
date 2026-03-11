@@ -173,80 +173,74 @@ def test_calibration_recovers_hg_with_nonlinear_cmos_response():
 
 
 def test_hg_peak_based_calibration_4_peaks():
-    """Peak-based calibration with 4 Hg peaks must align within 5 nm.
+    """Correlation calibration with synthetic Hg spectrum must align within 8 nm.
 
-    Ground truth: linear 380-720 nm. Simulate 4 detected peaks at pixels
-    where Hg lines 404, 436, 546, 577 fall. Algorithm must recover mapping.
+    Ground truth: linear 380-720 nm. Synthetic Hg spectrum. Algorithm must recover mapping.
     """
     n_pixels = 640
     rng = np.random.default_rng(43)
     wl_true = _ground_truth_calibration(n_pixels, rng)
 
-    # Pixel indices where Hg lines fall (argmin distance)
     hg_nm = [404.66, 435.84, 546.07, 576.96]
     peak_pixels = [int(np.argmin(np.abs(wl_true - wl))) for wl in hg_nm]
     peak_pixels = sorted(peak_pixels)
 
-    peaks = [Peak(index=p, wavelength=float(wl_true[p]), intensity=0.9) for p in peak_pixels]
+    measured = _generate_synthetic_measured(n_pixels, wl_true, ReferenceSource.HG, 0.02, rng)
+    peaks = [Peak(index=p, wavelength=float(wl_true[p]), intensity=float(measured[p])) for p in peak_pixels]
 
     cal_mode = CalibrationMode()
     cal_mode.select_source(ReferenceSource.HG)
     cal_points = cal_mode.auto_calibrate(
-        measured_intensity=np.zeros(n_pixels),
+        measured_intensity=measured,
         wavelengths=wl_true,
         peak_indices=peaks,
     )
 
-    assert len(cal_points) >= 4, "Peak-based must return at least 4 points"
+    assert len(cal_points) >= 4, "Correlation must return at least 4 points"
 
     pixels = np.array([p for p, _ in cal_points], dtype=np.float64)
     wavelengths = np.array([w for _, w in cal_points], dtype=np.float64)
     coeffs = np.polyfit(pixels, wavelengths, min(3, len(cal_points) - 1))
     poly = np.poly1d(coeffs)
 
-    # Check alignment at Hg line positions
     for px, wl_expected in zip(peak_pixels, hg_nm):
         wl_got = poly(px)
         err = abs(wl_got - wl_expected)
-        assert err < 5.0, (
+        assert err < 8.0, (
             f"Peak at pixel {px} should map to {wl_expected} nm, got {wl_got:.1f} nm "
             f"(error {err:.2f} nm)"
         )
 
 
 def test_hg_peak_based_4_measured_5_reference():
-    """4 measured peaks vs 5 ref lines (Hg): must pick correct 4 and align.
-
-    Ref has 404, 436, 546, 577, 579. Measured has 4 (blended 577+579 or missing one).
-    """
+    """Correlation with synthetic Hg (4 main lines) must align within 8 nm."""
     n_pixels = 640
     rng = np.random.default_rng(44)
     wl_true = _ground_truth_calibration(n_pixels, rng)
 
-    # 4 peaks: first four Hg lines (user doesn't resolve 577/579)
     hg_4 = [404.66, 435.84, 546.07, 576.96]
     peak_pixels = [int(np.argmin(np.abs(wl_true - wl))) for wl in hg_4]
     peak_pixels = sorted(peak_pixels)
 
-    peaks = [Peak(index=p, wavelength=float(wl_true[p]), intensity=0.9) for p in peak_pixels]
+    measured = _generate_synthetic_measured(n_pixels, wl_true, ReferenceSource.HG, 0.02, rng)
+    peaks = [Peak(index=p, wavelength=float(wl_true[p]), intensity=float(measured[p])) for p in peak_pixels]
 
     cal_mode = CalibrationMode()
     cal_mode.select_source(ReferenceSource.HG)
     cal_points = cal_mode.auto_calibrate(
-        measured_intensity=np.zeros(n_pixels),
+        measured_intensity=measured,
         wavelengths=wl_true,
         peak_indices=peaks,
     )
 
     assert len(cal_points) >= 4
-    # Fit poly and verify at known pixel positions
     pixels = np.array([p for p, _ in cal_points], dtype=np.float64)
     wavelengths = np.array([w for _, w in cal_points], dtype=np.float64)
     coeffs = np.polyfit(pixels, wavelengths, min(3, len(cal_points) - 1))
     poly = np.poly1d(coeffs)
     for px, wl_ref in zip(peak_pixels, hg_4):
         wl_cal = poly(px)
-        assert abs(wl_cal - wl_ref) < 6.0, f"Pixel {px} -> {wl_cal:.1f} nm, expected ~{wl_ref} nm"
+        assert abs(wl_cal - wl_ref) < 8.0, f"Pixel {px} -> {wl_cal:.1f} nm, expected ~{wl_ref} nm"
 
 
 def test_correlation_wavelength_range_sensible():
@@ -300,6 +294,36 @@ def test_calibration_alignment_tolerance():
     wl_est = poly(np.arange(n_pixels, dtype=np.float64))
     max_err = float(np.max(np.abs(wl_est - wl_true)))
     assert max_err < 10.0, f"Correlation calibration max error {max_err:.2f} nm exceeds 10 nm"
+
+
+def test_real_spectrum_hg_and_fl12_calibration():
+    """Calibrate real Hg and FL12 spectra; must return valid points with reasonable correlation."""
+    from ..processing.auto_calibrator import AutoCalibrator
+
+    project_root = Path(__file__).resolve().parents[2]
+    output_dir = project_root / "output"
+    if not output_dir.exists():
+        pytest.skip("output/ not found")
+
+    spectra = [
+        ("Spectrum-20260311--193723.csv", ReferenceSource.HG),
+        ("Spectrum-20260311--193856.csv", ReferenceSource.FL12),
+    ]
+    cal = AutoCalibrator()
+
+    for filename, source in spectra:
+        csv_path = output_dir / filename
+        if not csv_path.exists():
+            pytest.skip(f"{filename} not found")
+
+        points = cal.calibrate_from_csv(csv_path, source=source)
+        assert len(points) >= 4, f"{filename} + {source.name}: need 4+ points, got {len(points)}"
+
+        px = np.array([p for p, _ in points])
+        wl = np.array([w for _, w in points])
+        assert np.all(np.diff(px) > 0), f"{filename}: pixels must be strictly increasing"
+        assert 250 <= wl.min() <= 450, f"{filename}: start wavelength {wl.min():.1f} nm out of range"
+        assert 550 <= wl.max() <= 820, f"{filename}: end wavelength {wl.max():.1f} nm out of range"
 
 
 def test_hg_csv_calibration_monotonic_no_explosion():

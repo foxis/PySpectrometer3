@@ -11,7 +11,7 @@ from ..config import Config
 from ..core.calibration import Calibration
 from ..core.spectrum import SpectrumData
 from ..gui.control_bar import ControlBar, ControlBarConfig
-from ..gui.sliders import SliderPanel
+from ..gui.sliders import HorizontalSlider, SliderPanel, SliderStyle, VerticalSlider
 from ..modes.base import BaseMode
 from ..processing.spectrum_transform import (
     get_crop_corners_rotated,
@@ -23,7 +23,11 @@ from ..utils.display import scale_to_uint8
 from ..utils.graph_scale import scale_intensity_to_graph
 from .graticule import GraticuleRenderer
 from .overlay_utils import render_polyline_overlay
+from .viewport import Viewport
 from .waterfall import WaterfallDisplay
+
+# Hot zone width for zoom slider toggle (click to show/hide)
+ZOOM_HOTZONE = 12
 
 
 @dataclass
@@ -43,7 +47,6 @@ class DisplayState:
     hold_peaks: bool = False
     held_intensity: np.ndarray | None = None
     cursor: CursorState = None
-    click_points: list[tuple[int, int]] = None
     save_message: str = "No data saved"
     reference_spectrum: np.ndarray | None = None
     reference_name: str = "None"
@@ -51,8 +54,6 @@ class DisplayState:
     def __post_init__(self):
         if self.cursor is None:
             self.cursor = CursorState()
-        if self.click_points is None:
-            self.click_points = []
 
 
 class DisplayManager:
@@ -135,6 +136,57 @@ class DisplayManager:
         # Track mouse button state for slider dragging
         self._mouse_down = False
 
+        # Zoom/pan viewport
+        self._viewport = Viewport()
+
+        # Zoom sliders (visible when user clicks on left/bottom edge)
+        style = SliderStyle()
+        self._zoom_vertical = VerticalSlider(
+            x=2,
+            y=config.display.message_height + config.display.preview_height + 20,
+            height=config.display.graph_height - 50,
+            min_val=1.0,
+            max_val=20.0,
+            value=1.0,
+            label="V",
+            style=style,
+        )
+        self._zoom_horizontal = HorizontalSlider(
+            x=20,
+            y=config.display.message_height
+            + config.display.preview_height
+            + config.display.graph_height
+            - 25,
+            width=config.camera.frame_width - 200,
+            min_val=1.0,
+            max_val=20.0,
+            value=1.0,
+            label="H",
+            style=style,
+        )
+
+        self._zoom_vertical_prev = 1.0
+        self._zoom_horizontal_prev = 1.0
+
+        def _on_zoom_vertical(val: float) -> None:
+            if self._zoom_vertical_prev > 0:
+                self._viewport.zoom_y(val / self._zoom_vertical_prev)
+            self._zoom_vertical_prev = val
+
+        def _on_zoom_horizontal(val: float) -> None:
+            if self._zoom_horizontal_prev > 0:
+                self._viewport.zoom_x(val / self._zoom_horizontal_prev)
+            self._zoom_horizontal_prev = val
+
+        self._zoom_vertical.on_change = _on_zoom_vertical
+        self._zoom_horizontal.on_change = _on_zoom_horizontal
+
+        # Pan state
+        self._panning = False
+        self._pan_last_x = 0
+        self._pan_last_y = 0
+        self._last_data_width = 0
+
     def set_frame_dimensions(self, width: int, height: int) -> None:
         """Update dimensions (e.g. after camera reports actual size)."""
         self._control_bar.set_width(width)
@@ -206,7 +258,13 @@ class DisplayManager:
         """Handle mouse events on the spectrum window."""
         control_bar_height = self.config.display.message_height
         preview_height = self.config.display.preview_height
+        graph_height = self.config.display.graph_height
+        width = self.config.camera.frame_width
         mouse_y_offset = control_bar_height + preview_height
+        graph_rel_y = y - mouse_y_offset
+
+        # Graph area bounds
+        in_graph = 0 <= graph_rel_y < graph_height and 0 <= x < width
 
         if event == cv2.EVENT_MOUSEMOVE:
             self.state.cursor.x = x
@@ -215,9 +273,25 @@ class DisplayManager:
             if y < control_bar_height:
                 self._control_bar.handle_mouse_move(x, y)
 
-            # Handle slider dragging
             if self._mouse_down:
                 self._slider_panel.handle_mouse_move(x, y)
+                if self._zoom_vertical.visible:
+                    self._zoom_vertical.handle_mouse_move(x, y)
+                if self._zoom_horizontal.visible:
+                    self._zoom_horizontal.handle_mouse_move(x, y)
+                if self._panning:
+                    dx = self._viewport.screen_x_to_data(
+                        self._pan_last_x, width
+                    ) - self._viewport.screen_x_to_data(x, width)
+                    dy = self._viewport.screen_y_to_intensity(
+                        self._pan_last_y, graph_height
+                    ) - self._viewport.screen_y_to_intensity(
+                        graph_rel_y, graph_height
+                    )
+                    self._viewport.pan_x(dx)
+                    self._viewport.pan_y(dy)
+                    self._pan_last_x = x
+                    self._pan_last_y = graph_rel_y
 
         elif event == cv2.EVENT_LBUTTONDOWN:
             self._mouse_down = True
@@ -227,14 +301,37 @@ class DisplayManager:
             elif self._on_autolevel_click is not None:
                 self._on_autolevel_click()
             elif self._slider_panel.handle_mouse_down(x, y):
-                pass  # Slider handled it
-            else:
-                mouse_y = y - mouse_y_offset
-                self.state.click_points.append((x, mouse_y))
+                pass
+            elif self._zoom_vertical.visible and self._zoom_vertical.handle_mouse_down(x, y):
+                pass
+            elif self._zoom_horizontal.visible and self._zoom_horizontal.handle_mouse_down(x, y):
+                pass
+            elif in_graph:
+                if x < ZOOM_HOTZONE:
+                    self._zoom_vertical.visible = not self._zoom_vertical.visible
+                elif graph_rel_y >= graph_height - ZOOM_HOTZONE:
+                    self._zoom_horizontal.visible = not self._zoom_horizontal.visible
+                elif self._is_zoomed():
+                    self._panning = True
+                    self._pan_last_x = x
+                    self._pan_last_y = graph_rel_y
 
         elif event == cv2.EVENT_LBUTTONUP:
             self._mouse_down = False
             self._slider_panel.handle_mouse_up()
+            if self._zoom_vertical.handle_mouse_up():
+                pass
+            if self._zoom_horizontal.handle_mouse_up():
+                pass
+            self._panning = False
+
+    def _is_zoomed(self) -> bool:
+        """True if viewport is zoomed (not full view)."""
+        if self._last_data_width <= 0:
+            return False
+        x_span = self._viewport.x_end - self._viewport.x_start
+        y_span = self._viewport.y_max - self._viewport.y_min
+        return x_span < self._last_data_width - 1 or y_span < 0.99
 
     def render(
         self,
@@ -264,6 +361,11 @@ class DisplayManager:
         self._spectrum_y_center = spectrum_y_center
         width = self.config.camera.frame_width
         graph_height = self.config.display.graph_height
+        data_width = len(data.intensity)
+        self._last_data_width = data_width
+
+        self._viewport.init_if_needed(data_width)
+        self._viewport.clamp_x(data_width)
 
         graph = np.zeros([graph_height, width, 3], dtype=np.uint8)
         graph.fill(255)
@@ -273,20 +375,20 @@ class DisplayManager:
             graticule = self._mode_instance.get_graticule(data)
         if graticule is None:
             graticule = self.calibration.graticule
-        self._graticule.render_on_graph(graph, graticule)
+        self._graticule.render_on_graph(graph, graticule, self._viewport)
         self._graticule.render_horizontal_lines(graph)
 
         self._render_reference_spectrum(graph, data)
+        self._render_spectrum(graph, data)
         self._render_mode_overlay(graph)
         self._render_sensitivity_overlay(graph)
-        self._render_spectrum(graph, data)
         self._render_peaks(graph, data)
         self._render_cursor(graph, data)
-        self._render_click_points(graph)
 
-        # Render sliders directly on graph (if any are visible)
         if self._slider_panel.any_visible():
             self._render_sliders_on_graph(graph)
+        if self._zoom_vertical.visible or self._zoom_horizontal.visible:
+            self._render_zoom_sliders_on_graph(graph)
 
         message_height = self.config.display.message_height
         preview_height = self.config.display.preview_height
@@ -440,7 +542,12 @@ class DisplayManager:
         if self._mode_overlay is None:
             return
         intensity, color = self._mode_overlay
-        render_polyline_overlay(graph, intensity, color)
+        height = graph.shape[0]
+        eff = max(1, height - 1)
+        intensity_01 = np.asarray(intensity, dtype=np.float32) / eff
+        render_polyline_overlay(
+            graph, intensity_01, color, thickness=1, viewport=self._viewport
+        )
 
     def _render_sensitivity_overlay(self, graph: np.ndarray) -> None:
         """Render CMOS sensitivity curve overlay.
@@ -450,7 +557,17 @@ class DisplayManager:
             return
         intensity, color = self._sensitivity_overlay
         width = graph.shape[1]
-        render_polyline_overlay(graph, intensity, color, resample_to_width=width)
+        height = graph.shape[0]
+        eff = max(1, height - 1)
+        intensity_01 = np.asarray(intensity, dtype=np.float32) / eff
+        render_polyline_overlay(
+            graph,
+            intensity_01,
+            color,
+            resample_to_width=width,
+            thickness=1,
+            viewport=self._viewport,
+        )
 
     def _render_reference_spectrum(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render the reference spectrum overlay line. Both measured and reference are 0-1."""
@@ -458,13 +575,12 @@ class DisplayManager:
         if ref_intensity is None:
             return
 
-        height = graph.shape[0]
-        scaled = scale_intensity_to_graph(ref_intensity, height, margin=1)
         render_polyline_overlay(
             graph,
-            scaled,
+            ref_intensity,
             (180, 180, 180),
             thickness=1,
+            viewport=self._viewport,
         )
 
     def _render_spectrum(self, graph: np.ndarray, data: SpectrumData) -> None:
@@ -473,18 +589,23 @@ class DisplayManager:
         Intensity is float32 0-1. Scale to fit graph height.
         """
         height = graph.shape[0]
+        width = graph.shape[1]
 
         for i, intensity in enumerate(data.intensity):
+            if i < self._viewport.x_start or i > self._viewport.x_end:
+                continue
+
             rgb = wavelength_to_rgb(round(data.wavelengths[i]))
             bgr = rgb_to_bgr(rgb)
 
-            scaled_intensity = int(scale_intensity_to_graph(intensity, height, margin=1))
+            sx = self._viewport.data_x_to_screen(float(i), width)
+            sy = self._viewport.intensity_to_screen_y(intensity, height)
 
-            cv2.line(graph, (i, height), (i, height - scaled_intensity), bgr, 1)
+            cv2.line(graph, (sx, height - 1), (sx, sy), bgr, 1)
             cv2.line(
                 graph,
-                (i, height - 1 - scaled_intensity),
-                (i, height - scaled_intensity),
+                (sx, sy - 1),
+                (sx, sy),
                 (0, 0, 0),
                 1,
                 cv2.LINE_AA,
@@ -493,30 +614,36 @@ class DisplayManager:
     def _render_peaks(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render peak labels on the graph. Peak intensity is float 0-1."""
         height = graph.shape[0]
+        width = graph.shape[1]
         text_offset = 12
 
         for peak in data.peaks:
-            scaled = int(scale_intensity_to_graph(peak.intensity, height, margin=1))
-            label_height = height - scaled
+            if peak.index < self._viewport.x_start or peak.index > self._viewport.x_end:
+                continue
+            if peak.intensity < self._viewport.y_min or peak.intensity > self._viewport.y_max:
+                continue
+
+            sx = self._viewport.data_x_to_screen(float(peak.index), width)
+            label_height = self._viewport.intensity_to_screen_y(peak.intensity, height)
 
             cv2.rectangle(
                 graph,
-                (peak.index - text_offset - 2, label_height),
-                (peak.index - text_offset + 60, label_height - 15),
+                (sx - text_offset - 2, label_height),
+                (sx - text_offset + 60, label_height - 15),
                 (0, 255, 255),
                 -1,
             )
             cv2.rectangle(
                 graph,
-                (peak.index - text_offset - 2, label_height),
-                (peak.index - text_offset + 60, label_height - 15),
+                (sx - text_offset - 2, label_height),
+                (sx - text_offset + 60, label_height - 15),
                 (0, 0, 0),
                 1,
             )
             cv2.putText(
                 graph,
                 f"{peak.wavelength}nm",
-                (peak.index - text_offset, label_height - 3),
+                (sx - text_offset, label_height - 3),
                 self._font,
                 0.4,
                 (0, 0, 0),
@@ -525,8 +652,8 @@ class DisplayManager:
             )
             cv2.line(
                 graph,
-                (peak.index, label_height),
-                (peak.index, label_height + 10),
+                (sx, label_height),
+                (sx, label_height + 10),
                 (0, 0, 0),
                 1,
             )
@@ -572,18 +699,23 @@ class DisplayManager:
                 cv2.LINE_AA,
             )
 
-    def _render_click_points(self, graph: np.ndarray) -> None:
-        """Render clicked calibration points."""
-        for x, y in self.state.click_points:
-            cv2.circle(graph, (x, y), 5, (0, 0, 0), -1)
-            cv2.putText(
-                graph,
-                str(x),
-                (x + 5, y),
-                self._font,
-                0.4,
-                (0, 0, 0),
-            )
+    def _render_zoom_sliders_on_graph(self, graph: np.ndarray) -> None:
+        """Render zoom sliders on graph with graph-relative coordinates."""
+        message_height = self.config.display.message_height
+        preview_height = self.config.display.preview_height
+        offset_y = message_height + preview_height
+
+        if self._zoom_vertical.visible:
+            orig_y = self._zoom_vertical.y
+            self._zoom_vertical.y = orig_y - offset_y
+            self._zoom_vertical.render(graph)
+            self._zoom_vertical.y = orig_y
+
+        if self._zoom_horizontal.visible:
+            orig_y = self._zoom_horizontal.y
+            self._zoom_horizontal.y = graph.shape[0] - 25
+            self._zoom_horizontal.render(graph)
+            self._zoom_horizontal.y = orig_y
 
     def _draw_rotated_crop_box(
         self,
