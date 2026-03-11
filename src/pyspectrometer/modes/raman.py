@@ -4,6 +4,7 @@ MVP: Laser wavelength config, wavelengthâ†’wavenumber conversion, display in cmâ
 dark reference, averaging, save/load.
 """
 
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -84,10 +85,18 @@ class RamanMode(BaseMode):
 
     def _on_save(self, ctx: ModeContext) -> None:
         """Save spectrum (after transform to wavenumber)."""
-        if ctx.last_data is not None:
-            ctx.save_snapshot(ctx.last_data)
-        else:
+        if ctx.last_data is None:
             print("[RAMAN] No spectrum data available")
+            return
+        metadata = {
+            "Mode": "Raman",
+            "Date": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "Base wavelength (nm)": f"{self.laser_nm:.1f}",
+            "Gain": f"{ctx.camera.gain:.1f}",
+            "Exposure": f"{getattr(ctx.camera, 'exposure', 0)}",
+            "Note": "",
+        }
+        ctx.save_snapshot(ctx.last_data, metadata=metadata)
 
     def _on_load(self, ctx: ModeContext) -> None:
         """Load spectrum - placeholder."""

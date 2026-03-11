@@ -4,6 +4,8 @@ MVP: Reflectance/Transmittance/Illumination sub-modes, XYZ/LAB display,
 black/white references, save/load.
 """
 
+import math
+import time
 from dataclasses import dataclass
 from enum import Enum, auto
 from typing import TYPE_CHECKING
@@ -151,10 +153,42 @@ class ColorScienceMode(BaseMode):
 
     def _on_save(self, ctx: ModeContext) -> None:
         """Save spectrum."""
-        if ctx.last_data is not None:
-            ctx.save_snapshot(ctx.last_data)
-        else:
+        if ctx.last_data is None:
             print("[COLOR] No spectrum data available")
+            return
+        light_on = self.state.lamp_enabled
+        led_pct = ctx.display.get_led_intensity_value() if light_on else None
+        pwm_log = (
+            f"{math.log10(0.01 + led_pct / 100):.4f}"
+            if led_pct is not None and light_on
+            else None
+        )
+        is_illumination = self.color_state.measurement_type == ColorMeasurementType.ILLUMINATION
+        white = None if is_illumination else self.color_state.white_spectrum
+
+        xyz_lab = self._compute_xyz_lab(ctx.last_data.intensity, ctx.last_data.wavelengths)
+        metadata = {
+            "Mode": "Color Science",
+            "Date": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "Measurement type": self.color_state.measurement_type.name,
+            "Light source": "Lamp" if light_on else "off",
+            "PWM intensity %": f"{led_pct:.1f}" if led_pct is not None and light_on else None,
+            "PWM intensity log10": pwm_log,
+            "Gain": f"{ctx.camera.gain:.1f}",
+            "Exposure": f"{getattr(ctx.camera, 'exposure', 0)}",
+            "Note": "",
+        }
+        if xyz_lab is not None:
+            (X, Y, Z), (L, a, b) = xyz_lab
+            metadata["XYZ"] = f"X={X:.2f} Y={Y:.2f} Z={Z:.2f}"
+            metadata["LAB"] = f"L*={L:.2f} a*={a:.2f} b*={b:.2f}"
+
+        ctx.save_snapshot(
+            ctx.last_data,
+            dark_intensity=self.color_state.dark_spectrum,
+            white_intensity=white,
+            metadata=metadata,
+        )
 
     def _on_load(self, ctx: ModeContext) -> None:
         """Load spectrum - placeholder."""
@@ -209,11 +243,12 @@ class ColorScienceMode(BaseMode):
         """No overlay for Color Science MVP."""
         return None
 
-    def _compute_color_values(self, intensity: np.ndarray, wavelengths: np.ndarray) -> str | None:
-        """Compute XYZ or LAB using correct formula per measurement type.
+    def _compute_xyz_lab(
+        self, intensity: np.ndarray, wavelengths: np.ndarray
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
+        """Compute XYZ and LAB using correct formula per measurement type.
 
-        Reflectance/Transmittance: normalizes to white reference (our illuminant).
-        Illumination: self-normalized (measures our light source).
+        Returns (X,Y,Z), (L,a,b) or None if computation fails.
         """
         try:
             mtype = _MEASUREMENT_TO_XYZ_TYPE[self.color_state.measurement_type]
@@ -232,19 +267,27 @@ class ColorScienceMode(BaseMode):
                 illuminant_spectrum=white,
                 illuminant_wavelengths=white_wl,
             )
-            if self.color_state.show_lab:
-                if mtype == "illumination":
-                    ref_white = (X, Y, Z)
-                else:
-                    ref_white = tuple(
-                        float(x)
-                        for x in calculate_XYZ(white, wavelengths, "illumination", None, None)
-                    )
-                L, a, b = xyz_to_lab(X, Y, Z, reference_white_XYZ=ref_white)
-                return f"L*={L:.1f} a*={a:.1f} b*={b:.1f}"
-            return f"X={X:.1f} Y={Y:.1f} Z={Z:.1f}"
+            if mtype == "illumination":
+                ref_white = (X, Y, Z)
+            else:
+                ref_white = tuple(
+                    float(x)
+                    for x in calculate_XYZ(white, wavelengths, "illumination", None, None)
+                )
+            L, a, b = xyz_to_lab(X, Y, Z, reference_white_XYZ=ref_white)
+            return ((X, Y, Z), (L, a, b))
         except (FileNotFoundError, ValueError):
             return None
+
+    def _compute_color_values(self, intensity: np.ndarray, wavelengths: np.ndarray) -> str | None:
+        """Format XYZ or LAB for display based on show_lab toggle."""
+        result = self._compute_xyz_lab(intensity, wavelengths)
+        if result is None:
+            return None
+        (X, Y, Z), (L, a, b) = result
+        if self.color_state.show_lab:
+            return f"L*={L:.1f} a*={a:.1f} b*={b:.1f}"
+        return f"X={X:.1f} Y={Y:.1f} Z={Z:.1f}"
 
     def update_display(
         self,

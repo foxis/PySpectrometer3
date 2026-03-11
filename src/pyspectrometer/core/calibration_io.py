@@ -78,12 +78,12 @@ class CalibrationFileIO:
             self.cal_file.parent.mkdir(parents=True, exist_ok=True)
             pixels_str = ",".join(map(str, pixels))
             wavelengths_str = ",".join(map(str, wavelengths))
-            with open(self.cal_file, "w") as f:
-                f.write(f"{pixels_str}\r\n")
-                f.write(f"{wavelengths_str}\r\n")
-                f.write(f"{rotation_angle}\r\n")
-                f.write(f"{spectrum_y_center}\r\n")
-                f.write(f"{perpendicular_width}\r\n")
+            with open(self.cal_file, "w", newline="\n") as f:
+                f.write(f"{pixels_str}\n")
+                f.write(f"{wavelengths_str}\n")
+                f.write(f"{rotation_angle}\n")
+                f.write(f"{spectrum_y_center}\n")
+                f.write(f"{perpendicular_width}\n")
             return True
         except OSError as e:
             print(f"Failed to save calibration: {e}")

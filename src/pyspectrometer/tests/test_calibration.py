@@ -243,6 +243,62 @@ def test_hg_peak_based_4_measured_5_reference():
         assert abs(wl_cal - wl_ref) < 8.0, f"Pixel {px} -> {wl_cal:.1f} nm, expected ~{wl_ref} nm"
 
 
+def test_fl12_merged_close_peaks_calibration():
+    """FL12 has close peaks (543+546, 578+584 nm); spectrometer may see merged peaks.
+
+    Peak matching uses average wavelength for close reference peaks.
+    """
+    from ..data.reference_spectra import get_reference_peaks
+    from ..processing.auto_calibrator import _merge_close_reference_peaks
+
+    ref_peaks = get_reference_peaks(ReferenceSource.FL12)
+    merged = _merge_close_reference_peaks(ref_peaks, min_separation_nm=8.0)
+
+    # FL_LINES: 543, 546.07 (3 nm) and 578, 584 (6 nm) should merge
+    wl_merged = [p.wavelength for p in merged]
+    assert 544.0 < (543 + 546.07) / 2 < 545.0
+    assert any(543.5 < w < 545.5 for w in wl_merged), "543+546 should merge to ~544.5"
+    assert any(580 < w < 582 for w in wl_merged), "578+584 should merge to ~581"
+    assert len(merged) < len(ref_peaks), "Merging should reduce peak count"
+
+    # Peak-based calibration with FL12: 6 measured peaks (some merged) should match
+    n_pixels = 640
+    rng = np.random.default_rng(47)
+    wl_true = _ground_truth_calibration(n_pixels, rng)
+    measured = _generate_synthetic_measured(n_pixels, wl_true, ReferenceSource.FL12, 0.02, rng)
+
+    # Simulate spectrometer seeing merged peaks: use effective ref positions
+    effective_wl = [404.66, 435.84, 487.0, 544.5, 581.0, 611.0]  # 543+546->544.5, 578+584->581
+    peak_pixels = [int(np.argmin(np.abs(wl_true - wl))) for wl in effective_wl]
+    peak_pixels = sorted(peak_pixels)
+    peaks = [
+        Peak(index=p, wavelength=float(wl_true[p]), intensity=float(measured[p]))
+        for p in peak_pixels
+    ]
+
+    cal_mode = CalibrationMode()
+    cal_mode.select_source(ReferenceSource.FL12)
+    cal_points = cal_mode.auto_calibrate(
+        measured_intensity=measured,
+        wavelengths=wl_true,
+        peak_indices=peaks,
+    )
+
+    assert len(cal_points) >= 4, f"FL12 peak calibration should find 4+ points, got {len(cal_points)}"
+    pixels = np.array([p for p, _ in cal_points], dtype=np.float64)
+    wavelengths = np.array([w for _, w in cal_points], dtype=np.float64)
+    coeffs = np.polyfit(pixels, wavelengths, min(3, len(cal_points) - 1))
+    poly = np.poly1d(coeffs)
+
+    for px, wl_expected in zip(peak_pixels, effective_wl):
+        wl_got = poly(px)
+        err = abs(wl_got - wl_expected)
+        assert err < 18.0, (
+            f"Peak at pixel {px} should map to ~{wl_expected} nm, got {wl_got:.1f} nm "
+            f"(error {err:.2f} nm)"
+        )
+
+
 def test_correlation_wavelength_range_sensible():
     """Correlation result must map pixels to 360-780 nm (visible within range)."""
     rng = np.random.default_rng(46)

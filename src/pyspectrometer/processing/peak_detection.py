@@ -135,6 +135,38 @@ def find_peak_indexes_scipy(
     return np.asarray(idx, dtype=np.intp)
 
 
+def find_peaks(
+    intensity: np.ndarray,
+    wavelengths: np.ndarray,
+    *,
+    threshold: float = 0.1,
+    min_dist: int = 15,
+    prominence: float = 0.01,
+) -> list[Peak]:
+    """Find all peaks above threshold. No display coupling (no max_count).
+
+    Core peak detection used by PeakDetector and any consumer needing peaks.
+    """
+    if not _SCIPY_AVAILABLE or intensity.size < 3:
+        return []
+
+    idx = find_peak_indexes_scipy(
+        intensity,
+        threshold=threshold,
+        min_dist=min_dist,
+        prominence=prominence,
+    )
+    arr = np.asarray(intensity, dtype=np.float64)
+    return [
+        Peak(
+            index=int(i),
+            wavelength=float(wavelengths[min(i, len(wavelengths) - 1)]),
+            intensity=float(arr[i]),
+        )
+        for i in idx
+    ]
+
+
 def detect_peaks_in_region(
     intensity: np.ndarray,
     wavelengths: np.ndarray,
@@ -296,54 +328,39 @@ class PeakDetector(ProcessorInterface):
     def process(self, data: SpectrumData) -> SpectrumData:
         """Detect peaks in spectrum data.
 
-        Algorithm: detect all peaks above threshold, sort by intensity descending,
-        display only top N largest.
-
-        Args:
-            data: Input spectrum data
-
-        Returns:
-            Spectrum data with detected peaks
+        Uses find_peaks (core detection), then limits to top N for display.
         """
         if not self._enabled:
             return data
 
         intensity = data.intensity.astype(np.float64)
-        max_val = float(np.max(intensity))
-
-        if max_val <= 0:
+        if np.max(intensity) <= 0:
             return data.with_peaks([])
 
-        # Pass threshold as fraction of range (0-1). _threshold 0-100 → 0.0-1.0
-        threshold_normalized = self._threshold / 100.0
-
+        threshold_norm = self._threshold / 100.0
         if _SCIPY_AVAILABLE:
-            indexes = find_peak_indexes_scipy(
+            peaks = find_peaks(
                 intensity,
-                threshold=threshold_normalized,
+                data.wavelengths,
+                threshold=threshold_norm,
                 min_dist=self._min_distance,
                 prominence=0.01,
             )
         else:
             indexes = find_peak_indexes(
                 intensity,
-                threshold=threshold_normalized,
+                threshold=threshold_norm,
                 min_dist=self._min_distance,
             )
+            peaks = [
+                Peak(
+                    index=int(i),
+                    wavelength=round(data.wavelengths[i], 1),
+                    intensity=float(intensity[i]),
+                )
+                for i in indexes
+            ]
 
-        # Sort by intensity descending, take top N
-        if len(indexes) > 0:
-            intensities_at_peaks = intensity[indexes]
-            order = np.argsort(intensities_at_peaks)[::-1]
-            indexes = indexes[order[: self._max_count]]
-
-        peaks = [
-            Peak(
-                index=int(idx),
-                wavelength=round(data.wavelengths[idx], 1),
-                intensity=float(intensity[idx]),
-            )
-            for idx in indexes
-        ]
-
+        # Display limit: top N by intensity
+        peaks = sorted(peaks, key=lambda p: p.intensity, reverse=True)[: self._max_count]
         return data.with_peaks(peaks)

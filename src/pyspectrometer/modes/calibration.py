@@ -27,6 +27,7 @@ from ..data.reference_spectra import (
     get_reference_name,
     get_reference_spectrum,
 )
+from ..display.calibration_preview import render as render_calibration_preview
 from ..processing.auto_calibrator import AutoCalibrator
 from ..processing.sensitivity_correction import SensitivityCorrection
 from ..utils.graph_scale import scale_intensity_to_graph
@@ -203,7 +204,7 @@ class CalibrationMode(BaseMode):
             print("[AutoLevel] Click to close overlay")
 
     def _on_auto_calibrate(self, ctx: ModeContext) -> None:
-        """Handle auto-calibrate action."""
+        """Handle auto-calibrate: show peak-matching preview first, run calibration on click."""
         if ctx.last_data is None:
             print("[CAL] No data available for calibration")
             return
@@ -211,6 +212,7 @@ class CalibrationMode(BaseMode):
         if now - ctx.last_auto_calibrate_time < ctx.auto_calibrate_debounce_sec:
             return
         ctx.last_auto_calibrate_time = now
+
         measured = (
             ctx.last_intensity_pre_sensitivity
             if (
@@ -220,10 +222,35 @@ class CalibrationMode(BaseMode):
             )
             else ctx.last_data.intensity
         )
+
+        # Build preview overlay (measured SPD, reference SPD, peaks, connecting lines)
+        cfg = ctx.display.config.display
+        width = cfg.window_width
+        height = cfg.preview_height + cfg.graph_height
+        preview_img = render_calibration_preview(
+            measured,
+            ctx.last_data.wavelengths,
+            self.cal_state.current_source,
+            width,
+            height,
+        )
+        ctx.display.set_autolevel_overlay(preview_img)
+        ctx.display.set_autolevel_click_dismiss(
+            lambda: self._on_calibration_preview_dismiss(ctx, measured)
+        )
+        print("[CAL] Click to close preview and run calibration")
+
+    def _on_calibration_preview_dismiss(self, ctx: ModeContext, measured: np.ndarray) -> None:
+        """Dismiss preview overlay and run calibration."""
+        ctx.display.set_autolevel_overlay(None)
+        ctx.display.set_autolevel_click_dismiss(None)
+        if ctx.last_data is None:
+            print("[CAL] No data available (dismissed too late)")
+            return
         cal_points = self._auto_calibrator.calibrate(
             measured_intensity=measured,
             wavelengths=ctx.last_data.wavelengths,
-            peak_indices=ctx.last_data.peaks,
+            peak_indices=[],
             source=self.cal_state.current_source,
             sensitivity=self._sensitivity,
             sensitivity_enabled=self.cal_state.sensitivity_correction_enabled,
@@ -283,7 +310,20 @@ class CalibrationMode(BaseMode):
             self.cal_state.current_source,
             ctx.last_data.wavelengths,
         )
-        ctx.save_snapshot(ctx.last_data, reference_intensity=ref_intensity)
+        metadata = {
+            "Mode": "Calibration",
+            "Date": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "Reference source": get_reference_name(self.cal_state.current_source),
+            "Sensitivity correction": "on" if self.cal_state.sensitivity_correction_enabled else "off",
+            "Gain": f"{ctx.camera.gain:.1f}",
+            "Exposure": f"{getattr(ctx.camera, 'exposure', 0)}",
+            "Note": "",
+        }
+        ctx.save_snapshot(
+            ctx.last_data,
+            reference_intensity=ref_intensity,
+            metadata=metadata,
+        )
 
     def _on_load_calibration(self, ctx: ModeContext) -> None:
         """Load calibration from file (calibration mode only)."""

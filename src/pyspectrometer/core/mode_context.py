@@ -52,8 +52,8 @@ class ModeContext:
     # Quit callback - mode calls to stop the main loop
     quit_app: Callable[[], None] = _noop
 
-    # Save snapshot - mode calls with SpectrumData
-    save_snapshot: Callable[[SpectrumData], None] = _noop_save
+    # Save snapshot - mode calls with SpectrumData and optional kwargs (reference_intensity, metadata)
+    save_snapshot: Callable[..., None] = _noop_save
 
     # Frame state (orchestrator updates each frame; modes read)
     last_data: SpectrumData | None = None

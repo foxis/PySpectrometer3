@@ -13,7 +13,6 @@ from scipy.optimize import minimize
 from ..data.reference_spectra import (
     ReferenceSource,
     SpectralLine,
-    get_reference_name,
     get_reference_peaks,
     get_reference_spectrum,
 )
@@ -23,20 +22,24 @@ if TYPE_CHECKING:
 
 DISPERSION_LO, DISPERSION_HI = 0.2, 0.5
 
+# Peaks within this separation (nm) are merged to their average for matching.
+# Limited spectrometer resolution may join or lose close peaks.
+PEAK_MERGE_THRESHOLD_NM = 8.0
+
 # Wavelength bounds by source: (start_lo, start_hi), (end_lo, end_hi)
-# Hg: 250-750 nm typical; FL: 360-780 nm
+# Allow shorter spectrometers (e.g. 380-600 nm) to calibrate.
 _WL_BOUNDS: dict[ReferenceSource, tuple[tuple[float, float], tuple[float, float]]] = {
-    ReferenceSource.HG: ((250.0, 320.0), (680.0, 780.0)),
-    ReferenceSource.FL1: ((360.0, 440.0), (660.0, 780.0)),
-    ReferenceSource.FL2: ((360.0, 440.0), (660.0, 780.0)),
-    ReferenceSource.FL3: ((360.0, 440.0), (660.0, 780.0)),
-    ReferenceSource.FL12: ((360.0, 440.0), (660.0, 780.0)),
-    ReferenceSource.D65: ((360.0, 440.0), (660.0, 780.0)),
-    ReferenceSource.LED: ((360.0, 440.0), (660.0, 780.0)),
-    ReferenceSource.LED2: ((360.0, 440.0), (660.0, 780.0)),
-    ReferenceSource.LED3: ((360.0, 440.0), (660.0, 780.0)),
+    ReferenceSource.HG: ((250.0, 320.0), (550.0, 780.0)),
+    ReferenceSource.FL1: ((360.0, 440.0), (550.0, 780.0)),
+    ReferenceSource.FL2: ((360.0, 440.0), (550.0, 780.0)),
+    ReferenceSource.FL3: ((360.0, 440.0), (550.0, 780.0)),
+    ReferenceSource.FL12: ((360.0, 440.0), (550.0, 780.0)),
+    ReferenceSource.D65: ((360.0, 440.0), (550.0, 780.0)),
+    ReferenceSource.LED: ((360.0, 440.0), (550.0, 780.0)),
+    ReferenceSource.LED2: ((360.0, 440.0), (550.0, 780.0)),
+    ReferenceSource.LED3: ((360.0, 440.0), (550.0, 780.0)),
 }
-_DEFAULT_BOUNDS = ((360.0, 440.0), (660.0, 780.0))
+_DEFAULT_BOUNDS = ((360.0, 440.0), (550.0, 780.0))
 
 
 def _dispersion_score(pts: list[tuple[int, float]]) -> float:
@@ -69,28 +72,103 @@ def _linearity_score(points: list[tuple[int, float]]) -> float:
     return 1.0 - ss_res / ss_tot
 
 
+def _merge_close_reference_peaks(
+    reference_peaks: list[SpectralLine],
+    min_separation_nm: float = PEAK_MERGE_THRESHOLD_NM,
+) -> list[SpectralLine]:
+    """Merge reference peaks that are too close for spectrometer resolution.
+
+    When peaks are within min_separation_nm, the spectrometer may see one merged
+    peak. Replace each such group with a single peak at their average wavelength.
+    """
+    if len(reference_peaks) < 2:
+        return reference_peaks.copy()
+
+    ref_sorted = sorted(reference_peaks, key=lambda p: p.wavelength)
+    merged: list[SpectralLine] = []
+    run: list[SpectralLine] = [ref_sorted[0]]
+
+    for ref in ref_sorted[1:]:
+        prev_wl = run[-1].wavelength
+        if ref.wavelength - prev_wl <= min_separation_nm:
+            run.append(ref)
+        else:
+            avg_wl = sum(r.wavelength for r in run) / len(run)
+            max_int = max(r.intensity for r in run)
+            merged.append(SpectralLine(avg_wl, max_int, run[0].label))
+            run = [ref]
+
+    avg_wl = sum(r.wavelength for r in run) / len(run)
+    max_int = max(r.intensity for r in run)
+    merged.append(SpectralLine(avg_wl, max_int, run[0].label))
+    return merged
+
+
+def _extract_peak_intensities(
+    peak_indices: list,
+    pixel_indices: list[int],
+    measured_intensity: np.ndarray,
+) -> list[float] | None:
+    """Extract intensity at each peak. Returns None if all zero."""
+    out = []
+    for p, idx in zip(peak_indices, pixel_indices):
+        if hasattr(p, "intensity"):
+            out.append(float(p.intensity))
+        elif 0 <= idx < len(measured_intensity):
+            out.append(float(measured_intensity[idx]))
+        else:
+            out.append(0.0)
+    return out if out and max(out) > 1e-9 else None
+
+
+def _intensity_similarity(
+    norm_measured: float,
+    norm_ref: float,
+) -> float:
+    """Similarity of normalized intensities (0-1). 1 = identical, 0 = maximally different."""
+    return 1.0 - abs(norm_measured - norm_ref)
+
+
 def _match_peaks_to_reference(
     peak_pixels: list[int],
     peak_wavelengths: list[float],
     reference_peaks: list[SpectralLine],
+    peak_intensities: list[float] | None = None,
 ) -> list[tuple[int, float, float]]:
     """Match detected peaks to reference spectral lines.
 
-    Prefers matches that yield the most linear pixel→wavelength fit.
+    Reference peaks within PEAK_MERGE_THRESHOLD_NM are merged to their average
+    wavelength, since limited spectrometer resolution may join or lose close peaks.
+    Prefers matches that yield linear pixel→wavelength fit and similar intensity
+    (strong measured peak ↔ strong reference peak).
     """
     order = np.argsort(peak_pixels)
     peak_pixels = [peak_pixels[i] for i in order]
     peak_wavelengths = [peak_wavelengths[i] for i in order]
+    if peak_intensities is not None:
+        peak_intensities = [peak_intensities[i] for i in order]
+        max_meas = max(peak_intensities) if peak_intensities else 1.0
+        norm_measured = [x / max_meas if max_meas > 1e-9 else 0.0 for x in peak_intensities]
+    else:
+        norm_measured = None
 
-    ref_sorted = sorted(reference_peaks, key=lambda p: p.wavelength)
+    ref_effective = _merge_close_reference_peaks(reference_peaks)
+    ref_sorted = sorted(ref_effective, key=lambda p: p.wavelength)
+    max_ref = max(r.intensity for r in ref_sorted) if ref_sorted else 1.0
+    norm_ref_map = {
+        r.wavelength: r.intensity / max_ref if max_ref > 1e-9 else 0.0
+        for r in ref_sorted
+    }
     tolerance_nm = 35
+    w_linearity = 0.75
+    w_intensity = 0.25
 
     matches: list[tuple[int, float, float]] = []
     used_refs: set[float] = set()
 
-    for pixel, approx_wl in zip(peak_pixels, peak_wavelengths):
+    for i, (pixel, approx_wl) in enumerate(zip(peak_pixels, peak_wavelengths)):
         best_match = None
-        best_r2 = -1.0
+        best_score = -1.0
 
         for ref in ref_sorted:
             if ref.wavelength in used_refs:
@@ -101,8 +179,15 @@ def _match_peaks_to_reference(
 
             pts = [(p, w) for p, w, _ in matches] + [(pixel, ref.wavelength)]
             r2 = _linearity_score(pts)
-            if r2 > best_r2:
-                best_r2 = r2
+            score = w_linearity * r2
+            if norm_measured is not None:
+                int_sim = _intensity_similarity(norm_measured[i], norm_ref_map[ref.wavelength])
+                score += w_intensity * int_sim
+            else:
+                score += w_intensity  # no penalty when intensities unknown
+
+            if score > best_score:
+                best_score = score
                 best_match = ref
 
         if best_match is not None:
@@ -133,12 +218,12 @@ def _correlation_calibrate(
     (wl_start_lo, wl_start_hi), (wl_end_lo, wl_end_hi) = _WL_BOUNDS.get(
         source, _DEFAULT_BOUNDS
     )
-    c1_min, c1_max = 250.0 / span, 500.0 / span
+    c1_min, c1_max = 200.0 / span, 600.0 / span
     opt_bounds = [
         (wl_start_lo, wl_start_hi),
         (c1_min, c1_max),
-        (-15.0, 15.0),
-        (-15.0, 15.0),
+        (-5.0, 5.0),
+        (-2.0, 2.0),
     ]
 
     def loss(x: np.ndarray) -> float:
@@ -167,14 +252,17 @@ def _correlation_calibrate(
         corr = np.corrcoef(measured_intensity, ref)[0, 1]
         if np.isnan(corr):
             return 1e6
-        linearity_penalty = 2.0 * (c2**2 + c3**2)
+        # Light penalty for extreme non-linearity; prism dispersion is non-linear
+        linearity_penalty = 0.2 * (c2**2 + c3**2)
         return -corr + linearity_penalty + range_penalty
 
     # Multi-start: different initial points for robustness
+    disp_nm_per_px = 400.0 / span  # typical 0.2-0.5 nm/px
     starts = [
-        np.array([380.0, 370.0 / span, 0.0, 0.0]),
-        np.array([400.0, 350.0 / span, 0.0, 0.0]),
-        np.array([360.0, 390.0 / span, 0.0, 0.0]),
+        np.array([380.0, disp_nm_per_px, 0.0, 0.0]),
+        np.array([400.0, disp_nm_per_px * 0.9, 0.0, 0.0]),
+        np.array([360.0, disp_nm_per_px * 1.1, 0.0, 0.0]),
+        np.array([390.0, 350.0 / span, 0.01, 0.0]),  # slight curvature
     ]
     if source == ReferenceSource.HG:
         starts.append(np.array([267.0, 500.0 / span, 0.0, 0.0]))
@@ -182,21 +270,29 @@ def _correlation_calibrate(
     best_res = None
     best_loss = float("inf")
     for x0 in starts:
-        res = minimize(
-            loss,
-            x0,
-            method="L-BFGS-B",
-            bounds=opt_bounds,
-            options={"maxiter": 80, "ftol": 1e-6},
-        )
-        if res.fun < best_loss:
-            best_loss = res.fun
-            best_res = res
+        try:
+            res = minimize(
+                loss,
+                x0,
+                method="L-BFGS-B",
+                bounds=opt_bounds,
+                options={"maxiter": 200, "ftol": 1e-8},
+            )
+            if res.fun < best_loss:
+                best_loss = res.fun
+                best_res = res
+        except Exception:
+            continue
 
-    if best_res is None or not best_res.success:
+    if best_res is None:
+        print("[Calibration] Correlation optimization failed: no result")
+        return []
+    if not best_res.success and best_loss > 1e5:
         msg = best_res.message if best_res else "no result"
         print(f"[Calibration] Correlation optimization failed: {msg}")
         return []
+    if not best_res.success:
+        print(f"[Calibration] Optimization warning: {best_res.message} (using best result)")
 
     c0, c1, c2, c3 = best_res.x
     pixels_arr = np.arange(n, dtype=np.float64)
@@ -219,7 +315,9 @@ def _correlation_calibrate(
         if np.std(ref_final) > 1e-9
         else 0.0
     )
-    print(f"[Calibration] Correlation calibration: r={corr:.4f}")
+    print(f"[Calibration] Correlation calibration: r={corr:.4f} ({points[0][1]:.1f}-{points[-1][1]:.1f} nm)")
+    if corr < 0.3:
+        print("[Calibration] Low correlation - check spectrum quality, reference source, and LEVEL")
     return points
 
 
@@ -235,15 +333,7 @@ class AutoCalibrator:
         sensitivity: "SensitivityCorrection | None" = None,
         sensitivity_enabled: bool = False,
     ) -> list[tuple[int, float]]:
-        """Auto-calibrate using robust correlation algorithm (Hg and FL)."""
-        ref_peaks = get_reference_peaks(source)
-        if len(ref_peaks) < 3:
-            print(
-                f"[Calibration] Reference '{get_reference_name(source)}' "
-                f"has {len(ref_peaks)} peaks; use Hg or FL for auto-calibration"
-            )
-            return []
-
+        """Auto-calibrate via SPD correlation. All references use spectral power distribution."""
         return _correlation_calibrate(
             measured_intensity, source, sensitivity, sensitivity_enabled
         )
@@ -274,10 +364,10 @@ class AutoCalibrator:
         intensity_list: list[float] = []
         intensity_col = 2  # Default: Pixel,Wavelength,Intensity
 
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if not line:
+                if not line or line.startswith("#"):
                     continue
                 parts = line.split(",")
                 if line.lower().startswith("pixel"):
@@ -330,8 +420,15 @@ class AutoCalibrator:
 
         pixel_indices = [p.index if hasattr(p, "index") else p for p in peak_indices]
         peak_wavelengths = [wavelengths[min(idx, len(wavelengths) - 1)] for idx in pixel_indices]
-
-        matches = _match_peaks_to_reference(pixel_indices, peak_wavelengths, reference_peaks)
+        peak_intensities = _extract_peak_intensities(
+            peak_indices, pixel_indices, measured_intensity
+        )
+        matches = _match_peaks_to_reference(
+            pixel_indices,
+            peak_wavelengths,
+            reference_peaks,
+            peak_intensities=peak_intensities,
+        )
 
         if len(matches) < 4:
             print(f"[Calibration] Could only match {len(matches)} peaks, need 4")

@@ -287,10 +287,20 @@ class Spectrometer:
         data: SpectrumData,
         *,
         reference_intensity: np.ndarray | None = None,
+        dark_intensity: np.ndarray | None = None,
+        white_intensity: np.ndarray | None = None,
+        metadata: dict | None = None,
     ) -> None:
         """Save spectrum to CSV and optionally waterfall image."""
         csv_path = self._exporter.generate_filename("Spectrum")
-        self._exporter.export(data, csv_path, reference_intensity=reference_intensity)
+        self._exporter.export(
+            data,
+            csv_path,
+            reference_intensity=reference_intensity,
+            dark_intensity=dark_intensity,
+            white_intensity=white_intensity,
+            metadata=metadata,
+        )
         time_display = time.strftime(self.config.export.time_format)
         self._display.state.save_message = f"Last Save: {time_display}"
         print(f"Saved: {csv_path}")

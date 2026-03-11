@@ -1303,6 +1303,18 @@ class DisplayManager:
         """Set the LED intensity slider value (0–100% PWM duty cycle)."""
         self._slider_panel.led_intensity_slider.value = value
 
+    def get_gain_value(self) -> float:
+        """Get current gain slider value."""
+        return self._slider_panel.gain_slider.value
+
+    def get_exposure_value(self) -> float:
+        """Get current exposure slider value (microseconds)."""
+        return self._slider_panel.exposure_slider.value
+
+    def get_led_intensity_value(self) -> float:
+        """Get LED intensity slider value (0–100% PWM)."""
+        return self._slider_panel.led_intensity_slider.value
+
     def _render_sliders_on_graph(self, graph: np.ndarray) -> None:
         """Render sliders directly on the graph area."""
         # Sliders are positioned relative to the full window, but we render

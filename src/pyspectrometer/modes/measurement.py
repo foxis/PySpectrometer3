@@ -9,6 +9,8 @@ Features:
 - GPIO lamp control
 """
 
+import math
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -125,10 +127,32 @@ class MeasurementMode(BaseMode):
 
     def _on_save(self, ctx: ModeContext) -> None:
         """Handle save button."""
-        if ctx.last_data is not None:
-            ctx.save_snapshot(ctx.last_data)
-        else:
+        if ctx.last_data is None:
             print("[SAVE] No spectrum data available")
+            return
+        light_on = self.state.lamp_enabled
+        led_pct = ctx.display.get_led_intensity_value() if light_on else None
+        pwm_log = (
+            f"{math.log10(0.01 + led_pct / 100):.4f}"
+            if led_pct is not None and light_on
+            else None
+        )
+        metadata = {
+            "Mode": "Measurement",
+            "Date": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "Light source": "Lamp" if light_on else "off",
+            "PWM intensity %": f"{led_pct:.1f}" if led_pct is not None and light_on else None,
+            "PWM intensity log10": pwm_log,
+            "Gain": f"{ctx.camera.gain:.1f}",
+            "Exposure": f"{getattr(ctx.camera, 'exposure', 0)}",
+            "Note": "",
+        }
+        ctx.save_snapshot(
+            ctx.last_data,
+            dark_intensity=self.meas_state.dark_spectrum,
+            white_intensity=self.meas_state.white_spectrum,
+            metadata=metadata,
+        )
 
     def _on_cycle_load_as(self, ctx: ModeContext) -> None:
         """Cycle load target: overlay -> black -> white -> overlay."""
