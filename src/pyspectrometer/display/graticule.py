@@ -10,10 +10,9 @@ from ..core.calibration import GraticuleData
 if TYPE_CHECKING:
     from .viewport import Viewport
 
-# Tick colors: light gray for minor, gray for tens, black for labeled lines
+# Tick colors: light gray for minor, gray for major; both thin
 TICK_LIGHT_GRAY = (200, 200, 200)
 TICK_GRAY = (150, 150, 150)
-LABEL_LINE_BLACK = (0, 0, 0)
 
 # Overlap weights for tie-breaking (spectrum > graticule lines)
 WEIGHT_SPECTRUM = 5
@@ -64,13 +63,13 @@ class GraticuleRenderer:
             if not in_range(position):
                 continue
             screen_pos = to_screen(position)
-            cv2.line(graph, (screen_pos, 15), (screen_pos, height), TICK_LIGHT_GRAY, 2)
+            cv2.line(graph, (screen_pos, 15), (screen_pos, height), TICK_LIGHT_GRAY, 1)
 
         for pos, _ in graticule.fifties:
             if not in_range(pos):
                 continue
             screen_pos = to_screen(pos)
-            cv2.line(graph, (screen_pos, 15), (screen_pos, height), LABEL_LINE_BLACK, 2)
+            cv2.line(graph, (screen_pos, 15), (screen_pos, height), TICK_GRAY, 1)
 
     def render_labels_on_graph(
         self,

@@ -185,6 +185,8 @@ class BaseMode(ABC):
         ctx.display.set_gain_value(ctx.camera.gain)
         ctx.display.set_exposure_value(getattr(ctx.camera, "exposure", 10000))
         ctx.display.set_button_active("show_peaks", ctx.display.is_peaks_visible())
+        ctx.display.set_button_active("show_zoom_x_slider", ctx.display.is_zoom_x_slider_visible())
+        ctx.display.set_button_active("show_zoom_y_slider", ctx.display.is_zoom_y_slider_visible())
 
     def _on_toggle_hold(self) -> None:
         """Toggle peak hold."""

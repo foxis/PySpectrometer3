@@ -492,17 +492,6 @@ class DisplayManager:
 
         if self._slider_panel.any_visible():
             self._render_sliders_on_graph(graph)
-        zoom_visible = self._zoom_vertical.visible or self._zoom_horizontal.visible
-        any_dragging = (
-            self._zoom_vertical.dragging
-            or self._zoom_horizontal.dragging
-            or self._slider_panel.any_dragging()
-        )
-        if zoom_visible and not any_dragging:
-            elapsed = time.monotonic() - self._last_zoom_interaction_time
-            if elapsed > ZOOM_AUTO_HIDE_SECONDS:
-                self._zoom_vertical.visible = False
-                self._zoom_horizontal.visible = False
         if self._zoom_vertical.visible or self._zoom_horizontal.visible:
             self._render_zoom_sliders_on_graph(graph)
 
@@ -784,8 +773,9 @@ class DisplayManager:
     ) -> None:
         """Render peak labels near peaks with vertical lines, non-overlapping.
 
-        Labels choose left/right by: (1) fewest crossed vertical lines of other labels,
-        (2) least graph overlap. Above peak first, then below, then stagger.
+        Placement considers only: (1) other peak vertical lines, (2) graph overlap,
+        (3) other labels. No graticule or other elements. Chooses left/right by
+        fewest crossed peak lines, then least graph overlap.
         """
         height = graph.shape[0]
         width = graph.shape[1]
@@ -942,9 +932,9 @@ class DisplayManager:
                 cv2.LINE_AA,
             )
 
-        # Vertical lines through whole graph, drawn last (thickness 2 for visibility)
+        # Peak vertical lines: black
         for sx, label_x1, label_x2, box_y1, box_y2, peak, _ in placements:
-            cv2.line(graph, (sx, 0), (sx, height), (0, 0, 0), 2)
+            cv2.line(graph, (sx, 0), (sx, height), (0, 0, 0), 1)
 
     def _render_cursor(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render measurement cursor if active."""
