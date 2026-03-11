@@ -160,21 +160,17 @@ def _capture_loop(
     extractor: SpectrumExtractor | None = None
     if auto_gain or auto_exposure:
         extractor = SpectrumExtractor(
-            frame_width=config.camera.frame_width,
-            frame_height=config.camera.frame_height,
+            frame_width=width,
+            frame_height=height,
             method=ExtractionMethod.MEDIAN,
             rotation_angle=0.0,
             perpendicular_width=config.extraction.perpendicular_width,
-            spectrum_y_center=config.camera.frame_height // 2,
+            spectrum_y_center=height // 2,
         )
 
     camera.start()
     actual_w, actual_h = camera.width, camera.height
-    if extractor is not None and (
-        actual_w != config.camera.frame_width or actual_h != config.camera.frame_height
-    ):
-        config.camera.frame_width = actual_w
-        config.camera.frame_height = actual_h
+    if extractor is not None and (actual_w != width or actual_h != height):
         extractor.set_dimensions(actual_w, actual_h)
 
     max_val = float((1 << camera.bit_depth) - 1)

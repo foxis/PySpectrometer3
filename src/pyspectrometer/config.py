@@ -200,11 +200,13 @@ class Config:
         waveshare: bool = False,
         gain: float | None = None,
         width: int | None = None,
-        height: int | None = None,
         monochrome: bool = False,
         bit_depth: int = 10,
     ) -> "Config":
-        """Create or merge configuration from command-line arguments."""
+        """Create or merge configuration from command-line arguments.
+
+        Height is derived from width: 640->400, 1280->720 (OV9281 modes).
+        """
         config = base if base is not None else cls()
 
         config.display.fullscreen = fullscreen
@@ -214,8 +216,7 @@ class Config:
             config.camera.gain = gain
         if width is not None:
             config.camera.frame_width = width
-        if height is not None:
-            config.camera.frame_height = height
+            config.camera.frame_height = 400 if width == 640 else 720
 
         config.camera.monochrome = monochrome
         config.camera.bit_depth = bit_depth

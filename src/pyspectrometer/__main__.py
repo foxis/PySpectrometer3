@@ -91,17 +91,9 @@ Examples:
     parser.add_argument(
         "--width",
         type=int,
-        default=None,
+        default=1280,
         metavar="PIXELS",
-        help="Frame width in pixels (default: 1280)",
-    )
-
-    parser.add_argument(
-        "--height",
-        type=int,
-        default=None,
-        metavar="PIXELS",
-        help="Frame height in pixels (default: 720)",
+        help="Frame width in pixels (640 or 1280, default: 1280). Height derived from width.",
     )
 
     parser.add_argument(
@@ -257,7 +249,6 @@ def main() -> int:
         waveshare=args.waveshare,
         gain=args.gain,
         width=args.width,
-        height=args.height,
         monochrome=monochrome,
         bit_depth=args.bit_depth,
     )
