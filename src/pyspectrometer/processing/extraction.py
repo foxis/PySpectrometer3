@@ -360,17 +360,23 @@ class SpectrumExtractor:
                 thresh_bgr, "Thresholded", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2
             )
 
-            # Find contours and fit ellipses (on original frame coords, before rotation)
+            # Find contours and fit ellipses; keep only narrow vertical stripes
             thresh_u8 = strong_mask.astype(np.uint8) * 255
             contours, _ = cv2.findContours(thresh_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             ellipses: list[tuple] = []
             min_pts = 5
             min_axis = 5
+            # Slits are narrow vertical stripes: minor/major axis ratio must be small
+            max_axis_ratio = 0.4  # Keep only if min/max <= 0.4 (narrow vertical)
             for cnt in contours:
                 if len(cnt) >= min_pts:
                     try:
                         el = cv2.fitEllipse(cnt)
-                        if el[1][0] >= min_axis and el[1][1] >= min_axis:
+                        w, h = el[1][0], el[1][1]
+                        if w < min_axis or h < min_axis:
+                            continue
+                        minor, major = min(w, h), max(w, h)
+                        if minor / major <= max_axis_ratio:
                             ellipses.append(el)
                     except cv2.error:
                         pass
