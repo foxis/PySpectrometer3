@@ -194,6 +194,7 @@ class MeasurementMode(BaseMode):
             ButtonDefinition("ShowRef", "show_reference", is_toggle=True, row=2),
             ButtonDefinition("Norm", "normalize", is_toggle=True, row=2),
             ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=2),
+            ButtonDefinition("ClrPeak", "clear_peak_region", shortcut="z", row=2),
             ButtonDefinition("G", "show_gain_slider", is_toggle=True, row=2),
             ButtonDefinition("E", "show_exposure_slider", is_toggle=True, row=2),
             ButtonDefinition("AG", "auto_gain", is_toggle=True, row=2),

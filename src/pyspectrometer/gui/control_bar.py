@@ -344,6 +344,17 @@ class ControlBar:
                 return button
         return None
 
+    def handle_key(self, key_char: str) -> bool:
+        """Invoke button callback for shortcut. Returns True if handled."""
+        for bar in [self._row1, self._row2]:
+            if bar is None:
+                continue
+            button = bar.get_button_by_shortcut(key_char)
+            if button is not None and button.callback is not None:
+                button.callback()
+                return True
+        return False
+
     @property
     def height(self) -> int:
         """Get control bar height."""

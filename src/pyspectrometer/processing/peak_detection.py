@@ -135,6 +135,65 @@ def find_peak_indexes_scipy(
     return np.asarray(idx, dtype=np.intp)
 
 
+def detect_peaks_in_region(
+    intensity: np.ndarray,
+    wavelengths: np.ndarray,
+    center: int,
+    half_width: int,
+    *,
+    threshold: float = 0.2,
+    min_dist: int = 15,
+    prominence: float = 0.01,
+) -> list[Peak]:
+    """Find peaks in a region [center - half_width, center + half_width].
+
+    Uses same algorithm as PeakDetector. Returns list of Peak with global indices.
+
+    Args:
+        intensity: Full intensity array
+        wavelengths: Full wavelength array
+        center: Center index of region
+        half_width: Half-width of region in pixels
+        threshold: Min height as fraction of range (0-1)
+        min_dist: Min distance between peaks
+        prominence: Min prominence as fraction of range
+
+    Returns:
+        List of Peak objects with global indices
+    """
+    if not _SCIPY_AVAILABLE or intensity.size < 3:
+        return []
+
+    lo = max(0, center - half_width)
+    hi = min(len(intensity), center + half_width + 1)
+    if hi <= lo + 2:
+        return []
+
+    slice_intensity = intensity[lo:hi].astype(np.float64)
+    rng = float(np.max(slice_intensity) - np.min(slice_intensity))
+    if rng <= 0:
+        return []
+
+    height = float(np.min(slice_intensity) + threshold * rng)
+    prom = float(prominence * rng)
+
+    idx_local, _ = scipy_find_peaks(
+        slice_intensity,
+        height=height,
+        prominence=prom,
+        distance=max(1, int(min_dist)),
+    )
+    peaks = [
+        Peak(
+            index=int(lo + i),
+            wavelength=round(wavelengths[lo + i], 1),
+            intensity=float(intensity[lo + i]),
+        )
+        for i in idx_local
+    ]
+    return peaks
+
+
 class PeakDetector(ProcessorInterface):
     """Peak detection processor for spectrum data.
 

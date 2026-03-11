@@ -9,10 +9,10 @@ import numpy as np
 
 
 class SliderMode(Enum):
-    """Slider interaction mode."""
+    """Slider interaction mode (deprecated: all sliders use knob behavior)."""
 
-    ABSOLUTE = "absolute"  # Position maps directly to value
-    RELATIVE = "relative"  # First click = ref; drag delta changes value (works outside bounds)
+    ABSOLUTE = "absolute"
+    RELATIVE = "relative"  # Knob: click anywhere, drag by distance
 
 
 @dataclass
@@ -236,11 +236,9 @@ class VerticalSlider:
         was_hovered = self.hovered
         self.hovered = self.contains(px, py)
 
-        if self.dragging:
-            if self.mode == SliderMode.RELATIVE and self._ref_py is not None:
-                track_height = self.height - self.style.thumb_height
-                if track_height <= 0:
-                    return False
+        if self.dragging and self._ref_py is not None:
+            track_height = self.height - self.style.thumb_height
+            if track_height > 0:
                 delta_py = self._ref_py - py  # Up = positive
                 value_range = self.max_val - self.min_val
                 delta_val = (delta_py / track_height) * value_range
@@ -248,32 +246,25 @@ class VerticalSlider:
                     self.min_val,
                     min(self.max_val, (self._ref_value or self._value) + delta_val),
                 )
-            else:
-                new_val = self._position_to_value(py)
-            if new_val != self._value:
-                self._value = new_val
-                if self.on_change:
-                    self.on_change(self._value)
-                return True
+                if new_val != self._value:
+                    self._value = new_val
+                    self._ref_py = py
+                    self._ref_value = new_val
+                    if self.on_change:
+                        self.on_change(self._value)
+                    return True
 
         return self.hovered != was_hovered
 
     def handle_mouse_down(self, px: int, py: int) -> bool:
-        """Handle mouse down. Returns True if handled."""
+        """Handle mouse down. Returns True if handled. Click anywhere on track to start drag."""
         if not self.visible:
             return False
 
         if self.contains(px, py):
             self.dragging = True
-            if self.mode == SliderMode.RELATIVE:
-                self._ref_py = py
-                self._ref_value = self._value
-            else:
-                new_val = self._position_to_value(py)
-                if new_val != self._value:
-                    self._value = new_val
-                    if self.on_change:
-                        self.on_change(self._value)
+            self._ref_py = py
+            self._ref_value = self._value
             return True
 
         return False
@@ -528,8 +519,25 @@ class HorizontalSlider:
             -1,
         )
 
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        val_text = f"{self._value:.1f}"
+        (text_w, text_h), _ = cv2.getTextSize(
+            val_text, font, style.font_scale, style.font_thickness
+        )
+        text_x = thumb_x + (style.thumb_height - text_w) // 2
+        text_y = track_y - 2
+        cv2.putText(
+            image,
+            val_text,
+            (text_x, text_y),
+            font,
+            style.font_scale,
+            style.value_color,
+            style.font_thickness,
+            cv2.LINE_AA,
+        )
+
         if self.label:
-            font = cv2.FONT_HERSHEY_SIMPLEX
             cv2.putText(
                 image,
                 self.label,
@@ -549,11 +557,9 @@ class HorizontalSlider:
         was_hovered = self.hovered
         self.hovered = self.contains(px, py)
 
-        if self.dragging:
-            if self.mode == SliderMode.RELATIVE and self._ref_px is not None:
-                track_width = self.width - self.style.thumb_height
-                if track_width <= 0:
-                    return False
+        if self.dragging and self._ref_px is not None:
+            track_width = self.width - self.style.thumb_height
+            if track_width > 0:
                 delta_px = px - self._ref_px  # Right = positive
                 value_range = self.max_val - self.min_val
                 delta_val = (delta_px / track_width) * value_range
@@ -561,32 +567,25 @@ class HorizontalSlider:
                     self.min_val,
                     min(self.max_val, (self._ref_value or self._value) + delta_val),
                 )
-            else:
-                new_val = self._position_to_value(px)
-            if new_val != self._value:
-                self._value = new_val
-                if self.on_change:
-                    self.on_change(self._value)
-                return True
+                if new_val != self._value:
+                    self._value = new_val
+                    self._ref_px = px
+                    self._ref_value = new_val
+                    if self.on_change:
+                        self.on_change(self._value)
+                    return True
 
         return self.hovered != was_hovered
 
     def handle_mouse_down(self, px: int, py: int) -> bool:
-        """Handle mouse down. Returns True if handled."""
+        """Handle mouse down. Returns True if handled. Click anywhere on track to start drag."""
         if not self.visible:
             return False
 
         if self.contains(px, py):
             self.dragging = True
-            if self.mode == SliderMode.RELATIVE:
-                self._ref_px = px
-                self._ref_value = self._value
-            else:
-                new_val = self._position_to_value(px)
-                if new_val != self._value:
-                    self._value = new_val
-                    if self.on_change:
-                        self.on_change(self._value)
+            self._ref_px = px
+            self._ref_value = self._value
             return True
 
         return False

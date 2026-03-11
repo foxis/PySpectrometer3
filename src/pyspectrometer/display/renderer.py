@@ -10,7 +10,7 @@ import numpy as np
 
 from ..config import Config
 from ..core.calibration import Calibration
-from ..core.spectrum import SpectrumData
+from ..core.spectrum import Peak, SpectrumData
 from ..gui.control_bar import ControlBar, ControlBarConfig
 from ..gui.sliders import (
     HorizontalSlider,
@@ -39,6 +39,33 @@ ZOOM_HOTZONE = 12
 ZOOM_AUTO_HIDE_SECONDS = 1.0
 
 
+def _scale_to_fit(
+    img: np.ndarray,
+    target_width: int,
+    target_height: int,
+    bg_color: tuple[int, int, int] = (0, 0, 0),
+) -> np.ndarray:
+    """Scale image to fit within target area, maintaining aspect ratio. Letterbox/pillarbox as needed."""
+    if img.size == 0:
+        return np.zeros((target_height, target_width, 3), dtype=np.uint8)
+    src_h, src_w = img.shape[:2]
+    if src_w <= 0 or src_h <= 0:
+        return np.zeros((target_height, target_width, 3), dtype=np.uint8)
+    scale = min(target_width / src_w, target_height / src_h)
+    out_w = int(src_w * scale)
+    out_h = int(src_h * scale)
+    if out_w <= 0 or out_h <= 0:
+        return np.full((target_height, target_width, 3), bg_color, dtype=np.uint8)
+    scaled = cv2.resize(img, (out_w, out_h), interpolation=cv2.INTER_AREA)
+    if scaled.ndim == 2:
+        scaled = cv2.cvtColor(scaled, cv2.COLOR_GRAY2BGR)
+    out = np.full((target_height, target_width, 3), bg_color, dtype=np.uint8)
+    y0 = (target_height - out_h) // 2
+    x0 = (target_width - out_w) // 2
+    out[y0 : y0 + out_h, x0 : x0 + out_w] = scaled
+    return out
+
+
 @dataclass
 class CursorState:
     """State for cursor display."""
@@ -47,6 +74,10 @@ class CursorState:
     y: int = 0
     measure_mode: bool = False
     pixel_mode: bool = False
+
+
+# Max pixel movement to treat as click (not drag)
+_CLICK_DRAG_THRESHOLD = 5
 
 
 @dataclass
@@ -61,6 +92,8 @@ class DisplayState:
     reference_name: str = "None"
     spectrum_bars_visible: bool = False
     selected_spectrum_index: int | None = None
+    # Click-to-include: single (center_index, half_width) in data coordinates, or None
+    peak_include_region: tuple[int, int] | None = None
 
     def __post_init__(self):
         if self.cursor is None:
@@ -95,12 +128,16 @@ class DisplayManager:
         self.state = DisplayState()
         self.mode = mode
 
-        self._graticule = GraticuleRenderer()
+        self._graticule = GraticuleRenderer(
+            font=config.display.graph_label_font,
+            font_scale=config.display.graph_label_font_scale,
+        )
         self._waterfall: WaterfallDisplay | None = None
 
+        display_width = config.display.window_width
         if config.display.waterfall_enabled:
             self._waterfall = WaterfallDisplay(
-                width=config.camera.frame_width,
+                width=display_width,
                 height=config.display.graph_height,
                 contrast=config.waterfall.contrast,
                 brightness=config.waterfall.brightness,
@@ -109,7 +146,7 @@ class DisplayManager:
         self._mode_instance = mode_instance
         buttons = mode_instance.get_buttons() if mode_instance is not None else None
         self._control_bar = ControlBar(
-            width=config.camera.frame_width,
+            width=display_width,
             config=ControlBarConfig(
                 height=config.display.message_height,
                 font_scale=config.display.font_scale,
@@ -120,8 +157,7 @@ class DisplayManager:
         )
 
         # Slider panel for gain/exposure/LED (positioned on right side of graph area)
-        # Need room for three sliders: gain, exposure, LED intensity (~165 px total)
-        slider_x = config.camera.frame_width - 170
+        slider_x = display_width - 170
         slider_y = config.display.message_height + config.display.preview_height + 10
         slider_height = config.display.graph_height - 30
         self._slider_panel = SliderPanel(
@@ -139,13 +175,9 @@ class DisplayManager:
         self._on_autolevel_click: Callable[[], None] | None = None
 
         self._font = cv2.FONT_HERSHEY_SIMPLEX
+        self._graph_font = config.display.graph_label_font
+        self._graph_font_scale = config.display.graph_label_font_scale
         self._windows_created = False
-
-        # Canvas vs display scale (for mouse coord conversion when output is scaled)
-        self._canvas_width = 0
-        self._canvas_height = 0
-        self._display_width = 0
-        self._display_height = 0
 
         # Preview display mode: "full", "window", "none"
         self._preview_mode = "window"
@@ -159,7 +191,7 @@ class DisplayManager:
         # Zoom sliders (visible when user clicks on left/bottom edge, auto-hide after 1s)
         style = SliderStyle()
         self._zoom_vertical = VerticalSlider(
-            x=2,
+            x=0,
             y=config.display.message_height + config.display.preview_height + 20,
             height=config.display.graph_height - 50,
             min_val=1.0,
@@ -175,7 +207,7 @@ class DisplayManager:
             + config.display.preview_height
             + config.display.graph_height
             - 25,
-            width=config.camera.frame_width - 200,
+            width=display_width - 200,
             min_val=1.0,
             max_val=20.0,
             value=1.0,
@@ -207,12 +239,21 @@ class DisplayManager:
         self._pan_last_y = 0
         self._last_data_width = 0
 
+        # Click vs drag for peak-include regions
+        self._click_for_region = False
+        self._click_down_x = 0
+        self._click_down_y = 0
+
     def set_frame_dimensions(self, width: int, height: int) -> None:
-        """Update dimensions (e.g. after camera reports actual size)."""
-        self._control_bar.set_width(width)
+        """Update dimensions (e.g. after camera reports actual size).
+
+        Display stays at window_width. Only used for waterfall when enabled.
+        """
+        display_width = self.config.display.window_width
+        self._control_bar.set_width(display_width)
         if self._waterfall is not None:
-            self._waterfall.set_dimensions(width, self.config.display.graph_height)
-        self._slider_panel.x = width - 170
+            self._waterfall.set_dimensions(display_width, self.config.display.graph_height)
+        self._slider_panel.x = display_width - 170
 
     def setup_windows(self) -> None:
         """Create and configure OpenCV windows.
@@ -232,7 +273,7 @@ class DisplayManager:
         # We want NORMAL (no toolbar)
         WINDOW_GUI_NORMAL = getattr(cv2, "WINDOW_GUI_NORMAL", 0x00000010)
         win_w = self.config.display.window_width
-        win_h = self.config.display.window_height
+        win_h = self.config.display.stack_height
 
         if self.config.display.waterfall_enabled:
             cv2.namedWindow(title2, cv2.WINDOW_NORMAL | WINDOW_GUI_NORMAL)
@@ -278,22 +319,16 @@ class DisplayManager:
         """Set callback for click-to-dismiss on autolevel overlay."""
         self._on_autolevel_click = callback
 
-    def _window_to_canvas(self, x: int, y: int) -> tuple[int, int]:
-        """Convert window coords to canvas coords (when output is scaled)."""
-        if self._display_width <= 0 or self._display_height <= 0:
-            return x, y
-        cx = int(x * self._canvas_width / self._display_width)
-        cy = int(y * self._canvas_height / self._display_height)
-        return cx, cy
+    def clear_peak_include_region(self) -> None:
+        """Clear the click-to-include peak region."""
+        self.state.peak_include_region = None
 
     def _handle_mouse(self, event: int, x: int, y: int, flags: int, param) -> None:
-        """Handle mouse events on the spectrum window."""
-        x, y = self._window_to_canvas(x, y)
-
+        """Handle mouse events on the spectrum window (pixel-perfect, no scaling)."""
         control_bar_height = self.config.display.message_height
         preview_height = self.config.display.preview_height
         graph_height = self.config.display.graph_height
-        width = self.config.camera.frame_width
+        width = self.config.display.window_width
         mouse_y_offset = control_bar_height + preview_height
         graph_rel_y = y - mouse_y_offset
 
@@ -333,6 +368,7 @@ class DisplayManager:
 
         elif event == cv2.EVENT_LBUTTONDOWN:
             self._mouse_down = True
+            self._click_for_region = False
 
             if y < control_bar_height:
                 self._control_bar.handle_click(x, y)
@@ -362,8 +398,22 @@ class DisplayManager:
                     idx = int(round(data_x))
                     idx = max(0, min(self._last_data_width - 1, idx))
                     self.state.selected_spectrum_index = idx
+                else:
+                    self._click_for_region = True
+                    self._click_down_x = x
+                    self._click_down_y = y
 
         elif event == cv2.EVENT_LBUTTONUP:
+            if self._click_for_region and not self._panning:
+                dx = abs(x - self._click_down_x)
+                dy = abs(y - self._click_down_y)
+                if dx < _CLICK_DRAG_THRESHOLD and dy < _CLICK_DRAG_THRESHOLD:
+                    data_x = self._viewport.screen_x_to_data(x, width)
+                    idx = int(round(data_x))
+                    idx = max(0, min(self._last_data_width - 1, idx))
+                    half_width = self.config.processing.peak_include_region_half_width
+                    self.state.peak_include_region = (idx, half_width)
+            self._click_for_region = False
             self._mouse_down = False
             self._slider_panel.handle_mouse_up()
             if self._zoom_vertical.handle_mouse_up():
@@ -406,7 +456,7 @@ class DisplayManager:
             spectrum_y_center: Y coordinate of spectrum center (for full view indicator)
         """
         self._spectrum_y_center = spectrum_y_center
-        width = self.config.camera.frame_width
+        width = self.config.display.window_width
         graph_height = self.config.display.graph_height
         data_width = len(data.intensity)
         self._last_data_width = data_width
@@ -434,7 +484,7 @@ class DisplayManager:
             graticule = self._mode_instance.get_graticule(data)
         if graticule is None:
             graticule = self.calibration.graticule
-        self._graticule.render_on_graph(graph, graticule, self._viewport)
+        self._graticule.render_lines_on_graph(graph, graticule, self._viewport)
         self._graticule.render_horizontal_lines(graph)
 
         self._render_reference_spectrum(graph, data)
@@ -442,13 +492,33 @@ class DisplayManager:
         self._render_mode_overlay(graph)
         self._render_sensitivity_overlay(graph)
         self._render_peaks(graph, data)
+
+        # Labels drawn last so they stay visible; overlap-aware placement
+        spectrum_screen_y = self._build_spectrum_screen_y(data, graph_height, width)
+        peak_screen_x = [
+            self._viewport.data_x_to_screen(float(p.index), width)
+            for p in data.peaks
+            if self._viewport.x_start <= p.index <= self._viewport.x_end
+            and self._viewport.y_min <= p.intensity <= self._viewport.y_max
+        ]
+        self._graticule.render_labels_on_graph(
+            graph,
+            graticule,
+            self._viewport,
+            peak_screen_x=peak_screen_x,
+            spectrum_screen_y=spectrum_screen_y,
+        )
         self._render_cursor(graph, data)
 
         if self._slider_panel.any_visible():
             self._render_sliders_on_graph(graph)
         zoom_visible = self._zoom_vertical.visible or self._zoom_horizontal.visible
-        zoom_dragging = self._zoom_vertical.dragging or self._zoom_horizontal.dragging
-        if zoom_visible and not zoom_dragging:
+        any_dragging = (
+            self._zoom_vertical.dragging
+            or self._zoom_horizontal.dragging
+            or self._slider_panel.any_dragging()
+        )
+        if zoom_visible and not any_dragging:
             elapsed = time.monotonic() - self._last_zoom_interaction_time
             if elapsed > ZOOM_AUTO_HIDE_SECONDS:
                 self._zoom_vertical.visible = False
@@ -474,10 +544,10 @@ class DisplayManager:
         # Handle preview mode
         cropped = data.cropped_frame
 
-        # Ensure all arrays match (width, height) for vstack - camera may report different size than config
+        # Scale camera crop to fit preview area, maintaining aspect ratio
         if cropped is not None:
             if cropped.shape[1] != width or cropped.shape[0] != preview_height:
-                cropped = cv2.resize(cropped, (width, preview_height))
+                cropped = _scale_to_fit(cropped, width, preview_height)
         else:
             cropped = np.zeros([preview_height, width, 3], dtype=np.uint8)
 
@@ -518,22 +588,24 @@ class DisplayManager:
 
                     original_height = display.shape[0]
                     original_width = display.shape[1]
-
-                    # Scale to fill the area below control bar (preview + graph height)
                     camera_area_height = preview_height + graph_height
-                    display = cv2.resize(display, (width, camera_area_height))
 
-                    # Draw rotated crop box on the UNROTATED display
-                    # The crop box shows where extraction happens in the rotated space
+                    # Scale to fit maintaining aspect ratio, then draw crop box on scaled image
+                    scale = min(width / original_width, camera_area_height / original_height)
+                    out_w = int(original_width * scale)
+                    out_h = int(original_height * scale)
+                    scaled = cv2.resize(
+                        display, (out_w, out_h), interpolation=cv2.INTER_AREA
+                    )
                     self._draw_rotated_crop_box(
-                        display,
+                        scaled,
                         rotation_angle,
                         perp_width,
                         self._spectrum_y_center,
                         original_width,
                         original_height,
                     )
-                    # Draw status at bottom of camera view
+                    display = _scale_to_fit(scaled, width, camera_area_height)
                     self._draw_status_bar(display, status_segments)
 
                     spectrum_vertical = np.vstack((messages, display))
@@ -551,32 +623,15 @@ class DisplayManager:
             content_height = preview_height + graph_height
             img = self._autolevel_overlay
             if img.shape[1] != width or img.shape[0] != content_height:
-                img = cv2.resize(img, (width, content_height))
+                img = _scale_to_fit(img, width, content_height)
             autolevel_segments = status_segments + [
                 ("  [Click or 'a' to close]", (0, 255, 255))
             ]
             self._draw_status_bar(img, autolevel_segments)
             spectrum_vertical = np.vstack((messages, img))
 
-        # Scale to fit window when canvas exceeds display size (e.g. Waveshare 640)
-        win_w = self.config.display.window_width
-        win_h = self.config.display.window_height
-        canvas_h, canvas_w = spectrum_vertical.shape[:2]
-        self._canvas_width = canvas_w
-        self._canvas_height = canvas_h
-
-        if canvas_w > win_w or canvas_h > win_h:
-            display_img = cv2.resize(
-                spectrum_vertical, (win_w, win_h), interpolation=cv2.INTER_AREA
-            )
-            self._display_width = win_w
-            self._display_height = win_h
-        else:
-            display_img = spectrum_vertical
-            self._display_width = canvas_w
-            self._display_height = canvas_h
-
-        cv2.imshow(self.config.spectrograph_title, display_img)
+        # Pixel-perfect: canvas built at (window_width, stack_height), no scaling
+        cv2.imshow(self.config.spectrograph_title, spectrum_vertical)
 
         if self._waterfall is not None and self.config.display.waterfall_enabled:
             self._waterfall.update(data)
@@ -596,12 +651,6 @@ class DisplayManager:
                 y_offset=message_height + preview_height + 2,
             )
 
-            # Scale waterfall to fit window
-            wh, ww = waterfall_vertical.shape[:2]
-            if ww > win_w or wh > win_h:
-                waterfall_vertical = cv2.resize(
-                    waterfall_vertical, (win_w, win_h), interpolation=cv2.INTER_AREA
-                )
             cv2.imshow(self.config.waterfall_title, waterfall_vertical)
 
     def set_mode_overlay(
@@ -657,6 +706,27 @@ class DisplayManager:
             thickness=1,
             viewport=self._viewport,
         )
+
+    def _build_spectrum_screen_y(
+        self, data: SpectrumData, graph_height: int, width: int
+    ) -> np.ndarray:
+        """Build array of spectrum y per screen x for overlap-aware label placement."""
+        out = np.full(width, -1.0, dtype=np.float32)
+        n = len(data.intensity)
+        if n == 0:
+            return out
+        for x in range(width):
+            data_x = self._viewport.screen_x_to_data(x, width)
+            idx = int(round(data_x))
+            idx = max(0, min(n - 1, idx))
+            if idx < self._viewport.x_start or idx > self._viewport.x_end:
+                continue
+            intensity = data.intensity[idx]
+            if intensity < self._viewport.y_min or intensity > self._viewport.y_max:
+                continue
+            sy = self._viewport.intensity_to_screen_y(intensity, graph_height)
+            out[x] = float(sy)
+        return out
 
     def _render_reference_spectrum(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render the reference spectrum overlay line. Both measured and reference are 0-1."""
@@ -727,51 +797,144 @@ class DisplayManager:
                 cv2.polylines(graph, [np.array(pts, dtype=np.int32)], False, (0, 0, 0), 1, cv2.LINE_AA)
 
     def _render_peaks(self, graph: np.ndarray, data: SpectrumData) -> None:
-        """Render peak labels on the graph. Peak intensity is float 0-1."""
+        """Render peak labels near peaks with vertical lines, non-overlapping.
+
+        Labels are placed just above the peak (or below when single peak). Left/right
+        aligned with the vertical line. 2px gap between staggered labels. Vertical
+        line spans full graph height. Semi-transparent yellow background.
+        """
         height = graph.shape[0]
         width = graph.shape[1]
-        text_offset = 12
+        font = self._graph_font
+        font_scale = self._graph_font_scale
+        thickness = 1
+        padding = 2
+        label_gap = 2
+        label_alpha = 0.65
 
+        # Collect visible peaks with screen coords, sort left to right
+        visible: list[tuple[int, int, float, Peak]] = []
         for peak in data.peaks:
             if peak.index < self._viewport.x_start or peak.index > self._viewport.x_end:
                 continue
             if peak.intensity < self._viewport.y_min or peak.intensity > self._viewport.y_max:
                 continue
-
             sx = self._viewport.data_x_to_screen(float(peak.index), width)
-            label_height = self._viewport.intensity_to_screen_y(peak.intensity, height)
+            peak_y = self._viewport.intensity_to_screen_y(peak.intensity, height)
+            visible.append((sx, peak_y, peak.wavelength, peak))
+        visible.sort(key=lambda t: t[0])
 
-            cv2.rectangle(
-                graph,
-                (sx - text_offset - 2, label_height),
-                (sx - text_offset + 60, label_height - 15),
-                (0, 255, 255),
-                -1,
-            )
-            cv2.rectangle(
-                graph,
-                (sx - text_offset - 2, label_height),
-                (sx - text_offset + 60, label_height - 15),
-                (0, 0, 0),
-                1,
-            )
+        def obscures_peak(box_x1: int, box_x2: int, box_y1: int, box_y2: int) -> bool:
+            for osx, opeak_y, _, _ in visible:
+                if box_x1 <= osx <= box_x2 and box_y1 <= opeak_y <= box_y2:
+                    return True
+            return False
+
+        def overlaps_placement(
+            box_x1: int, box_x2: int, box_y1: int, box_y2: int,
+        ) -> bool:
+            for _, px1, px2, py1, py2, _, _ in placements:
+                if box_x2 <= px1 or box_x1 >= px2:
+                    continue
+                if box_y2 + label_gap <= py1 or box_y1 >= py2 + label_gap:
+                    continue
+                return True
+            return False
+
+        # Assign non-overlapping positions: above peak first, then below, then stagger
+        placements: list[tuple[int, int, int, int, int, Peak, bool]] = (
+            []
+        )  # (sx, x1, x2, y1, y2, peak, left_aligned)
+        single_peak = len(visible) == 1
+
+        for sx, peak_y, _, peak in visible:
+            label_text = f"{peak.wavelength:.0f}"
+            (text_w, text_h), _ = cv2.getTextSize(label_text, font, font_scale, thickness)
+            label_h = text_h + padding * 2
+            label_w = text_w + padding * 2
+
+            placed = False
+            for attempt in range(100):
+                for above_first in [True, False] if single_peak else [True]:
+                    if above_first:
+                        box_y2 = peak_y - label_gap
+                        box_y1 = box_y2 - label_h
+                    else:
+                        box_y1 = peak_y + label_gap
+                        box_y2 = box_y1 + label_h
+
+                    if attempt > 0:
+                        offset = attempt * (label_h + label_gap)
+                        if above_first:
+                            box_y2 = peak_y - label_gap - offset
+                            box_y1 = box_y2 - label_h
+                        else:
+                            box_y1 = peak_y + label_gap + offset
+                            box_y2 = box_y1 + label_h
+
+                    if box_y1 < 0 or box_y2 > height:
+                        continue
+
+                    for left_first in [True, False]:
+                        if left_first:
+                            x1, x2 = sx, sx + label_w
+                        else:
+                            x1, x2 = sx - label_w, sx
+
+                        if x1 < 0 or x2 > width:
+                            continue
+                        if obscures_peak(x1, x2, box_y1, box_y2):
+                            continue
+                        if overlaps_placement(x1, x2, box_y1, box_y2):
+                            continue
+
+                        placements.append((sx, x1, x2, box_y1, box_y2, peak, left_first))
+                        placed = True
+                        break
+                    if placed:
+                        break
+                if placed:
+                    break
+
+            if not placed:
+                box_y1 = max(0, min(peak_y - label_gap - label_h, height - label_h))
+                box_y2 = box_y1 + label_h
+                x1 = max(0, min(sx, width - label_w))
+                x2 = x1 + label_w
+                if x2 <= width and box_y2 <= height:
+                    placements.append((sx, x1, x2, box_y1, box_y2, peak, True))
+
+        # Draw: semi-transparent yellow background and text first, then vertical lines
+        for sx, label_x1, label_x2, box_y1, box_y2, peak, left_aligned in placements:
+            label_text = f"{peak.wavelength:.0f}"
+
+            # Semi-transparent yellow background (no border)
+            x1 = max(0, min(label_x1, width - 1))
+            x2 = max(0, min(label_x2, width))
+            if x1 < x2 and box_y1 < box_y2:
+                roi = graph[box_y1:box_y2, x1:x2]
+                overlay = roi.copy()
+                overlay[:] = (0, 255, 255)
+                cv2.addWeighted(overlay, label_alpha, roi, 1 - label_alpha, 0, roi)
+
+            # Text
+            (text_w, _), _ = cv2.getTextSize(label_text, font, font_scale, thickness)
+            text_x = label_x1 + padding if left_aligned else label_x2 - padding - text_w
+            text_x = max(0, min(text_x, width - text_w))
             cv2.putText(
                 graph,
-                f"{peak.wavelength}nm",
-                (sx - text_offset, label_height - 3),
-                self._font,
-                0.4,
+                label_text,
+                (text_x, box_y2 - padding - 2),
+                font,
+                font_scale,
                 (0, 0, 0),
-                1,
+                thickness,
                 cv2.LINE_AA,
             )
-            cv2.line(
-                graph,
-                (sx, label_height),
-                (sx, label_height + 10),
-                (0, 0, 0),
-                1,
-            )
+
+        # Vertical lines through whole graph, drawn last
+        for sx, label_x1, label_x2, box_y1, box_y2, peak, _ in placements:
+            cv2.line(graph, (sx, 0), (sx, height), (0, 0, 0), 1)
 
     def _render_cursor(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render measurement cursor if active."""
@@ -981,6 +1144,10 @@ class DisplayManager:
             True if button was found
         """
         return self._control_bar.set_button_active(action_name, active)
+
+    def handle_key(self, key_char: str) -> bool:
+        """Invoke button callback for shortcut. Returns True if handled."""
+        return self._control_bar.handle_key(key_char)
 
     def set_status(self, key: str, value: str) -> None:
         """Set a status value displayed in the control bar.

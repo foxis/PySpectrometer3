@@ -27,7 +27,7 @@ from .modes.raman import RamanMode
 from .processing.auto_controls import AutoExposureController, AutoGainController
 from .processing.extraction import ExtractionMethod, SpectrumExtractor
 from .processing.filters import SavitzkyGolayFilter
-from .processing.peak_detection import PeakDetector
+from .processing.peak_detection import PeakDetector, detect_peaks_in_region
 from .processing.pipeline import ProcessingPipeline
 from .utils.dialog import prompt_calibrate
 
@@ -223,6 +223,35 @@ class Spectrometer:
         )
         return self._pipeline.run(data)
 
+    def _expand_peaks_with_regions(self, processed: SpectrumData) -> SpectrumData:
+        """Add peaks from click-to-include region, merged with existing peaks."""
+        region = self._display.state.peak_include_region
+        if region is None:
+            return processed
+
+        intensity = processed.intensity.astype(np.float64)
+        threshold = self._peak_detector.threshold / 100.0
+        min_dist = self._peak_detector.min_distance
+
+        seen: set[int] = {p.index for p in processed.peaks}
+        merged = list(processed.peaks)
+
+        center, half_width = region
+        region_peaks = detect_peaks_in_region(
+            intensity,
+            processed.wavelengths,
+            center,
+            half_width,
+            threshold=threshold,
+            min_dist=min_dist,
+        )
+        for p in region_peaks:
+            if p.index not in seen:
+                seen.add(p.index)
+                merged.append(p)
+
+        return processed.with_peaks(merged)
+
     def _render_frame(self, processed: SpectrumData) -> None:
         """Render spectrum display."""
         self._display.render(
@@ -300,13 +329,16 @@ class Spectrometer:
                 intensity, cropped = self._process_intensity(frame)
                 processed = self._run_pipeline(frame, intensity, cropped)
                 processed = self._mode_instance.transform_spectrum_data(processed)
+                processed = self._expand_peaks_with_regions(processed)
                 self._ctx.last_data = processed
                 self._ctx.handle_auto_gain_exposure(processed)
                 self._mode_instance.update_display(
                     self._ctx, processed, self.config.display.graph_height
                 )
                 self._render_frame(processed)
-                cv2.waitKey(1)  # Process window events (including close) before checking
+                key = cv2.waitKey(1)
+                if key != -1:
+                    self._display.handle_key(chr(key & 0xFF))
                 self._check_window_closed()
         finally:
             self._camera.stop()

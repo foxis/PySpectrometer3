@@ -9,16 +9,17 @@ bit_depth = 10
 [display]
 fullscreen = false
 waterfall_enabled = false
-graph_height = 320
-preview_height = 80
-message_height = 80
-# Window size (canvas scaled to fit). 640x400 = Waveshare 640; use 1280x720 for desktop
+# Layout: graph + preview + message = stack_height. Pixel-perfect, no scaling.
+graph_height = 280
+preview_height = 60
+message_height = 60
 window_width = 640
-window_height = 400
-font_scale = 0.4
+font_scale = 0.35
 text_thickness = 1
-status_col1_x = 490
-status_col2_x = 800
+graph_label_font = 1
+graph_label_font_scale = 0.9
+status_col1_x = 340
+status_col2_x = 500
 
 [calibration]
 cal_pixels = [
@@ -52,9 +53,10 @@ default_wavelengths = [
 [processing]
 savgol_window = 17
 savgol_poly = 7
-peak_min_distance = 15
-peak_threshold = 20
+peak_min_distance = 5
+peak_threshold = 10
 peak_max_count = 10
+peak_include_region_half_width = 25
 pixel_rows_to_average = 3
 
 [export]

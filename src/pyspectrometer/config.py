@@ -88,9 +88,10 @@ def _config_to_dict(config: "Config") -> dict:
             "preview_height": config.display.preview_height,
             "message_height": config.display.message_height,
             "window_width": config.display.window_width,
-            "window_height": config.display.window_height,
             "font_scale": config.display.font_scale,
             "text_thickness": config.display.text_thickness,
+            "graph_label_font": config.display.graph_label_font,
+            "graph_label_font_scale": config.display.graph_label_font_scale,
             "status_col1_x": config.display.status_col1_x,
             "status_col2_x": config.display.status_col2_x,
         },
@@ -109,6 +110,7 @@ def _config_to_dict(config: "Config") -> dict:
             "peak_min_distance": config.processing.peak_min_distance,
             "peak_threshold": config.processing.peak_threshold,
             "peak_max_count": config.processing.peak_max_count,
+            "peak_include_region_half_width": config.processing.peak_include_region_half_width,
             "pixel_rows_to_average": config.processing.pixel_rows_to_average,
         },
         "export": {
@@ -200,27 +202,32 @@ class CameraConfig:
 
 @dataclass
 class DisplayConfig:
-    """Display-related configuration."""
+    """Display-related configuration.
+
+    Canvas is built at (window_width, stack_height) - pixel perfect, no scaling.
+    Default 640x400 for Waveshare 640 displays. Layout sums to stack_height.
+    """
 
     fullscreen: bool = False
     waterfall_enabled: bool = False
-    graph_height: int = 320
-    preview_height: int = 80
-    message_height: int = 80
+    graph_height: int = 280
+    preview_height: int = 60
+    message_height: int = 60
 
-    # Window size (canvas scaled to fit). Default 640x400 for Waveshare 640 displays.
+    # Canvas/window dimensions. No scaling - built at this size.
     window_width: int = 640
-    window_height: int = 400
 
-    # UI scaling for small displays
-    font_scale: float = 0.4
+    # Fonts: tuned for small displays (readable at 640px width)
+    font_scale: float = 0.35
     text_thickness: int = 1
-    status_col1_x: int = 490
-    status_col2_x: int = 800
+    graph_label_font: int = 1  # cv2.FONT_HERSHEY_PLAIN
+    graph_label_font_scale: float = 0.9
+    status_col1_x: int = 340
+    status_col2_x: int = 500
 
     @property
     def stack_height(self) -> int:
-        """Total height of the stacked display."""
+        """Total height of the stacked display (canvas height)."""
         return self.graph_height + self.preview_height + self.message_height
 
 
@@ -233,17 +240,20 @@ class ProcessingConfig:
     savgol_poly_min: int = 0
     savgol_poly_max: int = 15
 
-    peak_min_distance: int = 15  # Lower for sharp Hg lines (577/579 ~7 px apart)
+    peak_min_distance: int = 5  # Min pixels between peaks
     peak_min_distance_min: int = 1
     peak_min_distance_max: int = 100
 
-    peak_threshold: int = 20  # Min height as % of range (0-100). Peaks below are ignored.
+    peak_threshold: int = 10  # Min height as % of range (0-100). Peaks below are ignored.
     peak_threshold_min: int = 0
     peak_threshold_max: int = 100
 
     peak_max_count: int = 10  # Max peaks to display. All above threshold, sorted by size, top N shown.
     peak_max_count_min: int = 1
     peak_max_count_max: int = 50
+
+    # Click-to-include: half-width in data pixels for region around click
+    peak_include_region_half_width: int = 25
 
     pixel_rows_to_average: int = 3
 
@@ -359,29 +369,38 @@ class Config:
     def apply_waveshare_preset(self) -> None:
         """Apply settings optimized for Waveshare display (640x400).
 
-        Layout breakdown for 400px height:
-        - message_height: 60 (control bar with 2 rows of buttons)
-        - preview_height: 60 (camera preview window)
-        - graph_height: 280 (spectrum graph)
-        Total: 400px
+        Layout: message_height 60 + preview_height 60 + graph_height 280 = 400px.
         """
         self.camera.frame_width = 640
         self.camera.frame_height = 400
 
         self.display.window_width = 640
-        self.display.window_height = 400
         self.display.graph_height = 280
         self.display.preview_height = 60
         self.display.message_height = 60
 
         self.display.font_scale = 0.35
         self.display.text_thickness = 1
+        self.display.graph_label_font_scale = 0.9
         self.display.status_col1_x = 340
         self.display.status_col2_x = 500
 
         self.calibration.default_pixels = (0, 320, 640)
 
-        self.processing.peak_min_distance = 15  # Sharp Hg lines
+        self.processing.peak_min_distance = 5
+
+    def apply_desktop_preset(self) -> None:
+        """Apply settings for desktop/large displays (1280x720)."""
+        self.display.window_width = 1280
+        self.display.graph_height = 320
+        self.display.preview_height = 80
+        self.display.message_height = 80
+
+        self.display.font_scale = 0.4
+        self.display.text_thickness = 1
+        self.display.graph_label_font_scale = 1.0
+        self.display.status_col1_x = 490
+        self.display.status_col2_x = 800
 
     @classmethod
     def waveshare_35(cls) -> "Config":

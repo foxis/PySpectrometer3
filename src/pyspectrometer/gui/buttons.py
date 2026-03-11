@@ -295,6 +295,16 @@ class ButtonBar:
                 return button
         return None
 
+    def get_button_by_shortcut(self, key_char: str) -> Button | None:
+        """Get button by keyboard shortcut (case-insensitive)."""
+        if not key_char:
+            return None
+        lower = key_char.lower()
+        for button in self._buttons:
+            if button.shortcut and button.shortcut.lower() == lower:
+                return button
+        return None
+
     @property
     def buttons(self) -> list[Button]:
         """Get all buttons."""
