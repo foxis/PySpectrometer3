@@ -38,7 +38,7 @@ class CalibrationState:
     """State specific to calibration mode."""
 
     # Current reference source
-    current_source: ReferenceSource = ReferenceSource.HG
+    current_source: ReferenceSource = ReferenceSource.FL12
 
     # Overlay visibility
     overlay_visible: bool = True
@@ -112,10 +112,10 @@ class CalibrationMode(BaseMode):
         ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
 
     def on_start(self, ctx: ModeContext) -> None:
-        """Select Hg as default source and update source button states."""
-        self.select_source(ReferenceSource.HG)
+        """Select FL12 as default source and update source button states."""
+        self.select_source(ReferenceSource.FL12)
         for s in self.SOURCES:
-            ctx.display.set_button_active(f"source_{s.name.lower()}", s == ReferenceSource.HG)
+            ctx.display.set_button_active(f"source_{s.name.lower()}", s == ReferenceSource.FL12)
 
     def update_display(
         self,

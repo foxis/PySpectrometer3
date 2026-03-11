@@ -185,9 +185,13 @@ class Capture(CameraInterface):
         if not self._running or self._cap is None:
             raise RuntimeError("Camera is not running. Call start() first.")
 
-        ret, frame = self._cap.read()
-        if not ret or frame is None:
-            raise RuntimeError("Failed to read frame from camera")
+        max_retries = 5
+        for attempt in range(max_retries):
+            ret, frame = self._cap.read()
+            if ret and frame is not None:
+                break
+            if attempt == max_retries - 1:
+                raise RuntimeError("Failed to read frame from camera after 5 retries")
 
         # Convert to grayscale if color
         if frame.ndim == 3:
