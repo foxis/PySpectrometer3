@@ -74,25 +74,24 @@ Most of it is vibe coded — built iteratively with a focus on “does it work?�
 ## Quick Start
 
 ```bash
-# Install
+# Install (desktop)
 poetry install
-# or: pip install -e .
 
 # Run (default: Measurement mode)
-python -m pyspectrometer
+poetry run python -m pyspectrometer
 
 # Calibration mode
-python -m pyspectrometer --mode calibration
+poetry run python -m pyspectrometer --mode calibration
 
 # Raman with 785 nm laser
-python -m pyspectrometer --mode raman --laser 785
+poetry run python -m pyspectrometer --mode raman --laser 785
 
 # Use webcam instead of Pi camera
-python -m pyspectrometer --list-cameras   # List devices
-python -m pyspectrometer --camera 0       # Use device 0
+poetry run python -m pyspectrometer --list-cameras   # List devices
+poetry run python -m pyspectrometer --camera 0       # Use device 0
 
-# Waveshare 3.5" display
-python -m pyspectrometer --waveshare --mode measurement
+# Waveshare 3.5" display (on Pi)
+poetry run python -m pyspectrometer --waveshare --mode measurement
 ```
 
 ### Keyboard Shortcuts (common)
@@ -161,20 +160,17 @@ This section covers configuring Raspberry Pi OS **Trixie** (or Bookworm) for the
 
 ### Quick Setup (Makefile)
 
-From the project root on the Pi:
+From the project root on the Pi, run in order:
 
 ```bash
-make setup-pi
+make setup-packages       # System deps + poetry install
+make setup-partitions     # Separate writable /home (see below)
+make setup-safe-shutdown  # Logs to RAM, root/boot read-only
+make setup-display        # Waveshare + OV9281 overlays and config
+sudo reboot
 ```
 
-This will:
-
-1. Download the Waveshare 3.5" DPI LCD overlay files
-2. Copy overlays to `/boot/firmware/overlays/`
-3. Append display and camera config to `/boot/firmware/config.txt`
-4. Disable `camera_auto_detect` and `display_auto_detect`
-
-**Reboot** after running: `sudo reboot`
+**Partitions:** `setup-partitions` creates a writable `/home` partition. You need unallocated space first—boot from GParted, shrink root, create ext4 partition, then run the script. See `scripts/setup-partitions.sh` for details.
 
 ### Manual Setup
 
@@ -203,6 +199,16 @@ If you prefer to configure manually or the Makefile fails:
 ### Display Rotation (Trixie/Bookworm)
 
 Use **Screen Configuration** → Screen → DPI-1 → Orientation to rotate display and touch together. For headless/lite: add `video=DPI-1:640x480M@60,rotate=90` (or 180/270) at the start of `/boot/firmware/cmdline.txt`.
+
+### Safe Shutdown (Read-Only Root)
+
+For portable/field use, configure the Pi to survive unsafe power-off:
+
+- **Logs to RAM** — `/var/log` on tmpfs (no SD writes)
+- **Root and boot read-only** — No filesystem corruption on power loss
+- **Separate `/home`** — Application files and debugging live on a writable partition
+
+Run `make setup-partitions` first (creates `/home`), then `make setup-safe-shutdown`. Use `rw` to remount for system updates, `ro` when done.
 
 ### References
 
