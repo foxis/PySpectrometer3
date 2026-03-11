@@ -1,13 +1,13 @@
 # PySpectrometer3 Makefile for Raspberry Pi
 # Initial setup: packages, partitions, safe-shutdown, camera/display
-# Run: poetry run python -m pyspectrometer (for application)
+# Poetry venv in /home (writable). System packages (picamera2) from /usr via system-site-packages.
 
 # Raspberry Pi setup (Waveshare 3.5" DPI LCD + OV9281 camera)
 WAVESHARE_OVERLAY_URL := https://files.waveshare.com/wiki/3.5inch%20DPI%20LCD/3.5DPI-dtbo.zip
 WAVESHARE_OVERLAY_ZIP := .cache/waveshare-35dpi-dtbo.zip
 WAVESHARE_OVERLAY_DIR := .cache/waveshare-35dpi-dtbo
 
-.PHONY: all setup-packages setup-partitions setup-partitions-plan setup-safe-shutdown \
+.PHONY: all setup-packages setup-packages-recreate setup-partitions setup-partitions-plan setup-safe-shutdown \
         setup-display setup-performance setup-overlays setup-config help
 
 all: help
@@ -20,19 +20,29 @@ setup-packages:
 	sudo apt-get install -y \
 		python3-pip \
 		python3-venv \
-		python3-opencv \
-		python3-numpy \
-		python3-scipy \
-		python3-poetry \
 		libcamera-dev \
+		python3-libcamera \
 		python3-picamera2 \
 		curl \
 		unzip \
 		parted \
 		e2fsprogs
-	@echo "Installing Python dependencies via Poetry..."
+	@echo "Installing Poetry (official installer, apt version is too old for system-site-packages)..."
+	curl -sSL https://install.python-poetry.org | python3 -
+	@echo "Configuring Poetry: venv in project, system-site-packages..."
+	$${HOME}/.local/bin/poetry config virtualenvs.in-project true --local
+	$${HOME}/.local/bin/poetry config virtualenvs.options.system-site-packages true --local
+	@echo "Installing Python deps via Poetry..."
+	$${HOME}/.local/bin/poetry install --no-interaction
+	@echo "Packages complete. Add to PATH: export PATH=\"$$HOME/.local/bin:$$PATH\""
+
+setup-packages-recreate:
+	@echo "Recreate venv with Poetry..."
+	poetry config virtualenvs.in-project true --local
+	poetry config virtualenvs.options.system-site-packages true --local
+	poetry env remove --all 2>/dev/null || true
 	poetry install --no-interaction
-	@echo "Packages complete."
+	@echo "Done. Run: poetry run calibrate"
 
 setup-partitions:
 	@echo "Resizing SD partitions (run when booted from USB)..."
@@ -108,7 +118,8 @@ help:
 	@echo "PySpectrometer3 - Raspberry Pi Setup"
 	@echo ""
 	@echo "Setup order (run on Pi):"
-	@echo "  1. make setup-packages      - System deps + poetry install"
+	@echo "  1. make setup-packages      - apt + poetry (venv in /home, reads picamera2 from /usr)"
+	@echo "     make setup-packages-recreate - If Picamera2 fails: recreate venv"
 	@echo "  2. make setup-partitions     - Resize SD when booted from USB (no GParted)"
 	@echo "  3. make setup-safe-shutdown - Logs to RAM, root/boot read-only"
 	@echo "  4. make setup-display       - Waveshare 3.5\" + OV9281 camera"
@@ -116,5 +127,5 @@ help:
 	@echo ""
 	@echo "Then: sudo reboot"
 	@echo ""
-	@echo "Run application: poetry run python -m pyspectrometer --waveshare --mode measurement"
+	@echo "Run: poetry run python -m pyspectrometer --waveshare --mode measurement"
 	@echo ""

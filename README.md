@@ -90,8 +90,8 @@ poetry run python -m pyspectrometer --mode raman --laser 785
 poetry run python -m pyspectrometer --list-cameras   # List devices
 poetry run python -m pyspectrometer --camera 0       # Use device 0
 
-# Waveshare 3.5" display (on Pi)
-poetry run python -m pyspectrometer --waveshare --mode measurement
+# On Raspberry Pi (after make setup-packages): use system Python
+python3 -m pyspectrometer --waveshare --mode measurement
 ```
 
 ### Keyboard Shortcuts (common)
@@ -163,7 +163,7 @@ This section covers configuring Raspberry Pi OS **Trixie** (or Bookworm) for the
 From the project root on the Pi, run in order:
 
 ```bash
-make setup-packages       # System deps + poetry install
+make setup-packages       # apt + poetry (venv in .venv, reads picamera2 from /usr)
 make setup-partitions     # Separate writable /home (see below)
 make setup-safe-shutdown  # Logs to RAM, root/boot read-only
 make setup-display        # Waveshare + OV9281 overlays and config
@@ -221,12 +221,9 @@ Run `make setup-partitions` first (creates `/home`), then `make setup-safe-shutd
 
 - Python ≥ 3.11
 - NumPy, OpenCV, SciPy, colour-science
-- Picamera2 (Raspberry Pi only)
+- Picamera2 (Raspberry Pi only — via apt)
 
-```bash
-# Raspberry Pi system deps
-sudo apt-get install python3-opencv python3-numpy libcamera-dev python3-picamera2
-```
+**Raspberry Pi:** Poetry venv in project (`.venv` in /home). Apt provides picamera2/libcamera in /usr (read-only root). Venv uses system-site-packages to see them.
 
 ---
 
