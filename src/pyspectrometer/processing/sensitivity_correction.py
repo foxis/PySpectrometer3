@@ -38,8 +38,7 @@ class SensitivityCorrection:
                 break
         if csv_path is None:
             print(
-                f"[Calibration] Sensitivity file not found "
-                f"(tried: {[str(p) for p in candidates]})"
+                f"[Calibration] Sensitivity file not found (tried: {[str(p) for p in candidates]})"
             )
             return
 

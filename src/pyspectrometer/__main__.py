@@ -185,9 +185,9 @@ def main() -> int:
     """Main entry point for PySpectrometer 3."""
     args = parse_args()
 
-    from .config import default_config_path, load_config
-
     from pathlib import Path
+
+    from .config import load_config
 
     config_path = Path(args.config) if args.config else None
     if args.show_config:

@@ -1,9 +1,10 @@
 """Configuration management for PySpectrometer3."""
 
 import os
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import tomllib
 
 
 def config_search_paths(explicit: Path | None = None) -> list[Path]:

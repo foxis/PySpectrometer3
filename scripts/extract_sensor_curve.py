@@ -49,7 +49,7 @@ def load_image(path: Path) -> np.ndarray:
 
 def _sample_legend_color(img: np.ndarray, swatch: LegendSwatch) -> np.ndarray:
     """Sample dominant non-background color from legend swatch region. Returns BGR."""
-    region = img[swatch.y0:swatch.y1, swatch.x0:swatch.x1]
+    region = img[swatch.y0 : swatch.y1, swatch.x0 : swatch.x1]
     if region.size == 0:
         return np.array([0, 0, 0], dtype=np.float64)
     # Exclude dark background (grid/axis)
@@ -152,9 +152,7 @@ def extract_curves_by_color(
         col = np.clip(col, 0, w - 1)
 
         for name in SENSOR_NAMES:
-            val = _find_curve_value_in_column(
-                img, col, y0, y1, ref_colors[name], match_thresh
-            )
+            val = _find_curve_value_in_column(img, col, y0, y1, ref_colors[name], match_thresh)
             if val is not None:
                 curves[name].append((float(wl), float(val)))
 
@@ -183,7 +181,8 @@ def main() -> int:
         help="Path to mipi_sensors_spectral_curve.png",
     )
     parser.add_argument(
-        "-o", "--output-dir",
+        "-o",
+        "--output-dir",
         default=None,
         help="Output directory for CSVs (default: data/sensor_sensitivity)",
     )
@@ -201,11 +200,7 @@ def main() -> int:
         if args.image
         else base / "data" / "sensor_sensitivity" / "mipi_sensors_spectral_curve.png"
     )
-    out_dir = (
-        Path(args.output_dir)
-        if args.output_dir
-        else base / "data" / "sensor_sensitivity"
-    )
+    out_dir = Path(args.output_dir) if args.output_dir else base / "data" / "sensor_sensitivity"
 
     if not img_path.exists():
         print(f"Image not found: {img_path}", file=sys.stderr)

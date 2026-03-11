@@ -69,11 +69,15 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
     def _serve_index(self) -> None:
         port = self.server.stream_port
         content = (
-            "<html><head><title>PySpectrometer3 Stream</title></head>"
-            "<body><h1>MJPEG Stream</h1>"
-            "<p><code>cv2.VideoCapture(\"http://&lt;this-ip&gt;:{port}/stream.mjpg\")</code></p>"
-            "<img src=\"/stream.mjpg\" width=\"800\" /></body></html>"
-        ).format(port=port).encode("utf-8")
+            (
+                "<html><head><title>PySpectrometer3 Stream</title></head>"
+                "<body><h1>MJPEG Stream</h1>"
+                f'<p><code>cv2.VideoCapture("http://&lt;this-ip&gt;:{port}/stream.mjpg")</code></p>'
+                '<img src="/stream.mjpg" width="800" /></body></html>'
+            )
+
+            .encode()
+        )
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
         self.send_header("Content-Length", len(content))
@@ -164,7 +168,9 @@ def _capture_loop(
 
     camera.start()
     actual_w, actual_h = camera.width, camera.height
-    if extractor is not None and (actual_w != config.camera.frame_width or actual_h != config.camera.frame_height):
+    if extractor is not None and (
+        actual_w != config.camera.frame_width or actual_h != config.camera.frame_height
+    ):
         config.camera.frame_width = actual_w
         config.camera.frame_height = actual_h
         extractor.set_dimensions(actual_w, actual_h)
@@ -227,11 +233,14 @@ def main() -> int:
 
     if args.camera is not None:
         logger.warning("--camera ignored. Stream is Pi-only (Picamera2).")
-        logger.info("Connect from desktop: python -m pyspectrometer --camera http://<Pi-IP>:%d/stream.mjpg", args.port)
+        logger.info(
+            "Connect from desktop: python -m pyspectrometer --camera http://<Pi-IP>:%d/stream.mjpg",
+            args.port,
+        )
 
     try:
         from picamera2 import Picamera2  # noqa: F401
-    except ImportError as e:
+    except ImportError:
         logger.error("Picamera2 not found. Run this script on Raspberry Pi.")
         return 1
 
@@ -261,7 +270,9 @@ def main() -> int:
 
     addr = _lan_ip()
     logger.info("MJPEG stream: http://%s:%d/stream.mjpg", addr, args.port)
-    logger.info("Connect: python -m pyspectrometer --camera http://%s:%d/stream.mjpg", addr, args.port)
+    logger.info(
+        "Connect: python -m pyspectrometer --camera http://%s:%d/stream.mjpg", addr, args.port
+    )
     server_instance.serve_forever()
     return 0
 

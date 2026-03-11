@@ -139,7 +139,10 @@ class Spectrometer:
         """
         actual_width = self._camera.width
         actual_height = self._camera.height
-        if actual_width == self.config.camera.frame_width and actual_height == self.config.camera.frame_height:
+        if (
+            actual_width == self.config.camera.frame_width
+            and actual_height == self.config.camera.frame_height
+        ):
             return
 
         self.config.camera.frame_width = actual_width
@@ -311,7 +314,9 @@ class Spectrometer:
                 )
                 self._render_frame(processed)
                 self._check_window_closed()
-                cv2.waitKey(1)  # Required: process window events, throttle loop, allow display refresh
+                cv2.waitKey(
+                    1
+                )  # Required: process window events, throttle loop, allow display refresh
         finally:
             self._camera.stop()
             self._display.destroy()

@@ -157,10 +157,7 @@ class Capture(CameraInterface):
         Among modes meeting bit_depth, prefers the one closest to (width, height).
         Ties broken by preferring higher resolution (more pixels). No hardcoded sizes.
         """
-        candidates = [
-            m for m in sensor_modes
-            if m.get("bit_depth", 8) >= self._bit_depth
-        ]
+        candidates = [m for m in sensor_modes if m.get("bit_depth", 8) >= self._bit_depth]
         if not candidates:
             return None
 
