@@ -170,8 +170,9 @@ def _capture_loop(
 
     camera.start()
     actual_w, actual_h = camera.width, camera.height
-    if extractor is not None and (actual_w != width or actual_h != height):
+    if extractor is not None:
         extractor.set_dimensions(actual_w, actual_h)
+        extractor.set_spectrum_y_center(actual_h // 2)
 
     max_val = float((1 << camera.bit_depth) - 1)
 
