@@ -170,7 +170,7 @@ make setup-display        # Waveshare + OV9281 overlays and config
 sudo reboot
 ```
 
-**Partitions:** `setup-partitions` creates a writable `/home` partition. You need unallocated space first—boot from GParted, shrink root, create ext4 partition, then run the script. See `scripts/setup-partitions.sh` for details.
+**Partitions:** Root = used + 4GB (+ 256MB buffer), home = remainder. Boot from USB, run `make setup-partitions` (no GParted—all from command line). No swap (bad for SD wear). Logs use tmpfs (RAM).
 
 ### Manual Setup
 

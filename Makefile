@@ -7,8 +7,8 @@ WAVESHARE_OVERLAY_URL := https://files.waveshare.com/wiki/3.5inch%20DPI%20LCD/3.
 WAVESHARE_OVERLAY_ZIP := .cache/waveshare-35dpi-dtbo.zip
 WAVESHARE_OVERLAY_DIR := .cache/waveshare-35dpi-dtbo
 
-.PHONY: all setup-packages setup-partitions setup-safe-shutdown setup-display \
-        setup-performance setup-overlays setup-config help
+.PHONY: all setup-packages setup-partitions setup-partitions-plan setup-safe-shutdown \
+        setup-display setup-performance setup-overlays setup-config help
 
 all: help
 
@@ -27,13 +27,20 @@ setup-packages:
 		libcamera-dev \
 		python3-picamera2 \
 		curl \
-		unzip
+		unzip \
+		parted \
+		e2fsprogs
 	@echo "Installing Python dependencies via Poetry..."
 	poetry install --no-interaction
 	@echo "Packages complete."
 
 setup-partitions:
-	@echo "Setting up separate /home partition..."
+	@echo "Resizing SD partitions (run when booted from USB)..."
+	@chmod +x scripts/setup-partitions-resize.sh
+	sudo ./scripts/setup-partitions-resize.sh
+
+setup-partitions-migrate:
+	@echo "Migrate /home (run when booted from SD, after manual resize)..."
 	@chmod +x scripts/setup-partitions.sh
 	./scripts/setup-partitions.sh
 
@@ -102,7 +109,7 @@ help:
 	@echo ""
 	@echo "Setup order (run on Pi):"
 	@echo "  1. make setup-packages      - System deps + poetry install"
-	@echo "  2. make setup-partitions     - Separate writable /home partition"
+	@echo "  2. make setup-partitions     - Resize SD when booted from USB (no GParted)"
 	@echo "  3. make setup-safe-shutdown - Logs to RAM, root/boot read-only"
 	@echo "  4. make setup-display       - Waveshare 3.5\" + OV9281 camera"
 	@echo "  5. make setup-performance   - CPU governor, overclock, disable Bluetooth/avahi (WiFi kept)"

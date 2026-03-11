@@ -1,28 +1,66 @@
 #!/bin/bash
 # Create separate writable /home partition. Root and boot will be read-only.
-# Prerequisite: You must have unallocated space or shrink root first.
 #
-# Option A - Fresh install: Use Raspberry Pi Imager "Customize" to create 3 partitions
-#   (boot, root, home) before first boot.
+# Layout: root = used + 4GB (+ 256MB buffer), home = remainder
+# No swap partition (swap on SD causes wear; we disable swap in setup-safe-shutdown)
+# Logs/temp: tmpfs in RAM (setup-safe-shutdown), not on disk
 #
-# Option B - Existing install: Boot from GParted (or another Linux live USB),
-#   shrink root partition, create new ext4 partition for /home, reboot.
-#   Then run this script.
-#
-# This script: formats the home partition (if new), adds fstab entry, migrates /home.
+# Run with --plan to get sizes, then use GParted to resize. Run without --plan
+# after creating the home partition to migrate.
 
 set -e
 
-# Detect home partition - typically mmcblk0p3 if you created it after root (p2)
+ROOT_BUFFER_MB=256
+ROOT_EXTRA_GB=4
+
+plan() {
+    echo "=== Partition plan (root = used + ${ROOT_EXTRA_GB}GB + ${ROOT_BUFFER_MB}MB buffer) ==="
+    echo ""
+
+    ROOT_DEV=$(findmnt -n -o SOURCE / 2>/dev/null | head -1)
+    [ -n "$ROOT_DEV" ] || { echo "Could not find root device"; exit 1; }
+
+    USED_KB=$(df -B1K / | tail -1 | awk '{print $3}')
+    TOTAL_KB=$(df -B1K / | tail -1 | awk '{print $2}')
+    # root = used + 4GB + 256MB buffer
+    ROOT_SIZE_KB=$((USED_KB + ROOT_EXTRA_GB * 1024 * 1024 + ROOT_BUFFER_MB * 1024))
+    ROOT_SIZE_MB=$((ROOT_SIZE_KB / 1024))
+    HOME_SIZE_KB=$((TOTAL_KB - ROOT_SIZE_KB))
+    HOME_SIZE_MB=$((HOME_SIZE_KB / 1024))
+    USED_GB=$((USED_KB / 1024 / 1024))
+    TOTAL_GB=$((TOTAL_KB / 1024 / 1024))
+
+    echo "Root device: $ROOT_DEV"
+    echo "Root used:   ${USED_GB} GB"
+    echo "Card total:  ${TOTAL_GB} GB"
+    echo ""
+    echo "Target sizes:"
+    echo "  Root: ${ROOT_SIZE_MB} MB (used + ${ROOT_EXTRA_GB}GB + ${ROOT_BUFFER_MB}MB buffer)"
+    echo "  Home: ${HOME_SIZE_MB} MB (remainder)"
+    echo ""
+    echo "Steps:"
+    echo "  1. Boot from GParted (e.g. Raspberry Pi Imager → Other → GParted)"
+    echo "  2. Shrink root partition to ${ROOT_SIZE_MB} MB"
+    echo "  3. Create new ext4 partition in freed space (label: home)"
+    echo "  4. Reboot into Raspberry Pi OS"
+    echo "  5. Run: make setup-partitions"
+    echo ""
+    echo "Note: No swap partition (bad for SD wear). Logs use tmpfs (RAM) via setup-safe-shutdown."
+    exit 0
+}
+
+[ "$1" = "--plan" ] && plan
+
+# --- Migration (run after creating home partition) ---
+
+# Detect home partition - mmcblk0p3 or sda1
 HOME_PART=""
 for p in /dev/mmcblk0p3 /dev/sda1; do
     if [ -b "$p" ]; then
-        # Check if already mounted at /home
         if findmnt -n "$p" 2>/dev/null | grep -q /home; then
             echo "/home is already a separate partition ($p). Nothing to do."
             exit 0
         fi
-        # Check if not mounted (candidate for home)
         if ! findmnt -n "$p" 2>/dev/null; then
             HOME_PART="$p"
             break
@@ -33,14 +71,8 @@ done
 if [ -z "$HOME_PART" ]; then
     echo "No unallocated home partition found."
     echo ""
-    echo "To create a separate /home partition:"
-    echo "  1. Boot from GParted (or Raspberry Pi Imager with GParted)"
-    echo "  2. Shrink the root partition (ext4) to free space at the end"
-    echo "  3. Create new ext4 partition in the freed space (e.g. /dev/mmcblk0p3)"
-    echo "  4. Reboot into Raspberry Pi OS"
-    echo "  5. Run this script again"
-    echo ""
-    echo "Or use Raspberry Pi Imager 'Customize' to set 3-partition layout before first boot."
+    echo "Run with --plan first: ./scripts/setup-partitions.sh --plan"
+    echo "Then use GParted to shrink root and create home partition."
     exit 1
 fi
 
