@@ -29,18 +29,20 @@ setup-packages:
 		e2fsprogs
 	@echo "Installing Poetry (official installer, apt version is too old for system-site-packages)..."
 	curl -sSL https://install.python-poetry.org | python3 -
-	@echo "Configuring Poetry: venv in project, system-site-packages..."
+	@echo "Creating venv with system-site-packages (Poetry config unreliable)..."
 	$${HOME}/.local/bin/poetry config virtualenvs.in-project true --local
-	$${HOME}/.local/bin/poetry config virtualenvs.options.system-site-packages true --local
+	rm -rf .venv
+	python3 -m venv .venv --system-site-packages
 	@echo "Installing Python deps via Poetry..."
 	$${HOME}/.local/bin/poetry install --no-interaction
 	@echo "Packages complete. Add to PATH: export PATH=\"$$HOME/.local/bin:$$PATH\""
 
 setup-packages-recreate:
-	@echo "Recreate venv with Poetry..."
+	@echo "Recreate venv with system-site-packages..."
 	poetry config virtualenvs.in-project true --local
-	poetry config virtualenvs.options.system-site-packages true --local
 	poetry env remove --all 2>/dev/null || true
+	rm -rf .venv
+	python3 -m venv .venv --system-site-packages
 	poetry install --no-interaction
 	@echo "Done. Run: poetry run calibrate"
 
