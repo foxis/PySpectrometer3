@@ -1,6 +1,6 @@
 # PySpectrometer3 Makefile for Raspberry Pi
 # Initial setup: packages, partitions, safe-shutdown, camera/display
-# Poetry venv in /home (writable). System packages (picamera2) from /usr via system-site-packages.
+# Poetry installs picamera2 + rpi-libcamera from PyPI. Apt: libcamera-dev only.
 
 # Raspberry Pi setup (Waveshare 3.5" DPI LCD + OV9281 camera)
 WAVESHARE_OVERLAY_URL := https://files.waveshare.com/wiki/3.5inch%20DPI%20LCD/3.5DPI-dtbo.zip
@@ -21,28 +21,23 @@ setup-packages:
 		python3-pip \
 		python3-venv \
 		libcamera-dev \
-		python3-libcamera \
-		python3-picamera2 \
+		meson \
+		ninja-build \
 		curl \
 		unzip \
 		parted \
 		e2fsprogs
-	@echo "Installing Poetry (official installer, apt version is too old for system-site-packages)..."
+	@echo "Installing Poetry (official installer)..."
 	curl -sSL https://install.python-poetry.org | python3 -
-	@echo "Creating venv with system-site-packages (Poetry config unreliable)..."
+	@echo "Installing Python deps via Poetry (picamera2, rpi-libcamera from PyPI)..."
 	$${HOME}/.local/bin/poetry config virtualenvs.in-project true --local
-	rm -rf .venv
-	python3 -m venv .venv --system-site-packages
-	@echo "Installing Python deps via Poetry..."
 	$${HOME}/.local/bin/poetry install --no-interaction
 	@echo "Packages complete. Add to PATH: export PATH=\"$$HOME/.local/bin:$$PATH\""
 
 setup-packages-recreate:
-	@echo "Recreate venv with system-site-packages..."
+	@echo "Recreate venv..."
 	poetry config virtualenvs.in-project true --local
 	poetry env remove --all 2>/dev/null || true
-	rm -rf .venv
-	python3 -m venv .venv --system-site-packages
 	poetry install --no-interaction
 	@echo "Done. Run: poetry run calibrate"
 
@@ -120,7 +115,7 @@ help:
 	@echo "PySpectrometer3 - Raspberry Pi Setup"
 	@echo ""
 	@echo "Setup order (run on Pi):"
-	@echo "  1. make setup-packages      - apt + poetry (venv in /home, reads picamera2 from /usr)"
+	@echo "  1. make setup-packages      - apt (libcamera-dev) + poetry (picamera2, rpi-libcamera)"
 	@echo "     make setup-packages-recreate - If Picamera2 fails: recreate venv"
 	@echo "  2. make setup-partitions     - Resize SD when booted from USB (no GParted)"
 	@echo "  3. make setup-safe-shutdown - Logs to RAM, root/boot read-only"

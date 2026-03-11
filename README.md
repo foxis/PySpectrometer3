@@ -163,7 +163,7 @@ This section covers configuring Raspberry Pi OS **Trixie** (or Bookworm) for the
 From the project root on the Pi, run in order:
 
 ```bash
-make setup-packages       # apt + poetry (venv in .venv, reads picamera2 from /usr)
+make setup-packages       # apt (libcamera-dev) + poetry (picamera2, rpi-libcamera)
 make setup-partitions     # Separate writable /home (see below)
 make setup-safe-shutdown  # Logs to RAM, root/boot read-only
 make setup-display        # Waveshare + OV9281 overlays and config
@@ -223,7 +223,7 @@ Run `make setup-partitions` first (creates `/home`), then `make setup-safe-shutd
 - NumPy, OpenCV, SciPy, colour-science
 - Picamera2 (Raspberry Pi only — via apt)
 
-**Raspberry Pi:** Poetry venv in project (`.venv` in /home). Apt provides picamera2/libcamera in /usr (read-only root). Venv uses system-site-packages to see them.
+**Raspberry Pi:** Poetry installs picamera2 and rpi-libcamera from PyPI. Apt: libcamera-dev only (C library).
 
 ---
 
