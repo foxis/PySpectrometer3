@@ -156,12 +156,15 @@ class CalibrationMode(BaseMode):
         ctx.display.set_button_active(
             "show_exposure_slider", ctx.display.is_exposure_slider_visible()
         )
+        ctx.display.set_button_active("show_zoom_x_slider", ctx.display.is_zoom_x_slider_visible())
+        ctx.display.set_button_active("show_zoom_y_slider", ctx.display.is_zoom_y_slider_visible())
         ctx.display.set_button_active("auto_gain", ctx.auto_gain_enabled)
         ctx.display.set_button_active("auto_exposure", ctx.auto_exposure_enabled)
         ctx.display.set_button_active(
             "toggle_sensitivity", self.cal_state.sensitivity_correction_enabled
         )
         ctx.display.set_button_active("toggle_overlay", self.cal_state.overlay_visible)
+        ctx.display.set_button_active("show_peaks", ctx.display.is_peaks_visible())
         ctx.display.set_button_active("show_spectrum_bars", ctx.display.is_spectrum_bars_visible())
         ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
 
@@ -339,6 +342,7 @@ class CalibrationMode(BaseMode):
             ButtonDefinition("LED2", "source_led2", is_toggle=True, row=1),
             ButtonDefinition("LED3", "source_led3", is_toggle=True, row=1),
             ButtonDefinition("Overlay", "toggle_overlay", is_toggle=True, row=1),
+            ButtonDefinition("Peaks", "show_peaks", is_toggle=True, row=1),
             ButtonDefinition("__spacer__", "__spacer_left__", row=1),
             ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=1),
             ButtonDefinition("CORR", "correct_sensitivity", row=1),
@@ -351,6 +355,8 @@ class CalibrationMode(BaseMode):
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=2),
             ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=2),
             ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=2),
+            ButtonDefinition("ZX", "show_zoom_x_slider", is_toggle=True, row=2),
+            ButtonDefinition("ZY", "show_zoom_y_slider", is_toggle=True, row=2),
             ButtonDefinition("G", "show_gain_slider", is_toggle=True, row=2),
             ButtonDefinition("E", "show_exposure_slider", is_toggle=True, row=2),
             ButtonDefinition("AG", "auto_gain", is_toggle=True, row=2),

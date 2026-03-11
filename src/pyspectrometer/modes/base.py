@@ -171,7 +171,10 @@ class BaseMode(ABC):
         self.register_callback("cycle_preview", lambda: ctx.display.cycle_preview_mode())
         self.register_callback("show_gain_slider", lambda: self._on_toggle_gain_slider())
         self.register_callback("show_exposure_slider", lambda: self._on_toggle_exposure_slider())
+        self.register_callback("show_zoom_x_slider", lambda: self._on_toggle_zoom_x_slider())
+        self.register_callback("show_zoom_y_slider", lambda: self._on_toggle_zoom_y_slider())
         self.register_callback("show_spectrum_bars", lambda: self._on_toggle_spectrum_bars())
+        self.register_callback("show_peaks", lambda: self._on_toggle_show_peaks())
         self.register_callback("clear_peak_region", lambda: self._on_clear_peak_region())
         self.register_callback("auto_gain", lambda: self._on_toggle_auto_gain())
         self.register_callback("auto_exposure", lambda: self._on_toggle_auto_exposure())
@@ -181,6 +184,7 @@ class BaseMode(ABC):
         )
         ctx.display.set_gain_value(ctx.camera.gain)
         ctx.display.set_exposure_value(getattr(ctx.camera, "exposure", 10000))
+        ctx.display.set_button_active("show_peaks", ctx.display.is_peaks_visible())
 
     def _on_toggle_hold(self) -> None:
         """Toggle peak hold."""
@@ -211,6 +215,24 @@ class BaseMode(ABC):
         ctx.display.set_button_active("show_exposure_slider", visible)
         print(f"[EXPOSURE] Exposure slider: {'VISIBLE' if visible else 'HIDDEN'}")
 
+    def _on_toggle_zoom_x_slider(self) -> None:
+        """Toggle horizontal zoom slider visibility."""
+        ctx = self._ctx
+        if ctx is None:
+            return
+        visible = ctx.display.toggle_zoom_x_slider()
+        ctx.display.set_button_active("show_zoom_x_slider", visible)
+        print(f"[ZOOM] X slider: {'VISIBLE' if visible else 'HIDDEN'}")
+
+    def _on_toggle_zoom_y_slider(self) -> None:
+        """Toggle vertical zoom slider visibility."""
+        ctx = self._ctx
+        if ctx is None:
+            return
+        visible = ctx.display.toggle_zoom_y_slider()
+        ctx.display.set_button_active("show_zoom_y_slider", visible)
+        print(f"[ZOOM] Y slider: {'VISIBLE' if visible else 'HIDDEN'}")
+
     def _on_toggle_spectrum_bars(self) -> None:
         """Toggle vertical colored bars on spectrum graph."""
         ctx = self._ctx
@@ -219,6 +241,15 @@ class BaseMode(ABC):
         visible = ctx.display.toggle_spectrum_bars()
         ctx.display.set_button_active("show_spectrum_bars", visible)
         print(f"[BARS] Spectrum bars: {'ON' if visible else 'OFF'}")
+
+    def _on_toggle_show_peaks(self) -> None:
+        """Toggle peak labels and vertical lines visibility."""
+        ctx = self._ctx
+        if ctx is None:
+            return
+        visible = ctx.display.toggle_peaks_visible()
+        ctx.display.set_button_active("show_peaks", visible)
+        print(f"[PEAKS] Peak display: {'ON' if visible else 'OFF'}")
 
     def _on_clear_peak_region(self) -> None:
         """Clear the click-to-include peak region."""

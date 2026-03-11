@@ -33,12 +33,6 @@ from .overlay_utils import render_polyline_overlay
 from .viewport import Viewport
 from .waterfall import WaterfallDisplay
 
-# Hot zone width for zoom slider toggle (click to show/hide)
-ZOOM_HOTZONE = 12
-# Zoom slider auto-hides after this many seconds of no interaction
-ZOOM_AUTO_HIDE_SECONDS = 1.0
-
-
 def _scale_to_fit(
     img: np.ndarray,
     target_width: int,
@@ -94,6 +88,7 @@ class DisplayState:
     selected_spectrum_index: int | None = None
     # Click-to-include: single (center_index, half_width) in data coordinates, or None
     peak_include_region: tuple[int, int] | None = None
+    peaks_visible: bool = True
 
     def __post_init__(self):
         if self.cursor is None:
@@ -215,8 +210,6 @@ class DisplayManager:
             style=style,
             mode=SliderMode.RELATIVE,
         )
-        self._last_zoom_interaction_time = 0.0
-
         self._zoom_vertical_prev = 1.0
         self._zoom_horizontal_prev = 1.0
 
@@ -346,12 +339,8 @@ class DisplayManager:
                 self._slider_panel.handle_mouse_move(x, y)
                 if self._zoom_vertical.visible:
                     self._zoom_vertical.handle_mouse_move(x, y)
-                    if self._zoom_vertical.dragging:
-                        self._last_zoom_interaction_time = time.monotonic()
                 if self._zoom_horizontal.visible:
                     self._zoom_horizontal.handle_mouse_move(x, y)
-                    if self._zoom_horizontal.dragging:
-                        self._last_zoom_interaction_time = time.monotonic()
                 if self._panning:
                     dx = self._viewport.screen_x_to_data(
                         self._pan_last_x, width
@@ -372,24 +361,16 @@ class DisplayManager:
 
             if y < control_bar_height:
                 self._control_bar.handle_click(x, y)
-            elif self._on_autolevel_click is not None:
-                self._on_autolevel_click()
             elif self._slider_panel.handle_mouse_down(x, y):
                 pass
             elif self._zoom_vertical.visible and self._zoom_vertical.handle_mouse_down(x, y):
-                self._last_zoom_interaction_time = time.monotonic()
+                pass
             elif self._zoom_horizontal.visible and self._zoom_horizontal.handle_mouse_down(x, y):
-                self._last_zoom_interaction_time = time.monotonic()
+                pass
+            elif self._on_autolevel_click is not None:
+                self._on_autolevel_click()
             elif in_graph:
-                if x < ZOOM_HOTZONE:
-                    self._zoom_vertical.visible = not self._zoom_vertical.visible
-                    if self._zoom_vertical.visible:
-                        self._last_zoom_interaction_time = time.monotonic()
-                elif graph_rel_y >= graph_height - ZOOM_HOTZONE:
-                    self._zoom_horizontal.visible = not self._zoom_horizontal.visible
-                    if self._zoom_horizontal.visible:
-                        self._last_zoom_interaction_time = time.monotonic()
-                elif self._is_zoomed():
+                if self._is_zoomed():
                     self._panning = True
                     self._pan_last_x = x
                     self._pan_last_y = graph_rel_y
@@ -416,10 +397,8 @@ class DisplayManager:
             self._click_for_region = False
             self._mouse_down = False
             self._slider_panel.handle_mouse_up()
-            if self._zoom_vertical.handle_mouse_up():
-                self._last_zoom_interaction_time = time.monotonic()
-            if self._zoom_horizontal.handle_mouse_up():
-                self._last_zoom_interaction_time = time.monotonic()
+            self._zoom_vertical.handle_mouse_up()
+            self._zoom_horizontal.handle_mouse_up()
             self._panning = False
 
     def _is_zoomed(self) -> bool:
@@ -491,10 +470,11 @@ class DisplayManager:
         self._render_spectrum(graph, data)
         self._render_mode_overlay(graph)
         self._render_sensitivity_overlay(graph)
-        self._render_peaks(graph, data)
+        spectrum_screen_y = self._build_spectrum_screen_y(data, graph_height, width)
+        if self.state.peaks_visible:
+            self._render_peaks(graph, data, spectrum_screen_y)
 
         # Labels drawn last so they stay visible; overlap-aware placement
-        spectrum_screen_y = self._build_spectrum_screen_y(data, graph_height, width)
         peak_screen_x = [
             self._viewport.data_x_to_screen(float(p.index), width)
             for p in data.peaks
@@ -796,12 +776,16 @@ class DisplayManager:
             if len(pts) >= 2:
                 cv2.polylines(graph, [np.array(pts, dtype=np.int32)], False, (0, 0, 0), 1, cv2.LINE_AA)
 
-    def _render_peaks(self, graph: np.ndarray, data: SpectrumData) -> None:
+    def _render_peaks(
+        self,
+        graph: np.ndarray,
+        data: SpectrumData,
+        spectrum_screen_y: np.ndarray,
+    ) -> None:
         """Render peak labels near peaks with vertical lines, non-overlapping.
 
-        Labels are placed just above the peak (or below when single peak). Left/right
-        aligned with the vertical line. 2px gap between staggered labels. Vertical
-        line spans full graph height. Semi-transparent yellow background.
+        Labels choose left/right by: (1) fewest crossed vertical lines of other labels,
+        (2) least graph overlap. Above peak first, then below, then stagger.
         """
         height = graph.shape[0]
         width = graph.shape[1]
@@ -823,6 +807,7 @@ class DisplayManager:
             peak_y = self._viewport.intensity_to_screen_y(peak.intensity, height)
             visible.append((sx, peak_y, peak.wavelength, peak))
         visible.sort(key=lambda t: t[0])
+        other_sx = [osx for osx, _, _, _ in visible]
 
         def obscures_peak(box_x1: int, box_x2: int, box_y1: int, box_y2: int) -> bool:
             for osx, opeak_y, _, _ in visible:
@@ -841,10 +826,30 @@ class DisplayManager:
                 return True
             return False
 
-        # Assign non-overlapping positions: above peak first, then below, then stagger
-        placements: list[tuple[int, int, int, int, int, Peak, bool]] = (
-            []
-        )  # (sx, x1, x2, y1, y2, peak, left_aligned)
+        def count_crossed_other_lines(
+            x1: int, x2: int, my_sx: int,
+        ) -> int:
+            """Count other peaks' vertical lines crossed by this span."""
+            n = 0
+            for ox in other_sx:
+                if ox != my_sx and x1 <= ox <= x2:
+                    n += 1
+            return n
+
+        def graph_overlap_score(
+            x1: int, x2: int, box_y1: int, box_y2: int,
+        ) -> float:
+            """Lower is better. Count columns where spectrum overlaps label band."""
+            score = 0.0
+            if len(spectrum_screen_y) <= x1:
+                return score
+            for sx in range(max(0, x1), min(len(spectrum_screen_y), x2 + 1)):
+                sy = spectrum_screen_y[sx]
+                if sy >= 0 and box_y1 <= sy <= box_y2:
+                    score += 1.0
+            return score
+
+        placements: list[tuple[int, int, int, int, int, Peak, bool]] = []
         single_peak = len(visible) == 1
 
         for sx, peak_y, _, peak in visible:
@@ -853,9 +858,10 @@ class DisplayManager:
             label_h = text_h + padding * 2
             label_w = text_w + padding * 2
 
-            placed = False
+            candidates: list[tuple[int, int, int, int, int, float, bool]] = []
+
             for attempt in range(100):
-                for above_first in [True, False] if single_peak else [True]:
+                for above_first in [True, False]:
                     if above_first:
                         box_y2 = peak_y - label_gap
                         box_y1 = box_y2 - label_h
@@ -875,11 +881,11 @@ class DisplayManager:
                     if box_y1 < 0 or box_y2 > height:
                         continue
 
-                    for left_first in [True, False]:
-                        if left_first:
-                            x1, x2 = sx, sx + label_w
-                        else:
+                    for left_aligned in [True, False]:
+                        if left_aligned:
                             x1, x2 = sx - label_w, sx
+                        else:
+                            x1, x2 = sx, sx + label_w
 
                         if x1 < 0 or x2 > width:
                             continue
@@ -888,21 +894,25 @@ class DisplayManager:
                         if overlaps_placement(x1, x2, box_y1, box_y2):
                             continue
 
-                        placements.append((sx, x1, x2, box_y1, box_y2, peak, left_first))
-                        placed = True
-                        break
-                    if placed:
-                        break
-                if placed:
-                    break
+                        crossed = count_crossed_other_lines(x1, x2, sx)
+                        overlap = graph_overlap_score(x1, x2, box_y1, box_y2)
+                        candidates.append((x1, x2, box_y1, box_y2, crossed, overlap, left_aligned))
 
-            if not placed:
+            if not candidates:
                 box_y1 = max(0, min(peak_y - label_gap - label_h, height - label_h))
                 box_y2 = box_y1 + label_h
                 x1 = max(0, min(sx, width - label_w))
                 x2 = x1 + label_w
                 if x2 <= width and box_y2 <= height:
                     placements.append((sx, x1, x2, box_y1, box_y2, peak, True))
+            else:
+                # Pick best: fewest crossed lines, then least graph overlap
+                best = min(
+                    candidates,
+                    key=lambda c: (c[4], c[5]),
+                )
+                x1, x2, box_y1, box_y2, _, _, left_aligned = best
+                placements.append((sx, x1, x2, box_y1, box_y2, peak, left_aligned))
 
         # Draw: semi-transparent yellow background and text first, then vertical lines
         for sx, label_x1, label_x2, box_y1, box_y2, peak, left_aligned in placements:
@@ -932,9 +942,9 @@ class DisplayManager:
                 cv2.LINE_AA,
             )
 
-        # Vertical lines through whole graph, drawn last
+        # Vertical lines through whole graph, drawn last (thickness 2 for visibility)
         for sx, label_x1, label_x2, box_y1, box_y2, peak, _ in placements:
-            cv2.line(graph, (sx, 0), (sx, height), (0, 0, 0), 1)
+            cv2.line(graph, (sx, 0), (sx, height), (0, 0, 0), 2)
 
     def _render_cursor(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render measurement cursor if active."""
@@ -1221,6 +1231,16 @@ class DisplayManager:
         s.visible = not s.visible
         return s.visible
 
+    def toggle_zoom_x_slider(self) -> bool:
+        """Toggle horizontal (X) zoom slider visibility. Returns new visibility state."""
+        self._zoom_horizontal.visible = not self._zoom_horizontal.visible
+        return self._zoom_horizontal.visible
+
+    def toggle_zoom_y_slider(self) -> bool:
+        """Toggle vertical (Y) zoom slider visibility. Returns new visibility state."""
+        self._zoom_vertical.visible = not self._zoom_vertical.visible
+        return self._zoom_vertical.visible
+
     def toggle_led_slider(self) -> bool:
         """Toggle LED intensity slider visibility. Returns new visibility state."""
         s = self._slider_panel.led_intensity_slider
@@ -1234,6 +1254,14 @@ class DisplayManager:
     def is_exposure_slider_visible(self) -> bool:
         """Return whether the exposure slider is visible."""
         return self._slider_panel.exposure_slider.visible
+
+    def is_zoom_x_slider_visible(self) -> bool:
+        """Return whether the horizontal zoom slider is visible."""
+        return self._zoom_horizontal.visible
+
+    def is_zoom_y_slider_visible(self) -> bool:
+        """Return whether the vertical zoom slider is visible."""
+        return self._zoom_vertical.visible
 
     def show_gain_slider(self, visible: bool) -> None:
         """Show or hide the gain slider."""
@@ -1263,6 +1291,15 @@ class DisplayManager:
     def is_spectrum_bars_visible(self) -> bool:
         """Return whether spectrum bars are visible."""
         return self.state.spectrum_bars_visible
+
+    def toggle_peaks_visible(self) -> bool:
+        """Toggle peak labels and vertical lines visibility. Returns new state."""
+        self.state.peaks_visible = not self.state.peaks_visible
+        return self.state.peaks_visible
+
+    def is_peaks_visible(self) -> bool:
+        """Return whether peaks are visible."""
+        return self.state.peaks_visible
 
     def set_gain_value(self, value: float) -> None:
         """Set the gain slider value."""
