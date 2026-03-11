@@ -129,18 +129,70 @@ def _intensity_similarity(
     return 1.0 - abs(norm_measured - norm_ref)
 
 
+def _width_similarity(width_meas_nm: float, width_ref_nm: float) -> float:
+    """Similarity of peak widths in nm. 1 = same order, 0 = very different.
+
+    Uses log scale so narrow-narrow and broad-broad match; narrow-broad penalized.
+    """
+    if width_meas_nm <= 0 or width_ref_nm <= 0:
+        return 0.5  # neutral when width unknown
+    lo = min(width_meas_nm, width_ref_nm)
+    hi = max(width_meas_nm, width_ref_nm)
+    ratio = lo / hi
+    return ratio
+
+
+def _reference_peak_widths_nm(
+    ref: np.ndarray,
+    wavelengths: np.ndarray,
+    ref_peaks: list,
+    rel_height: float = 0.5,
+) -> dict[float, float]:
+    """FWHM in nm per reference peak from spectrum. Used for width-aware matching."""
+    if len(ref) < 3 or len(wavelengths) < 3:
+        return {}
+    wl = np.asarray(wavelengths, dtype=np.float64)
+    r = np.asarray(ref, dtype=np.float64)
+    result = {}
+    for rp in ref_peaks:
+        wl_peak = rp.wavelength if hasattr(rp, "wavelength") else 0.0
+        idx = int(np.clip(np.searchsorted(wl, wl_peak), 1, len(wl) - 2))
+        peak_val = float(np.interp(wl_peak, wl, r))
+        thresh = peak_val * rel_height
+        if peak_val <= 1e-12:
+            result[wl_peak] = 0.0
+            continue
+        left_ips = float(idx)
+        for i in range(idx, 0, -1):
+            if i > 0 and r[i - 1] < thresh <= r[i]:
+                t = (thresh - r[i - 1]) / (r[i] - r[i - 1]) if r[i] != r[i - 1] else 0.5
+                left_ips = i - 1 + t
+                break
+        right_ips = float(idx)
+        for i in range(idx, len(r) - 1):
+            if i + 1 < len(r) and r[i] >= thresh > r[i + 1]:
+                t = (thresh - r[i]) / (r[i + 1] - r[i]) if r[i + 1] != r[i] else 0.5
+                right_ips = i + t
+                break
+        wl_left = float(np.interp(left_ips, np.arange(len(wl)), wl))
+        wl_right = float(np.interp(right_ips, np.arange(len(wl)), wl))
+        result[wl_peak] = max(0.0, wl_right - wl_left)
+    return result
+
+
 def _match_peaks_to_reference(
     peak_pixels: list[int],
     peak_wavelengths: list[float],
     reference_peaks: list[SpectralLine],
     peak_intensities: list[float] | None = None,
+    measured_intensity: np.ndarray | None = None,
+    wavelengths: np.ndarray | None = None,
+    ref_spectrum: np.ndarray | None = None,
 ) -> list[tuple[int, float, float]]:
     """Match detected peaks to reference spectral lines.
 
-    Reference peaks within PEAK_MERGE_THRESHOLD_NM are merged to their average
-    wavelength, since limited spectrometer resolution may join or lose close peaks.
-    Prefers matches that yield linear pixel→wavelength fit and similar intensity
-    (strong measured peak ↔ strong reference peak).
+    Prefers linear pixel→wavelength fit, similar intensity, and similar width.
+    Reference peaks within PEAK_MERGE_THRESHOLD_NM are merged.
     """
     order = np.argsort(peak_pixels)
     peak_pixels = [peak_pixels[i] for i in order]
@@ -152,16 +204,32 @@ def _match_peaks_to_reference(
     else:
         norm_measured = None
 
+    from .peak_detection import peak_widths_nm
+
+    meas_widths: list[float] = []
+    ref_width_map: dict[float, float] = {}
+    if (
+        measured_intensity is not None
+        and wavelengths is not None
+        and ref_spectrum is not None
+    ):
+        meas_widths = peak_widths_nm(measured_intensity, wavelengths, peak_pixels)
+        meas_widths = [meas_widths[i] for i in order] if meas_widths else []
+
     ref_effective = _merge_close_reference_peaks(reference_peaks)
     ref_sorted = sorted(ref_effective, key=lambda p: p.wavelength)
+    if ref_spectrum is not None and wavelengths is not None:
+        ref_width_map = _reference_peak_widths_nm(ref_spectrum, wavelengths, ref_sorted)
+
     max_ref = max(r.intensity for r in ref_sorted) if ref_sorted else 1.0
     norm_ref_map = {
         r.wavelength: r.intensity / max_ref if max_ref > 1e-9 else 0.0
         for r in ref_sorted
     }
     tolerance_nm = 35
-    w_linearity = 0.75
-    w_intensity = 0.25
+    w_linearity = 0.60
+    w_intensity = 0.20
+    w_width = 0.20
 
     matches: list[tuple[int, float, float]] = []
     used_refs: set[float] = set()
@@ -184,7 +252,13 @@ def _match_peaks_to_reference(
                 int_sim = _intensity_similarity(norm_measured[i], norm_ref_map[ref.wavelength])
                 score += w_intensity * int_sim
             else:
-                score += w_intensity  # no penalty when intensities unknown
+                score += w_intensity
+            if meas_widths and ref_width_map:
+                mw = meas_widths[i] if i < len(meas_widths) else 0.0
+                rw = ref_width_map.get(ref.wavelength, 0.0)
+                score += w_width * _width_similarity(mw, rw)
+            else:
+                score += w_width * 0.5
 
             if score > best_score:
                 best_score = score
@@ -423,11 +497,15 @@ class AutoCalibrator:
         peak_intensities = _extract_peak_intensities(
             peak_indices, pixel_indices, measured_intensity
         )
+        ref_spec = get_reference_spectrum(source, wavelengths)
         matches = _match_peaks_to_reference(
             pixel_indices,
             peak_wavelengths,
             reference_peaks,
             peak_intensities=peak_intensities,
+            measured_intensity=measured_intensity,
+            wavelengths=wavelengths,
+            ref_spectrum=ref_spec,
         )
 
         if len(matches) < 4:

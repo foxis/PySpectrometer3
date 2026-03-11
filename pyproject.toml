@@ -19,6 +19,7 @@ rpi-libcamera = {version = ">=0.1a2", markers = "sys_platform == 'linux'"}
 [tool.poetry.group.dev.dependencies]
 pytest = ">=7.0.0"
 ruff = ">=0.8.0"
+matplotlib = ">=3.5"
 
 [tool.poetry.scripts]
 calibrate = "pyspectrometer.cli:calibrate"

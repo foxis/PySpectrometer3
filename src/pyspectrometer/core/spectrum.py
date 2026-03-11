@@ -6,6 +6,18 @@ from dataclasses import dataclass, field
 import numpy as np
 
 
+@dataclass
+class Extremum:
+    """Peak or dip in spectrum. Height: positive peak, negative dip."""
+
+    index: int
+    position: float
+    position_px: int | None
+    height: float
+    width: float
+    is_dip: bool
+
+
 @dataclass(frozen=True)
 class Peak:
     """Represents a detected peak in a spectrum.
