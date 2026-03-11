@@ -8,7 +8,7 @@ WAVESHARE_OVERLAY_ZIP := .cache/waveshare-35dpi-dtbo.zip
 WAVESHARE_OVERLAY_DIR := .cache/waveshare-35dpi-dtbo
 
 .PHONY: all setup-packages setup-partitions setup-safe-shutdown setup-display \
-        setup-overlays setup-config help
+        setup-performance setup-overlays setup-config help
 
 all: help
 
@@ -44,6 +44,11 @@ setup-safe-shutdown:
 setup-display: setup-overlays setup-config
 	@echo ""
 	@echo "Display + camera setup complete. Reboot to apply: sudo reboot"
+
+setup-performance:
+	@echo "Configuring performance (CPU governor, overclock, minimal services)..."
+	@chmod +x scripts/setup-performance.sh
+	./scripts/setup-performance.sh
 
 setup-overlays:
 	@echo "Downloading Waveshare 3.5\" DPI LCD overlays..."
@@ -99,6 +104,7 @@ help:
 	@echo "  2. make setup-partitions     - Separate writable /home partition"
 	@echo "  3. make setup-safe-shutdown - Logs to RAM, root/boot read-only"
 	@echo "  4. make setup-display       - Waveshare 3.5\" + OV9281 camera"
+	@echo "  5. make setup-performance   - CPU governor, overclock, disable Bluetooth/avahi (WiFi kept)"
 	@echo ""
 	@echo "Then: sudo reboot"
 	@echo ""
