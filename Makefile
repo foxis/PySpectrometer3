@@ -23,7 +23,6 @@ setup-packages:
 		python3-opencv \
 		python3-numpy \
 		python3-scipy \
-		python3-colour-science \
 		python3-poetry \
 		libcamera-dev \
 		python3-picamera2 \
