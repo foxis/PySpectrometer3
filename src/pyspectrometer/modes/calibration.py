@@ -162,6 +162,7 @@ class CalibrationMode(BaseMode):
             "toggle_sensitivity", self.cal_state.sensitivity_correction_enabled
         )
         ctx.display.set_button_active("toggle_overlay", self.cal_state.overlay_visible)
+        ctx.display.set_button_active("show_spectrum_bars", ctx.display.is_spectrum_bars_visible())
         ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
 
     def _on_select_source(self, ctx: ModeContext, source: ReferenceSource) -> None:
@@ -349,6 +350,7 @@ class CalibrationMode(BaseMode):
             ButtonDefinition("Peak", "capture_peak", is_toggle=True, row=2),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=2),
             ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=2),
+            ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=2),
             ButtonDefinition("G", "show_gain_slider", is_toggle=True, row=2),
             ButtonDefinition("E", "show_exposure_slider", is_toggle=True, row=2),
             ButtonDefinition("AG", "auto_gain", is_toggle=True, row=2),

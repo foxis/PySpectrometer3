@@ -59,6 +59,7 @@ class RamanMode(BaseMode):
             ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=1),
             ButtonDefinition("Black", "set_dark", row=1),
             ButtonDefinition("Peak", "capture_peak", is_toggle=True, row=1),
+            ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=2),
             ButtonDefinition("G", "show_gain_slider", is_toggle=True, row=2),
             ButtonDefinition("E", "show_exposure_slider", is_toggle=True, row=2),
             ButtonDefinition("AG", "auto_gain", is_toggle=True, row=2),

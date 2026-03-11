@@ -171,6 +171,7 @@ class BaseMode(ABC):
         self.register_callback("cycle_preview", lambda: ctx.display.cycle_preview_mode())
         self.register_callback("show_gain_slider", lambda: self._on_toggle_gain_slider())
         self.register_callback("show_exposure_slider", lambda: self._on_toggle_exposure_slider())
+        self.register_callback("show_spectrum_bars", lambda: self._on_toggle_spectrum_bars())
         self.register_callback("auto_gain", lambda: self._on_toggle_auto_gain())
         self.register_callback("auto_exposure", lambda: self._on_toggle_auto_exposure())
         ctx.display.register_slider_callbacks(
@@ -208,6 +209,15 @@ class BaseMode(ABC):
         visible = ctx.display.toggle_exposure_slider()
         ctx.display.set_button_active("show_exposure_slider", visible)
         print(f"[EXPOSURE] Exposure slider: {'VISIBLE' if visible else 'HIDDEN'}")
+
+    def _on_toggle_spectrum_bars(self) -> None:
+        """Toggle vertical colored bars on spectrum graph."""
+        ctx = self._ctx
+        if ctx is None:
+            return
+        visible = ctx.display.toggle_spectrum_bars()
+        ctx.display.set_button_active("show_spectrum_bars", visible)
+        print(f"[BARS] Spectrum bars: {'ON' if visible else 'OFF'}")
 
     def _on_toggle_auto_gain(self) -> None:
         """Toggle auto gain."""

@@ -2,9 +2,17 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import Enum
 
 import cv2
 import numpy as np
+
+
+class SliderMode(Enum):
+    """Slider interaction mode."""
+
+    ABSOLUTE = "absolute"  # Position maps directly to value
+    RELATIVE = "relative"  # First click = ref; drag delta changes value (works outside bounds)
 
 
 @dataclass
@@ -43,6 +51,7 @@ class VerticalSlider:
         label: str = "",
         style: SliderStyle | None = None,
         log_scale: bool = False,
+        mode: SliderMode = SliderMode.RELATIVE,
     ):
         """Initialize vertical slider.
 
@@ -56,6 +65,7 @@ class VerticalSlider:
             label: Label to display above slider
             style: Visual style
             log_scale: Use logarithmic scale
+            mode: ABSOLUTE = position maps to value; RELATIVE = first click ref, drag delta
         """
         self.x = x
         self.y = y
@@ -66,10 +76,13 @@ class VerticalSlider:
         self.label = label
         self.style = style or DEFAULT_SLIDER_STYLE
         self.log_scale = log_scale
+        self.mode = mode
 
         self.visible = False
         self.dragging = False
         self.hovered = False
+        self._ref_py: int | None = None
+        self._ref_value: float | None = None
 
         self.on_change: Callable[[float], None] | None = None
 
@@ -224,7 +237,19 @@ class VerticalSlider:
         self.hovered = self.contains(px, py)
 
         if self.dragging:
-            new_val = self._position_to_value(py)
+            if self.mode == SliderMode.RELATIVE and self._ref_py is not None:
+                track_height = self.height - self.style.thumb_height
+                if track_height <= 0:
+                    return False
+                delta_py = self._ref_py - py  # Up = positive
+                value_range = self.max_val - self.min_val
+                delta_val = (delta_py / track_height) * value_range
+                new_val = max(
+                    self.min_val,
+                    min(self.max_val, (self._ref_value or self._value) + delta_val),
+                )
+            else:
+                new_val = self._position_to_value(py)
             if new_val != self._value:
                 self._value = new_val
                 if self.on_change:
@@ -240,11 +265,15 @@ class VerticalSlider:
 
         if self.contains(px, py):
             self.dragging = True
-            new_val = self._position_to_value(py)
-            if new_val != self._value:
-                self._value = new_val
-                if self.on_change:
-                    self.on_change(self._value)
+            if self.mode == SliderMode.RELATIVE:
+                self._ref_py = py
+                self._ref_value = self._value
+            else:
+                new_val = self._position_to_value(py)
+                if new_val != self._value:
+                    self._value = new_val
+                    if self.on_change:
+                        self.on_change(self._value)
             return True
 
         return False
@@ -253,6 +282,8 @@ class VerticalSlider:
         """Handle mouse up. Returns True if was dragging."""
         if self.dragging:
             self.dragging = False
+            self._ref_py = None
+            self._ref_value = None
             return True
         return False
 
@@ -293,6 +324,7 @@ class SliderPanel:
             label="G",
             style=self.style,
             log_scale=True,
+            mode=SliderMode.RELATIVE,
         )
 
         # Exposure range: 100us to 30 seconds (30,000,000 us)
@@ -307,6 +339,7 @@ class SliderPanel:
             label="E",
             style=self.style,
             log_scale=True,
+            mode=SliderMode.RELATIVE,
         )
 
         # LED intensity: 0–100% software PWM duty cycle (Measurement, Color Science)
@@ -320,6 +353,7 @@ class SliderPanel:
             label="LED",
             style=self.style,
             log_scale=False,
+            mode=SliderMode.RELATIVE,
         )
         self.led_intensity_slider.visible = False  # Shown only in Measurement/Color Science
 
@@ -385,6 +419,7 @@ class HorizontalSlider:
         value: float,
         label: str = "",
         style: SliderStyle | None = None,
+        mode: SliderMode = SliderMode.RELATIVE,
     ):
         """Initialize horizontal slider.
 
@@ -397,6 +432,7 @@ class HorizontalSlider:
             value: Initial value
             label: Label to display
             style: Visual style
+            mode: ABSOLUTE = position maps to value; RELATIVE = first click ref, drag delta
         """
         self.x = x
         self.y = y
@@ -406,10 +442,13 @@ class HorizontalSlider:
         self._value = value
         self.label = label
         self.style = style or DEFAULT_SLIDER_STYLE
+        self.mode = mode
 
         self.visible = False
         self.dragging = False
         self.hovered = False
+        self._ref_px: int | None = None
+        self._ref_value: float | None = None
 
         self.on_change: Callable[[float], None] | None = None
 
@@ -511,7 +550,19 @@ class HorizontalSlider:
         self.hovered = self.contains(px, py)
 
         if self.dragging:
-            new_val = self._position_to_value(px)
+            if self.mode == SliderMode.RELATIVE and self._ref_px is not None:
+                track_width = self.width - self.style.thumb_height
+                if track_width <= 0:
+                    return False
+                delta_px = px - self._ref_px  # Right = positive
+                value_range = self.max_val - self.min_val
+                delta_val = (delta_px / track_width) * value_range
+                new_val = max(
+                    self.min_val,
+                    min(self.max_val, (self._ref_value or self._value) + delta_val),
+                )
+            else:
+                new_val = self._position_to_value(px)
             if new_val != self._value:
                 self._value = new_val
                 if self.on_change:
@@ -527,11 +578,15 @@ class HorizontalSlider:
 
         if self.contains(px, py):
             self.dragging = True
-            new_val = self._position_to_value(px)
-            if new_val != self._value:
-                self._value = new_val
-                if self.on_change:
-                    self.on_change(self._value)
+            if self.mode == SliderMode.RELATIVE:
+                self._ref_px = px
+                self._ref_value = self._value
+            else:
+                new_val = self._position_to_value(px)
+                if new_val != self._value:
+                    self._value = new_val
+                    if self.on_change:
+                        self.on_change(self._value)
             return True
 
         return False
@@ -540,5 +595,7 @@ class HorizontalSlider:
         """Handle mouse up. Returns True if was dragging."""
         if self.dragging:
             self.dragging = False
+            self._ref_px = None
+            self._ref_value = None
             return True
         return False

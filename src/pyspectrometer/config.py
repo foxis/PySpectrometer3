@@ -208,9 +208,9 @@ class DisplayConfig:
     preview_height: int = 80
     message_height: int = 80
 
-    # Window size (canvas will be scaled to fit)
-    window_width: int = 1280
-    window_height: int = 720
+    # Window size (canvas scaled to fit). Default 640x400 for Waveshare 640 displays.
+    window_width: int = 640
+    window_height: int = 400
 
     # UI scaling for small displays
     font_scale: float = 0.4

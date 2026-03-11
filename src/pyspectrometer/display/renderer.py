@@ -1,5 +1,6 @@
 """Main display manager for spectrum visualization."""
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Optional
@@ -11,7 +12,13 @@ from ..config import Config
 from ..core.calibration import Calibration
 from ..core.spectrum import SpectrumData
 from ..gui.control_bar import ControlBar, ControlBarConfig
-from ..gui.sliders import HorizontalSlider, SliderPanel, SliderStyle, VerticalSlider
+from ..gui.sliders import (
+    HorizontalSlider,
+    SliderMode,
+    SliderPanel,
+    SliderStyle,
+    VerticalSlider,
+)
 from ..modes.base import BaseMode
 from ..processing.spectrum_transform import (
     get_crop_corners_rotated,
@@ -28,6 +35,8 @@ from .waterfall import WaterfallDisplay
 
 # Hot zone width for zoom slider toggle (click to show/hide)
 ZOOM_HOTZONE = 12
+# Zoom slider auto-hides after this many seconds of no interaction
+ZOOM_AUTO_HIDE_SECONDS = 1.0
 
 
 @dataclass
@@ -50,6 +59,8 @@ class DisplayState:
     save_message: str = "No data saved"
     reference_spectrum: np.ndarray | None = None
     reference_name: str = "None"
+    spectrum_bars_visible: bool = False
+    selected_spectrum_index: int | None = None
 
     def __post_init__(self):
         if self.cursor is None:
@@ -130,6 +141,12 @@ class DisplayManager:
         self._font = cv2.FONT_HERSHEY_SIMPLEX
         self._windows_created = False
 
+        # Canvas vs display scale (for mouse coord conversion when output is scaled)
+        self._canvas_width = 0
+        self._canvas_height = 0
+        self._display_width = 0
+        self._display_height = 0
+
         # Preview display mode: "full", "window", "none"
         self._preview_mode = "window"
 
@@ -139,7 +156,7 @@ class DisplayManager:
         # Zoom/pan viewport
         self._viewport = Viewport()
 
-        # Zoom sliders (visible when user clicks on left/bottom edge)
+        # Zoom sliders (visible when user clicks on left/bottom edge, auto-hide after 1s)
         style = SliderStyle()
         self._zoom_vertical = VerticalSlider(
             x=2,
@@ -150,6 +167,7 @@ class DisplayManager:
             value=1.0,
             label="V",
             style=style,
+            mode=SliderMode.RELATIVE,
         )
         self._zoom_horizontal = HorizontalSlider(
             x=20,
@@ -163,7 +181,9 @@ class DisplayManager:
             value=1.0,
             label="H",
             style=style,
+            mode=SliderMode.RELATIVE,
         )
+        self._last_zoom_interaction_time = 0.0
 
         self._zoom_vertical_prev = 1.0
         self._zoom_horizontal_prev = 1.0
@@ -211,10 +231,13 @@ class DisplayManager:
         # WINDOW_GUI_EXPANDED (0x00) shows toolbar (default)
         # We want NORMAL (no toolbar)
         WINDOW_GUI_NORMAL = getattr(cv2, "WINDOW_GUI_NORMAL", 0x00000010)
+        win_w = self.config.display.window_width
+        win_h = self.config.display.window_height
 
         if self.config.display.waterfall_enabled:
-            cv2.namedWindow(title2, cv2.WINDOW_AUTOSIZE | WINDOW_GUI_NORMAL)
-            cv2.moveWindow(title2, 200, 200)
+            cv2.namedWindow(title2, cv2.WINDOW_NORMAL | WINDOW_GUI_NORMAL)
+            cv2.resizeWindow(title2, win_w, win_h)
+            cv2.moveWindow(title2, win_w + 10, 0)
 
         if self.config.display.fullscreen:
             # True fullscreen - fills entire screen, no toolbar
@@ -225,8 +248,9 @@ class DisplayManager:
                 cv2.WINDOW_FULLSCREEN,
             )
         else:
-            # Windowed mode - auto-size, no toolbar/statusbar
-            cv2.namedWindow(title1, cv2.WINDOW_AUTOSIZE | WINDOW_GUI_NORMAL)
+            # Windowed mode - fixed size for display (e.g. Waveshare 640x400)
+            cv2.namedWindow(title1, cv2.WINDOW_NORMAL | WINDOW_GUI_NORMAL)
+            cv2.resizeWindow(title1, win_w, win_h)
             cv2.moveWindow(title1, 0, 0)
 
         cv2.setMouseCallback(title1, self._handle_mouse)
@@ -254,8 +278,18 @@ class DisplayManager:
         """Set callback for click-to-dismiss on autolevel overlay."""
         self._on_autolevel_click = callback
 
+    def _window_to_canvas(self, x: int, y: int) -> tuple[int, int]:
+        """Convert window coords to canvas coords (when output is scaled)."""
+        if self._display_width <= 0 or self._display_height <= 0:
+            return x, y
+        cx = int(x * self._canvas_width / self._display_width)
+        cy = int(y * self._canvas_height / self._display_height)
+        return cx, cy
+
     def _handle_mouse(self, event: int, x: int, y: int, flags: int, param) -> None:
         """Handle mouse events on the spectrum window."""
+        x, y = self._window_to_canvas(x, y)
+
         control_bar_height = self.config.display.message_height
         preview_height = self.config.display.preview_height
         graph_height = self.config.display.graph_height
@@ -277,8 +311,12 @@ class DisplayManager:
                 self._slider_panel.handle_mouse_move(x, y)
                 if self._zoom_vertical.visible:
                     self._zoom_vertical.handle_mouse_move(x, y)
+                    if self._zoom_vertical.dragging:
+                        self._last_zoom_interaction_time = time.monotonic()
                 if self._zoom_horizontal.visible:
                     self._zoom_horizontal.handle_mouse_move(x, y)
+                    if self._zoom_horizontal.dragging:
+                        self._last_zoom_interaction_time = time.monotonic()
                 if self._panning:
                     dx = self._viewport.screen_x_to_data(
                         self._pan_last_x, width
@@ -303,26 +341,35 @@ class DisplayManager:
             elif self._slider_panel.handle_mouse_down(x, y):
                 pass
             elif self._zoom_vertical.visible and self._zoom_vertical.handle_mouse_down(x, y):
-                pass
+                self._last_zoom_interaction_time = time.monotonic()
             elif self._zoom_horizontal.visible and self._zoom_horizontal.handle_mouse_down(x, y):
-                pass
+                self._last_zoom_interaction_time = time.monotonic()
             elif in_graph:
                 if x < ZOOM_HOTZONE:
                     self._zoom_vertical.visible = not self._zoom_vertical.visible
+                    if self._zoom_vertical.visible:
+                        self._last_zoom_interaction_time = time.monotonic()
                 elif graph_rel_y >= graph_height - ZOOM_HOTZONE:
                     self._zoom_horizontal.visible = not self._zoom_horizontal.visible
+                    if self._zoom_horizontal.visible:
+                        self._last_zoom_interaction_time = time.monotonic()
                 elif self._is_zoomed():
                     self._panning = True
                     self._pan_last_x = x
                     self._pan_last_y = graph_rel_y
+                elif self.state.spectrum_bars_visible and self._last_data_width > 0:
+                    data_x = self._viewport.screen_x_to_data(x, width)
+                    idx = int(round(data_x))
+                    idx = max(0, min(self._last_data_width - 1, idx))
+                    self.state.selected_spectrum_index = idx
 
         elif event == cv2.EVENT_LBUTTONUP:
             self._mouse_down = False
             self._slider_panel.handle_mouse_up()
             if self._zoom_vertical.handle_mouse_up():
-                pass
+                self._last_zoom_interaction_time = time.monotonic()
             if self._zoom_horizontal.handle_mouse_up():
-                pass
+                self._last_zoom_interaction_time = time.monotonic()
             self._panning = False
 
     def _is_zoomed(self) -> bool:
@@ -364,6 +411,18 @@ class DisplayManager:
         data_width = len(data.intensity)
         self._last_data_width = data_width
 
+        # Update selected bar status and validate index
+        sel = self.state.selected_spectrum_index
+        if sel is not None and (sel < 0 or sel >= data_width):
+            self.state.selected_spectrum_index = None
+            sel = None
+        if sel is not None:
+            wl = data.wavelengths[sel]
+            int_val = data.intensity[sel]
+            self.set_status("Sel", f"{wl:.0f}nm {int_val:.2f}")
+        else:
+            self.set_status("Sel", "-")
+
         self._viewport.init_if_needed(data_width)
         self._viewport.clamp_x(data_width)
 
@@ -387,6 +446,13 @@ class DisplayManager:
 
         if self._slider_panel.any_visible():
             self._render_sliders_on_graph(graph)
+        zoom_visible = self._zoom_vertical.visible or self._zoom_horizontal.visible
+        zoom_dragging = self._zoom_vertical.dragging or self._zoom_horizontal.dragging
+        if zoom_visible and not zoom_dragging:
+            elapsed = time.monotonic() - self._last_zoom_interaction_time
+            if elapsed > ZOOM_AUTO_HIDE_SECONDS:
+                self._zoom_vertical.visible = False
+                self._zoom_horizontal.visible = False
         if self._zoom_vertical.visible or self._zoom_horizontal.visible:
             self._render_zoom_sliders_on_graph(graph)
 
@@ -492,8 +558,25 @@ class DisplayManager:
             self._draw_status_bar(img, autolevel_segments)
             spectrum_vertical = np.vstack((messages, img))
 
-        # Show the composed image
-        cv2.imshow(self.config.spectrograph_title, spectrum_vertical)
+        # Scale to fit window when canvas exceeds display size (e.g. Waveshare 640)
+        win_w = self.config.display.window_width
+        win_h = self.config.display.window_height
+        canvas_h, canvas_w = spectrum_vertical.shape[:2]
+        self._canvas_width = canvas_w
+        self._canvas_height = canvas_h
+
+        if canvas_w > win_w or canvas_h > win_h:
+            display_img = cv2.resize(
+                spectrum_vertical, (win_w, win_h), interpolation=cv2.INTER_AREA
+            )
+            self._display_width = win_w
+            self._display_height = win_h
+        else:
+            display_img = spectrum_vertical
+            self._display_width = canvas_w
+            self._display_height = canvas_h
+
+        cv2.imshow(self.config.spectrograph_title, display_img)
 
         if self._waterfall is not None and self.config.display.waterfall_enabled:
             self._waterfall.update(data)
@@ -513,6 +596,12 @@ class DisplayManager:
                 y_offset=message_height + preview_height + 2,
             )
 
+            # Scale waterfall to fit window
+            wh, ww = waterfall_vertical.shape[:2]
+            if ww > win_w or wh > win_h:
+                waterfall_vertical = cv2.resize(
+                    waterfall_vertical, (win_w, win_h), interpolation=cv2.INTER_AREA
+                )
             cv2.imshow(self.config.waterfall_title, waterfall_vertical)
 
     def set_mode_overlay(
@@ -584,32 +673,58 @@ class DisplayManager:
         )
 
     def _render_spectrum(self, graph: np.ndarray, data: SpectrumData) -> None:
-        """Render the spectrum intensity curve.
+        """Render the spectrum: black line + optional contiguous colored fill.
 
-        Intensity is float32 0-1. Scale to fit graph height.
+        Intensity is float32 0-1. Black line always drawn; contiguous wavelength-colored
+        fill when enabled (one vertical strip per screen column, no gaps).
         """
         height = graph.shape[0]
         width = graph.shape[1]
+        n = len(data.intensity)
+        if n == 0:
+            return
 
+        # Build polyline for black line
+        pts: list[tuple[int, int]] = []
         for i, intensity in enumerate(data.intensity):
             if i < self._viewport.x_start or i > self._viewport.x_end:
                 continue
-
-            rgb = wavelength_to_rgb(round(data.wavelengths[i]))
-            bgr = rgb_to_bgr(rgb)
-
             sx = self._viewport.data_x_to_screen(float(i), width)
             sy = self._viewport.intensity_to_screen_y(intensity, height)
+            pts.append((sx, sy))
 
-            cv2.line(graph, (sx, height - 1), (sx, sy), bgr, 1)
-            cv2.line(
-                graph,
-                (sx, sy - 1),
-                (sx, sy),
-                (0, 0, 0),
-                1,
-                cv2.LINE_AA,
-            )
+        if len(pts) >= 2:
+            cv2.polylines(graph, [np.array(pts, dtype=np.int32)], False, (0, 0, 0), 1, cv2.LINE_AA)
+
+        # Contiguous colored fill (when enabled): one strip per screen column
+        if self.state.spectrum_bars_visible:
+            sel_idx = self.state.selected_spectrum_index
+            for x in range(width):
+                data_x = self._viewport.screen_x_to_data(x, width)
+                idx = int(round(data_x))
+                idx = max(0, min(n - 1, idx))
+                if idx < self._viewport.x_start or idx > self._viewport.x_end:
+                    continue
+
+                intensity = data.intensity[idx]
+                rgb = wavelength_to_rgb(round(data.wavelengths[idx]))
+                bgr = rgb_to_bgr(rgb)
+                sy = self._viewport.intensity_to_screen_y(intensity, height)
+
+                cv2.line(graph, (x, height - 1), (x, sy), bgr, 1)
+
+            # Highlight selected wavelength (vertical line)
+            if sel_idx is not None and 0 <= sel_idx < n:
+                sx = self._viewport.data_x_to_screen(float(sel_idx), width)
+                if 0 <= sx < width:
+                    sy = self._viewport.intensity_to_screen_y(
+                        data.intensity[sel_idx], height
+                    )
+                    cv2.line(graph, (sx, height - 1), (sx, sy), (255, 255, 255), 2)
+
+            # Redraw black line on top so it stays visible over fill
+            if len(pts) >= 2:
+                cv2.polylines(graph, [np.array(pts, dtype=np.int32)], False, (0, 0, 0), 1, cv2.LINE_AA)
 
     def _render_peaks(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render peak labels on the graph. Peak intensity is float 0-1."""
@@ -964,6 +1079,23 @@ class DisplayManager:
     def show_led_slider(self, visible: bool) -> None:
         """Show or hide the LED intensity slider (Measurement, Color Science)."""
         self._slider_panel.led_intensity_slider.visible = visible
+
+    def toggle_spectrum_bars(self) -> bool:
+        """Toggle vertical colored bars on spectrum. Returns new visibility state."""
+        self.state.spectrum_bars_visible = not self.state.spectrum_bars_visible
+        if not self.state.spectrum_bars_visible:
+            self.state.selected_spectrum_index = None
+        return self.state.spectrum_bars_visible
+
+    def show_spectrum_bars(self, visible: bool) -> None:
+        """Show or hide vertical colored bars on spectrum."""
+        self.state.spectrum_bars_visible = visible
+        if not visible:
+            self.state.selected_spectrum_index = None
+
+    def is_spectrum_bars_visible(self) -> bool:
+        """Return whether spectrum bars are visible."""
+        return self.state.spectrum_bars_visible
 
     def set_gain_value(self, value: float) -> None:
         """Set the gain slider value."""
