@@ -1,5 +1,6 @@
 """Automatic wavelength calibration via peak matching and correlation."""
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -252,6 +253,68 @@ class AutoCalibrator:
         corr = np.corrcoef(measured_intensity, ref_final)[0, 1] if np.std(ref_final) > 1e-9 else 0
         print(f"[Calibration] Correlation calibration: r={corr:.4f}")
         return points
+
+    def calibrate_from_csv(
+        self,
+        csv_path: str | Path,
+        source: ReferenceSource = ReferenceSource.FL12,
+    ) -> list[tuple[int, float]]:
+        """Fit pixels to wavelengths from CSV intensity using reference spectrum correlation.
+
+        Loads CSV (Pixel,Wavelength,Intensity), ignores wavelengths, uses intensity only.
+        Correlates measured intensity with reference spectrum to derive pixel→wavelength mapping.
+
+        Args:
+            csv_path: Path to CSV file
+            source: Reference illuminant (default FL12)
+
+        Returns:
+            List of (pixel, wavelength) calibration points
+        """
+        path = Path(csv_path)
+        if not path.exists():
+            print(f"[Calibration] CSV not found: {path}")
+            return []
+
+        pixels_list: list[int] = []
+        intensity_list: list[float] = []
+        intensity_col = 2  # Default: Pixel,Wavelength,Intensity
+
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split(",")
+                if line.lower().startswith("pixel"):
+                    intensity_col = 1  # pixel,intensity,reference_wavelength,...
+                    continue
+                if line.startswith("Pixel") and "Wavelength" in line:
+                    continue
+                if len(parts) >= max(2, intensity_col + 1):
+                    try:
+                        px = int(parts[0])
+                        intensity = float(parts[intensity_col])
+                        pixels_list.append(px)
+                        intensity_list.append(intensity)
+                    except (ValueError, IndexError):
+                        continue
+
+        if len(intensity_list) < 10:
+            print(f"[Calibration] Need at least 10 rows, got {len(intensity_list)}")
+            return []
+
+        pairs = sorted(zip(pixels_list, intensity_list), key=lambda x: x[0])
+        n = pairs[-1][0] + 1 if pairs else 0
+        measured = np.zeros(n, dtype=np.float64)
+        for px, intensity in pairs:
+            measured[px] = intensity
+        return self._correlation(
+            measured_intensity=measured,
+            source=source,
+            sensitivity=None,
+            sensitivity_enabled=False,
+        )
 
     def calibrate_from_peaks(
         self,

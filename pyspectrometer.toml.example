@@ -1,9 +1,4 @@
-# PySpectrometer3 config (TOML)
-# Copy to pyspectrometer.toml or ~/.config/pyspectrometer/config.toml
-# Or set PYSPECTROMETER_CONFIG=/path/to/config.toml
-
 [camera]
-# OV9281 modes: 640x400, 1280x720, 1280x800 (no 800x600)
 frame_width = 1280
 frame_height = 720
 gain = 10.0
@@ -11,7 +6,67 @@ fps = 30
 monochrome = true
 bit_depth = 10
 
+[display]
+fullscreen = false
+waterfall_enabled = false
+graph_height = 320
+preview_height = 80
+message_height = 80
+window_width = 1280
+window_height = 720
+font_scale = 0.4
+text_thickness = 1
+status_col1_x = 490
+status_col2_x = 800
+
 [calibration]
-data_file = "caldata.txt"
-default_pixels = [0, 640, 1280]
-default_wavelengths = [380.0, 560.0, 750.0]
+cal_pixels = [
+    0,
+    320,
+    640,
+    960,
+    1279,
+]
+cal_wavelengths = [
+    380.0,
+    472.57232212666145,
+    565.1446442533229,
+    657.7169663799843,
+    750.0,
+]
+rotation_angle = 6.042216729687787
+spectrum_y_center = 420
+perpendicular_width = 20
+default_pixels = [
+    0,
+    640,
+    1280,
+]
+default_wavelengths = [
+    380.0,
+    560.0,
+    750.0,
+]
+
+[processing]
+savgol_window = 17
+savgol_poly = 7
+peak_min_distance = 15
+peak_threshold = 20
+pixel_rows_to_average = 3
+
+[export]
+output_dir = "."
+timestamp_format = "%Y%m%d--%H%M%S"
+time_format = "%H:%M:%S"
+
+[waterfall]
+contrast = 2.5
+brightness = 10
+
+[extraction]
+method = "weighted_sum"
+rotation_angle = 0.0
+perpendicular_width = 20
+spectrum_y_center = 0
+background_percentile = 10.0

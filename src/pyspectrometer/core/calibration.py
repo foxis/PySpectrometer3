@@ -2,10 +2,12 @@
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from .calibration_io import CalibrationFileIO
+if TYPE_CHECKING:
+    from ..config import Config
 
 try:
     from scipy.interpolate import PchipInterpolator
@@ -65,35 +67,36 @@ class GraticuleData:
 class Calibration:
     """Handles wavelength calibration for the spectrometer.
 
-    This class manages loading, saving, and computing calibration data
-    that maps pixel positions to wavelengths using polynomial fitting.
+    Calibration data is stored in the config file (pyspectrometer.toml).
     """
 
     def __init__(
         self,
         width: int,
+        config: "Config",
+        config_path: Path | None = None,
         height: int = 480,
-        cal_file: Path | None = None,
         default_pixels: tuple[int, ...] = (0, 400, 800),
         default_wavelengths: tuple[float, ...] = (380.0, 560.0, 750.0),
     ):
         self.width = width
         self.height = height
-        self.cal_file = cal_file or Path("caldata.txt")
+        self._config = config
+        self._config_path = config_path
         self.default_pixels = default_pixels
         self.default_wavelengths = default_wavelengths
-        self._file_io = CalibrationFileIO(self.cal_file)
 
         self._result: CalibrationResult | None = None
         self._graticule: GraticuleData | None = None
 
-        self._rotation_angle: float = 0.0
-        self._spectrum_y_center: int = height // 2
-        self._perpendicular_width: int = 20
-
-        # Store current calibration data points
-        self._cal_pixels: list[int] = list(default_pixels)
-        self._cal_wavelengths: list[float] = list(default_wavelengths)
+        cal = config.calibration
+        self._rotation_angle = cal.rotation_angle
+        self._spectrum_y_center = cal.spectrum_y_center or height // 2
+        self._perpendicular_width = cal.perpendicular_width
+        self._cal_pixels = list(cal.cal_pixels) if cal.cal_pixels else list(default_pixels)
+        self._cal_wavelengths = (
+            list(cal.cal_wavelengths) if cal.cal_wavelengths else list(default_wavelengths)
+        )
 
     @property
     def wavelengths(self) -> np.ndarray:
@@ -117,34 +120,29 @@ class Calibration:
         return self._graticule
 
     def load(self) -> CalibrationResult:
-        """Load calibration data from file and compute wavelengths."""
-        data = self._file_io.read()
+        """Load calibration from config and compute wavelengths."""
+        cal = self._config.calibration
+        self._cal_pixels = list(cal.cal_pixels) if cal.cal_pixels else list(self.default_pixels)
+        self._cal_wavelengths = (
+            list(cal.cal_wavelengths) if cal.cal_wavelengths else list(self.default_wavelengths)
+        )
+        self._rotation_angle = cal.rotation_angle
+        self._spectrum_y_center = cal.spectrum_y_center or self.height // 2
+        self._perpendicular_width = cal.perpendicular_width
 
-        if data.has_errors:
-            pixels = list(self.default_pixels)
-            wavelengths = list(self.default_wavelengths)
-            self._cal_pixels = list(pixels)
-            self._cal_wavelengths = list(wavelengths)
-            self._rotation_angle = data.rotation_angle
-            self._spectrum_y_center = data.spectrum_y_center
-            self._perpendicular_width = data.perpendicular_width
-            print("Loading of Calibration data failed!")
-            print("Loading placeholder data...")
-            print("You MUST perform a Calibration to use this software!\n")
+        has_errors = len(self._cal_pixels) < 3 or len(self._cal_pixels) != len(self._cal_wavelengths)
+        if has_errors:
+            self._cal_pixels = list(self.default_pixels)
+            self._cal_wavelengths = list(self.default_wavelengths)
+            print("Calibration: using default wavelength data (need 3+ points in config)")
         else:
-            pixels = data.pixels
-            wavelengths = data.wavelengths
-            self._cal_pixels = list(pixels)
-            self._cal_wavelengths = list(wavelengths)
-            self._rotation_angle = data.rotation_angle
-            self._spectrum_y_center = data.spectrum_y_center
-            self._perpendicular_width = data.perpendicular_width
-            print("Loading calibration data...")
-            print(f"Loaded rotation angle: {self._rotation_angle:.2f} deg")
-            print(f"Loaded spectrum Y center (offset): {self._spectrum_y_center}")
-            print(f"Loaded perpendicular width: {self._perpendicular_width}")
+            path = self._config_path or "default"
+            print(f"Loading calibration from config ({path})")
+            print(f"  rotation={self._rotation_angle:.2f}° y={self._spectrum_y_center} width={self._perpendicular_width}")
 
-        self._result = self._compute_calibration(pixels, wavelengths, data.has_errors)
+        self._result = self._compute_calibration(
+            self._cal_pixels, self._cal_wavelengths, has_errors
+        )
         self._graticule = None
         return self._result
 
@@ -156,7 +154,7 @@ class Calibration:
         spectrum_y_center: int | None = None,
         perpendicular_width: int | None = None,
     ) -> bool:
-        """Save calibration data to file.
+        """Save calibration data to config file.
 
         Args:
             pixel_data: List of pixel positions
@@ -183,17 +181,7 @@ class Calibration:
         if perpendicular_width is not None:
             self._perpendicular_width = perpendicular_width
 
-        if self._file_io.write(
-            pixel_data,
-            wavelength_data,
-            self._rotation_angle,
-            self._spectrum_y_center,
-            self._perpendicular_width,
-        ):
-            print("Calibration Data Written!")
-            self.load()
-            return True
-        return False
+        return self._write_config(pixel_data, wavelength_data)
 
     def save_extraction_params(
         self,
@@ -214,16 +202,31 @@ class Calibration:
         self._rotation_angle = rotation_angle
         self._spectrum_y_center = spectrum_y_center
         self._perpendicular_width = perpendicular_width
+        return self._write_config(self._cal_pixels, self._cal_wavelengths)
 
-        data = self._file_io.read()
-        pixels = data.pixels if not data.has_errors else list(self.default_pixels)
-        wavelengths = data.wavelengths if not data.has_errors else list(self.default_wavelengths)
+    def _write_config(
+        self, pixel_data: list[int], wavelength_data: list[float]
+    ) -> bool:
+        """Update config with calibration data and save to file."""
+        from ..config import save_config
 
-        if self._file_io.write(
-            pixels, wavelengths, rotation_angle, spectrum_y_center, perpendicular_width
-        ):
+        cal = self._config.calibration
+        cal.cal_pixels = list(pixel_data)
+        cal.cal_wavelengths = [float(w) for w in wavelength_data]
+        cal.rotation_angle = self._rotation_angle
+        cal.spectrum_y_center = self._spectrum_y_center
+        cal.perpendicular_width = self._perpendicular_width
+
+        if save_config(self._config, self._config_path):
+            self._cal_pixels = list(pixel_data)
+            self._cal_wavelengths = [float(w) for w in wavelength_data]
+            self._result = self._compute_calibration(
+                self._cal_pixels, self._cal_wavelengths, has_errors=False
+            )
+            self._graticule = None
             print(
-                f"Extraction params saved: angle={rotation_angle:.2f}°, y={spectrum_y_center}, width={perpendicular_width}"
+                f"Calibration saved to config: "
+                f"angle={self._rotation_angle:.2f}°, y={self._spectrum_y_center}, width={self._perpendicular_width}"
             )
             return True
         return False
@@ -334,13 +337,13 @@ class Calibration:
 
     def _try_cauchy_fit(self, px: np.ndarray, wl: np.ndarray) -> tuple[np.ndarray, str]:
         """Try Cauchy-inverse fit: 1/λ² = poly(pixel) → λ = 1/√poly.
-        Uses Cauchy only within [min(px), max(px)]; extrapolates linearly outside
-        to avoid explosion at red/blue ends.
+
+        Evaluates the polynomial over the full pixel range [0, width-1] so
+        wavelength mapping covers the entire sensor.
         """
         if len(px) < 3:
             return np.zeros(self.width), "linear"
 
-        p_min, p_max = float(px.min()), float(px.max())
         # 1/λ² in µm⁻² for numerical stability (nm→µm)
         inv_wl_sq = 1.0 / ((wl * 1e-3) ** 2)
         deg = min(2, len(px) - 1)
@@ -350,46 +353,56 @@ class Calibration:
         except np.linalg.LinAlgError:
             return np.zeros(self.width), "linear"
 
-        # Evaluate only within cal range to avoid polynomial extrapolation explosion
-        interp_in = np.arange(max(0, int(p_min)), min(self.width, int(p_max) + 1), dtype=np.float64)
-        pred_inv = poly(interp_in)
+        # Evaluate polynomial over full pixel range
+        pixel_grid = np.arange(self.width, dtype=np.float64)
+        pred_inv = poly(pixel_grid)
         eps = 1e-12
         if np.any(pred_inv <= eps):
-            print("Cauchy fit produced non-positive values; falling back.")
+            print("Cauchy fit produced non-positive values; falling back to linear.")
             return np.zeros(self.width), "pchip" if _SCIPY_AVAILABLE else "linear"
 
-        wl_in = 1.0 / np.sqrt(pred_inv) * 1000.0  # µm⁻¹ → nm
-        d = np.diff(wl_in)
+        full_wl = 1.0 / np.sqrt(pred_inv) * 1000.0  # µm⁻¹ → nm
+        d = np.diff(full_wl)
         if not (np.all(d > 0) or np.all(d < 0)):
-            print("Cauchy fit produced non-monotonic result; falling back.")
+            print("Cauchy fit produced non-monotonic result; falling back to linear.")
             return np.zeros(self.width), "pchip" if _SCIPY_AVAILABLE else "linear"
 
-        # Build full array: linear extrapolation outside cal range
-        full_wl = np.interp(np.arange(self.width), px, wl)  # base
-        i0, i1 = int(p_min), int(p_max)
-        if i0 <= i1:
-            full_wl[i0 : i1 + 1] = wl_in
-        print("Calculating Cauchy-inverse fit (prism dispersion)...")
+        print("Calculating Cauchy-inverse fit (prism dispersion) over full pixel range...")
         return full_wl, "cauchy"
 
     def _fallback_interp(self, px: np.ndarray, wl: np.ndarray, method: str) -> np.ndarray:
-        """Fallback interpolation when Cauchy fails. Uses linear (no PCHIP extrapolation
-        beyond cal range) to avoid red/blue explosion.
+        """Fallback interpolation when Cauchy fails.
+
+        Uses linear interpolation within cal range and linear EXTRAPOLATION
+        (extending slope) outside, so wavelengths span full sensor (e.g. 380–750 nm)
+        rather than being capped to the source spectrum range.
         """
         if method == "pchip" and _SCIPY_AVAILABLE and len(px) >= 3:
             print("Using PCHIP interpolation (strictly monotonic)...")
             p_min, p_max = float(px.min()), float(px.max())
-            interp = PchipInterpolator(px, wl, extrapolate=False)  # no wild extrapolation
-            # Evaluate only inside [p_min, p_max]; use linear for rest
-            out = np.interp(np.arange(self.width), px, wl)
+            interp = PchipInterpolator(px, wl, extrapolate=False)
+            out = self._linear_interp_extrap(px, wl)
             pixel_grid = np.arange(self.width, dtype=np.float64)
             mask = (pixel_grid >= p_min) & (pixel_grid <= p_max)
             out[mask] = interp(pixel_grid[mask])
             d = np.diff(out)
             if np.all(d > 0) or np.all(d < 0):
                 return out
-        print("Using linear interpolation (strictly monotonic)...")
-        return np.interp(np.arange(self.width), px, wl)
+        print("Using linear interpolation with slope extrapolation (full sensor range)...")
+        return self._linear_interp_extrap(px, wl)
+
+    def _linear_interp_extrap(self, px: np.ndarray, wl: np.ndarray) -> np.ndarray:
+        """Linear interpolation within range, linear extrapolation (extend slope) outside."""
+        pixel_grid = np.arange(self.width, dtype=np.float64)
+        out = np.interp(pixel_grid, px, wl)
+        p_min, p_max = float(px.min()), float(px.max())
+        slope_lo = (wl[1] - wl[0]) / (px[1] - px[0]) if px[1] != px[0] else 0.0
+        slope_hi = (wl[-1] - wl[-2]) / (px[-1] - px[-2]) if px[-1] != px[-2] else 0.0
+        mask_lo = pixel_grid < p_min
+        mask_hi = pixel_grid > p_max
+        out[mask_lo] = wl[0] + (pixel_grid[mask_lo] - px[0]) * slope_lo
+        out[mask_hi] = wl[-1] + (pixel_grid[mask_hi] - px[-1]) * slope_hi
+        return out
 
     def _generate_graticule(self) -> GraticuleData:
         """Generate graticule data for wavelength markers."""

@@ -44,6 +44,7 @@ class Spectrometer:
         mode: str = "measurement",
         laser_nm: float = 785.0,
         load_calibration: bool = True,
+        config_path: Path | None = None,
     ):
         self.config = config or Config()
         self.mode = mode if mode in self.VALID_MODES else "measurement"
@@ -57,11 +58,11 @@ class Spectrometer:
             monochrome=self.config.camera.monochrome,
             bit_depth=self.config.camera.bit_depth,
         )
-        cal_file = self.config.calibration.data_file if load_calibration else None
         self._calibration = Calibration(
             width=self.config.camera.frame_width,
+            config=self.config,
+            config_path=config_path,
             height=self.config.camera.frame_height,
-            cal_file=cal_file,
             default_pixels=self.config.calibration.default_pixels,
             default_wavelengths=self.config.calibration.default_wavelengths,
         )
@@ -106,7 +107,10 @@ class Spectrometer:
 
         self._auto_gain = AutoGainController()
         self._auto_exposure = AutoExposureController()
-        self._exporter = CSVExporter(output_dir=self.config.export.output_dir)
+        output_dir = self.config.export.output_dir
+        if str(output_dir) == ".":
+            output_dir = Path("output")
+        self._exporter = CSVExporter(output_dir=output_dir)
         self._reference_manager = ReferenceSpectrumManager()
 
         self._mode_instance: BaseMode
@@ -243,10 +247,15 @@ class Spectrometer:
         self._display.set_autolevel_overlay(None)
         self._display.set_autolevel_click_dismiss(None)
 
-    def _save_snapshot(self, data: SpectrumData) -> None:
+    def _save_snapshot(
+        self,
+        data: SpectrumData,
+        *,
+        reference_intensity: np.ndarray | None = None,
+    ) -> None:
         """Save spectrum to CSV and optionally waterfall image."""
         csv_path = self._exporter.generate_filename("Spectrum")
-        self._exporter.export(data, csv_path)
+        self._exporter.export(data, csv_path, reference_intensity=reference_intensity)
         time_display = time.strftime(self.config.export.time_format)
         self._display.state.save_message = f"Last Save: {time_display}"
         print(f"Saved: {csv_path}")

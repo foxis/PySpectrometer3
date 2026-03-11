@@ -298,6 +298,7 @@ def main() -> int:
             mode=args.mode,
             laser_nm=args.laser,
             load_calibration=load_calibration,
+            config_path=config_loaded,
         )
         spectrometer.run()
         return 0

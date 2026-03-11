@@ -75,6 +75,7 @@ class CalibrationFileIO:
     ) -> bool:
         """Write calibration data to file."""
         try:
+            self.cal_file.parent.mkdir(parents=True, exist_ok=True)
             pixels_str = ",".join(map(str, pixels))
             wavelengths_str = ",".join(map(str, wavelengths))
             with open(self.cal_file, "w") as f:

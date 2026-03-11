@@ -1,12 +1,9 @@
 """Reference spectra for calibration.
 
-Uses colour-science for actual CIE reference spectra:
-- Hg: Low-pressure mercury emission lines (for wavelength calibration)
-- D65: CIE Illuminant D65 (daylight 6504K)
-- FL1, FL2, FL3, FL12: CIE fluorescent illuminants
-- LED1–LED3: CIE LED-B1/B2/B3 (phosphor white LEDs)
-
-All spectra from colour.SDS_ILLUMINANTS are CIE-standard, not approximations.
+Loads from data/reference/*.csv first, then falls back to colour-science.
+- Hg: Low-pressure mercury emission lines (built-in)
+- D65, FL1, FL2, FL3, FL12: from CIE_*.csv in data/reference/
+- LED1–LED3: from colour-science (no CSV in reference yet)
 """
 
 from dataclasses import dataclass
@@ -210,8 +207,7 @@ def _generate_hg_spectrum(wavelengths: np.ndarray) -> np.ndarray:
 def get_reference_spectrum(source: ReferenceSource, wavelengths: np.ndarray) -> np.ndarray:
     """Get reference spectrum intensity for given wavelengths.
 
-    Uses colour-science for actual CIE spectra (FL12, FL1, FL2, D65, LED-B1/B2/B3).
-    Hg uses known emission lines (colour has HP1–HP5, not low-pressure Hg).
+    Tries data/reference/*.csv first, then colour-science. Hg uses built-in lines.
 
     Args:
         source: Reference source type
@@ -220,6 +216,12 @@ def get_reference_spectrum(source: ReferenceSource, wavelengths: np.ndarray) -> 
     Returns:
         Intensity array, normalized 0–1
     """
+    from .reference_loader import get_reference_spectrum_from_files
+
+    from_file = get_reference_spectrum_from_files(source, wavelengths)
+    if from_file is not None:
+        return from_file
+
     colour_key = _COLOUR_SDS_MAP.get(source)
     if colour_key is not None and _COLOUR_AVAILABLE:
         return _from_colour_sds(wavelengths, colour_key)
@@ -247,6 +249,20 @@ def get_reference_name(source: ReferenceSource) -> str:
 def get_all_reference_names() -> list[tuple[ReferenceSource, str]]:
     """Get list of all available reference sources with names."""
     return [(src, get_reference_name(src)) for src in ReferenceSource]
+
+
+def list_reference_files() -> list[tuple[str, str]]:
+    """List CSV files in data/reference. For UI 'load more' support."""
+    from .reference_loader import list_available_reference_files
+
+    return list_available_reference_files()
+
+
+def reload_reference_files() -> None:
+    """Clear loaded spectrum cache (call after adding new reference files)."""
+    from .reference_loader import clear_spectrum_cache
+
+    clear_spectrum_cache()
 
 
 # XYZ conversion via colour-science (for spectral -> XYZ when needed)

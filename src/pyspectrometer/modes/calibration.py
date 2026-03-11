@@ -4,7 +4,7 @@ Workflow:
 1. Select reference source (FL, Hg, D65, LED)
 2. Point spectrometer at light source
 3. Use auto-level and auto-shift to fit spectrum in view
-4. Freeze spectrum and click AutoCal
+4. Click AutoCal (works on live or frozen spectrum)
 5. Correlation-based optimization finds polynomial that maximizes spectrum
    correlation with reference, regularized for linearity (prism dispersion)
 6. Verify overlay aligns with measured spectrum
@@ -125,6 +125,7 @@ class CalibrationMode(BaseMode):
         graph_height: int,
     ) -> None:
         """Update calibration overlay and status."""
+        self._sync_button_status(ctx)
         overlay = self.get_overlay(processed.wavelengths, graph_height)
         ctx.display.set_mode_overlay(overlay)
         sensitivity_overlay = (
@@ -143,6 +144,27 @@ class CalibrationMode(BaseMode):
             )
         else:
             ctx.display.set_status("Status", "LIVE")
+
+    def _sync_button_status(self, ctx: ModeContext) -> None:
+        """Sync button active state from model to display (Peak, Avg, Acc, G, E, AG, AE, S, sources, Overlay, Play)."""
+        for s in self.SOURCES:
+            ctx.display.set_button_active(
+                f"source_{s.name.lower()}", s == self.cal_state.current_source
+            )
+        ctx.display.set_button_active("capture_peak", ctx.display.state.hold_peaks)
+        ctx.display.set_button_active("toggle_averaging", self.state.integration_mode == "avg")
+        ctx.display.set_button_active("toggle_accumulation", self.state.integration_mode == "acc")
+        ctx.display.set_button_active("show_gain_slider", ctx.display.is_gain_slider_visible())
+        ctx.display.set_button_active(
+            "show_exposure_slider", ctx.display.is_exposure_slider_visible()
+        )
+        ctx.display.set_button_active("auto_gain", ctx.auto_gain_enabled)
+        ctx.display.set_button_active("auto_exposure", ctx.auto_exposure_enabled)
+        ctx.display.set_button_active(
+            "toggle_sensitivity", self.cal_state.sensitivity_correction_enabled
+        )
+        ctx.display.set_button_active("toggle_overlay", self.cal_state.overlay_visible)
+        ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
 
     def _on_select_source(self, ctx: ModeContext, source: ReferenceSource) -> None:
         """Handle reference source selection."""
@@ -187,9 +209,6 @@ class CalibrationMode(BaseMode):
         if now - ctx.last_auto_calibrate_time < ctx.auto_calibrate_debounce_sec:
             return
         ctx.last_auto_calibrate_time = now
-        if not ctx.frozen_spectrum:
-            print("[CAL] Freeze spectrum first (Play button), then click AutoCal")
-            return
         measured = (
             ctx.last_intensity_pre_sensitivity
             if (
@@ -237,26 +256,32 @@ class CalibrationMode(BaseMode):
         else:
             pixels = [p for p, w in cal_points]
             wavelengths = [w for p, w in cal_points]
-        saved = False
+        saved_wl = False
         if len(pixels) >= 4:
             if ctx.calibration.save(pixels, wavelengths):
                 print(f"[CAL] Wavelength calibration saved ({len(pixels)} points)")
-                saved = True
+                saved_wl = True
         ctx.calibration.save_extraction_params(
             rotation_angle=ctx.extractor.rotation_angle,
             spectrum_y_center=ctx.extractor.spectrum_y_center,
             perpendicular_width=ctx.extractor.perpendicular_width,
         )
-        print("[CAL] Extraction params saved")
-        if not saved:
-            print("[CAL] Need at least 4 calibration points to save wavelength cal")
+        if not saved_wl:
+            print(
+                "[CAL] Extraction params (autolevel) saved. "
+                "Run AutoCal for wavelength cal (need 4+ points)."
+            )
 
     def _on_button_save(self, ctx: ModeContext) -> None:
-        """Handle save spectrum button."""
-        if ctx.last_data is not None:
-            ctx.save_snapshot(ctx.last_data)
-        else:
+        """Handle save spectrum button. In calibration mode, passes reference illuminant for special CSV format."""
+        if ctx.last_data is None:
             print("[SAVE] No spectrum data available")
+            return
+        ref_intensity = get_reference_spectrum(
+            self.cal_state.current_source,
+            ctx.last_data.wavelengths,
+        )
+        ctx.save_snapshot(ctx.last_data, reference_intensity=ref_intensity)
 
     def _on_load_calibration(self, ctx: ModeContext) -> None:
         """Load calibration from file (calibration mode only)."""
@@ -311,15 +336,15 @@ class CalibrationMode(BaseMode):
         """Get calibration mode buttons."""
         return [
             # Row 1: Source selection (Hg, D65, FL1, FL2, FL3, FL12, LED1, LED2, LED3)
-            ButtonDefinition("Hg", "source_hg", row=1),
-            ButtonDefinition("D65", "source_d65", row=1),
-            ButtonDefinition("FL1", "source_fl1", row=1),
-            ButtonDefinition("FL2", "source_fl2", row=1),
-            ButtonDefinition("FL3", "source_fl3", row=1),
-            ButtonDefinition("FL12", "source_fl12", row=1),
-            ButtonDefinition("LED1", "source_led", row=1),
-            ButtonDefinition("LED2", "source_led2", row=1),
-            ButtonDefinition("LED3", "source_led3", row=1),
+            ButtonDefinition("Hg", "source_hg", is_toggle=True, row=1),
+            ButtonDefinition("D65", "source_d65", is_toggle=True, row=1),
+            ButtonDefinition("FL1", "source_fl1", is_toggle=True, row=1),
+            ButtonDefinition("FL2", "source_fl2", is_toggle=True, row=1),
+            ButtonDefinition("FL3", "source_fl3", is_toggle=True, row=1),
+            ButtonDefinition("FL12", "source_fl12", is_toggle=True, row=1),
+            ButtonDefinition("LED1", "source_led", is_toggle=True, row=1),
+            ButtonDefinition("LED2", "source_led2", is_toggle=True, row=1),
+            ButtonDefinition("LED3", "source_led3", is_toggle=True, row=1),
             ButtonDefinition("Overlay", "toggle_overlay", is_toggle=True, row=1),
             ButtonDefinition("__spacer__", "__spacer_left__", row=1),
             ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=1),

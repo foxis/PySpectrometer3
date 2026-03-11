@@ -5,17 +5,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import tomllib
+import tomli_w
 
 
 def config_search_paths(explicit: Path | None = None) -> list[Path]:
-    """Return paths to try for config, in order."""
+    """Return paths to try for config, in order. Primary: user config dir."""
     if explicit is not None:
         return [explicit.expanduser()]
     paths = []
     if p := os.environ.get("PYSPECTROMETER_CONFIG"):
         paths.append(Path(p).expanduser())
-    paths.append(Path.cwd() / "pyspectrometer.toml")
     paths.append(Path.home() / ".config" / "pyspectrometer" / "config.toml")
+    paths.append(Path.cwd() / "pyspectrometer.toml")
     return paths
 
 
@@ -43,11 +44,96 @@ def load_config(path: Path | None = None) -> tuple["Config", Path | None]:
     return config, None
 
 
+def save_config(config: "Config", config_path: Path | None) -> bool:
+    """Write config to file including calibration data.
+
+    Always saves to user config directory (~/.config/pyspectrometer/config.toml)
+    so project directory is not polluted. config_path is ignored for write location.
+
+    Args:
+        config: Config to save
+        config_path: Ignored; kept for API compatibility.
+
+    Returns:
+        True if saved successfully
+    """
+    path = Path.home() / ".config" / "pyspectrometer" / "config.toml"
+    path = path.expanduser().resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc = _config_to_dict(config)
+    try:
+        with open(path, "wb") as f:
+            tomli_w.dump(doc, f)
+        return True
+    except OSError as e:
+        print(f"Failed to save config: {e}")
+        return False
+
+
+def _config_to_dict(config: "Config") -> dict:
+    """Build TOML-serializable dict from Config."""
+    return {
+        "camera": {
+            "frame_width": config.camera.frame_width,
+            "frame_height": config.camera.frame_height,
+            "gain": config.camera.gain,
+            "fps": config.camera.fps,
+            "monochrome": config.camera.monochrome,
+            "bit_depth": config.camera.bit_depth,
+        },
+        "display": {
+            "fullscreen": config.display.fullscreen,
+            "waterfall_enabled": config.display.waterfall_enabled,
+            "graph_height": config.display.graph_height,
+            "preview_height": config.display.preview_height,
+            "message_height": config.display.message_height,
+            "window_width": config.display.window_width,
+            "window_height": config.display.window_height,
+            "font_scale": config.display.font_scale,
+            "text_thickness": config.display.text_thickness,
+            "status_col1_x": config.display.status_col1_x,
+            "status_col2_x": config.display.status_col2_x,
+        },
+        "calibration": {
+            "cal_pixels": list(config.calibration.cal_pixels),
+            "cal_wavelengths": [float(w) for w in config.calibration.cal_wavelengths],
+            "rotation_angle": config.calibration.rotation_angle,
+            "spectrum_y_center": config.calibration.spectrum_y_center,
+            "perpendicular_width": config.calibration.perpendicular_width,
+            "default_pixels": list(config.calibration.default_pixels),
+            "default_wavelengths": [float(w) for w in config.calibration.default_wavelengths],
+        },
+        "processing": {
+            "savgol_window": config.processing.savgol_window,
+            "savgol_poly": config.processing.savgol_poly,
+            "peak_min_distance": config.processing.peak_min_distance,
+            "peak_threshold": config.processing.peak_threshold,
+            "pixel_rows_to_average": config.processing.pixel_rows_to_average,
+        },
+        "export": {
+            "output_dir": str(config.export.output_dir),
+            "timestamp_format": config.export.timestamp_format,
+            "time_format": config.export.time_format,
+        },
+        "waterfall": {
+            "contrast": config.waterfall.contrast,
+            "brightness": config.waterfall.brightness,
+        },
+        "extraction": {
+            "method": config.extraction.method,
+            "rotation_angle": config.extraction.rotation_angle,
+            "perpendicular_width": config.extraction.perpendicular_width,
+            "spectrum_y_center": config.extraction.spectrum_y_center,
+            "background_percentile": config.extraction.background_percentile,
+        },
+    }
+
+
 def _apply_config(config: "Config", data: dict) -> None:
 
     def apply(obj: object, d: dict) -> None:
         for k, v in d.items():
-            if isinstance(v, dict) and k != "data_file" and hasattr(obj, k):
+            if isinstance(v, dict) and hasattr(obj, k):
                 apply(getattr(obj, k), v)
             elif hasattr(obj, k):
                 setattr(obj, k, v)
@@ -58,12 +144,34 @@ def _apply_config(config: "Config", data: dict) -> None:
         apply(config.display, data["display"])
     if "calibration" in data:
         cal = data["calibration"]
-        if "data_file" in cal:
-            config.calibration.data_file = Path(cal["data_file"])
+        if "cal_pixels" in cal:
+            config.calibration.cal_pixels = list(cal["cal_pixels"])
+        if "cal_wavelengths" in cal:
+            config.calibration.cal_wavelengths = [float(w) for w in cal["cal_wavelengths"]]
+        if "rotation_angle" in cal:
+            config.calibration.rotation_angle = float(cal["rotation_angle"])
+        if "spectrum_y_center" in cal:
+            config.calibration.spectrum_y_center = int(cal["spectrum_y_center"])
+        if "perpendicular_width" in cal:
+            config.calibration.perpendicular_width = int(cal["perpendicular_width"])
         if "default_pixels" in cal:
             config.calibration.default_pixels = tuple(cal["default_pixels"])
         if "default_wavelengths" in cal:
             config.calibration.default_wavelengths = tuple(cal["default_wavelengths"])
+    if "processing" in data:
+        apply(config.processing, data["processing"])
+    if "export" in data:
+        exp = data["export"]
+        if "output_dir" in exp:
+            config.export.output_dir = Path(exp["output_dir"])
+        if "timestamp_format" in exp:
+            config.export.timestamp_format = exp["timestamp_format"]
+        if "time_format" in exp:
+            config.export.time_format = exp["time_format"]
+    if "waterfall" in data:
+        apply(config.waterfall, data["waterfall"])
+    if "extraction" in data:
+        apply(config.extraction, data["extraction"])
 
 
 @dataclass
@@ -134,9 +242,20 @@ class ProcessingConfig:
 
 @dataclass
 class CalibrationConfig:
-    """Calibration-related configuration."""
+    """Calibration-related configuration.
 
-    data_file: Path = field(default_factory=lambda: Path("caldata.txt"))
+    Calibration data (cal_pixels, cal_wavelengths, rotation_angle, etc.)
+    is stored in the config file alongside other settings.
+    """
+
+    # Loaded/saved calibration data
+    cal_pixels: list[int] = field(default_factory=lambda: [0, 640, 1280])
+    cal_wavelengths: list[float] = field(default_factory=lambda: [380.0, 560.0, 750.0])
+    rotation_angle: float = 0.0
+    spectrum_y_center: int = 0
+    perpendicular_width: int = 20
+
+    # Defaults when no calibration in config
     default_pixels: tuple[int, ...] = (0, 640, 1280)
     default_wavelengths: tuple[float, ...] = (380.0, 560.0, 750.0)
 
@@ -145,7 +264,7 @@ class CalibrationConfig:
 class ExportConfig:
     """Export-related configuration."""
 
-    output_dir: Path = field(default_factory=lambda: Path("."))
+    output_dir: Path = field(default_factory=lambda: Path("output"))
     timestamp_format: str = "%Y%m%d--%H%M%S"
     time_format: str = "%H:%M:%S"
 

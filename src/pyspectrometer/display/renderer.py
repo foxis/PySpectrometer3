@@ -813,6 +813,14 @@ class DisplayManager:
         s.visible = not s.visible
         return s.visible
 
+    def is_gain_slider_visible(self) -> bool:
+        """Return whether the gain slider is visible."""
+        return self._slider_panel.gain_slider.visible
+
+    def is_exposure_slider_visible(self) -> bool:
+        """Return whether the exposure slider is visible."""
+        return self._slider_panel.exposure_slider.visible
+
     def show_gain_slider(self, visible: bool) -> None:
         """Show or hide the gain slider."""
         self._slider_panel.gain_slider.visible = visible

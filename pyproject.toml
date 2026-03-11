@@ -9,6 +9,7 @@ packages = [{ include = "pyspectrometer", from = "src" }]
 [tool.poetry.dependencies]
 python = ">=3.11,<3.15"
 numpy = ">=1.20.0"
+tomli-w = ">=1.0.0"
 opencv-python = ">=4.5.0"
 scipy = ">=1.7.0"
 colour-science = ">=0.4.7"
@@ -21,6 +22,7 @@ ruff = ">=0.8.0"
 
 [tool.poetry.scripts]
 calibrate = "pyspectrometer.cli:calibrate"
+fit_csv = "pyspectrometer.cli:fit_csv"
 measure = "pyspectrometer.cli:measure"
 colors = "pyspectrometer.cli:colors"
 raman = "pyspectrometer.cli:raman"

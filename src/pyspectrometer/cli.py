@@ -30,6 +30,43 @@ def calibrate() -> int:
     return _run("calibration", _camera_arg())
 
 
+def fit_csv() -> int:
+    """Fit pixels to wavelengths from CSV using FL12. Usage: poetry run fit_csv <csv_path> [--save]"""
+    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    csv_path = args[0] if args else None
+    if not csv_path or not Path(csv_path).exists():
+        print("Usage: poetry run fit_csv <path/to/spectrum.csv> [--save]")
+        print("  --save: write calibration to config")
+        return 1
+    save_to_config = "--save" in sys.argv[1:]
+
+    from .data.reference_spectra import ReferenceSource, get_reference_name
+    from .processing.auto_calibrator import AutoCalibrator
+
+    cal = AutoCalibrator()
+    points = cal.calibrate_from_csv(csv_path, source=ReferenceSource.FL12)
+    if not points:
+        return 1
+    print(f"FL12 calibration: {len(points)} points")
+    for pixel, wl in points:
+        print(f"  Pixel {pixel} -> {wl:.1f} nm")
+
+    if save_to_config:
+        from .config import load_config, save_config
+
+        config, config_path = load_config()
+        pixels = [p for p, _ in points]
+        wavelengths = [w for _, w in points]
+        config.calibration.cal_pixels = pixels
+        config.calibration.cal_wavelengths = wavelengths
+        if save_config(config, config_path):
+            print(f"Saved to {config_path or 'pyspectrometer.toml'}")
+        else:
+            print("Failed to save config")
+            return 1
+    return 0
+
+
 def measure() -> int:
     """Run measurement mode. Usage: poetry run measure [camera_source]"""
     return _run("measurement", _camera_arg())
