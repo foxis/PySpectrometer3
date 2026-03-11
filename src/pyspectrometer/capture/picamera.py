@@ -168,6 +168,8 @@ class Capture(CameraInterface):
         print(f"Using raw capture: {raw_format} {raw_size} {best_mode.get('bit_depth')}-bit")
         self._actual_bit_depth = best_mode.get("bit_depth", 10)
         self._use_raw = True
+        # Use raw stream dimensions for capture (main stream stays for display compatibility)
+        self._width, self._height = raw_size
         return self._camera.create_video_configuration(
             main={"format": "YUV420", "size": (self._width, self._height)},
             raw={"format": raw_format, "size": raw_size},

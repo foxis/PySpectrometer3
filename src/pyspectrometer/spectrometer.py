@@ -287,6 +287,7 @@ class Spectrometer:
                 )
                 self._render_frame(processed)
                 self._check_window_closed()
+                cv2.waitKey(1)  # Required: process window events, throttle loop, allow display refresh
         finally:
             self._camera.stop()
             self._display.destroy()
