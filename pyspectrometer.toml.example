@@ -1,0 +1,17 @@
+# PySpectrometer3 config (TOML)
+# Copy to pyspectrometer.toml or ~/.config/pyspectrometer/config.toml
+# Or set PYSPECTROMETER_CONFIG=/path/to/config.toml
+
+[camera]
+# OV9281 modes: 640x400, 1280x720, 1280x800 (no 800x600)
+frame_width = 1280
+frame_height = 720
+gain = 10.0
+fps = 30
+monochrome = true
+bit_depth = 10
+
+[calibration]
+data_file = "caldata.txt"
+default_pixels = [0, 640, 1280]
+default_wavelengths = [380.0, 560.0, 750.0]
