@@ -38,7 +38,7 @@ class CalibrationState:
     """State specific to calibration mode."""
 
     # Current reference source
-    current_source: ReferenceSource = ReferenceSource.FL
+    current_source: ReferenceSource = ReferenceSource.HG
 
     # Overlay visibility
     overlay_visible: bool = True
@@ -62,16 +62,14 @@ class CalibrationState:
 class CalibrationMode(BaseMode):
     """Calibration mode for wavelength calibration."""
 
-    # Reference sources in cycle order
+    # Reference sources in cycle order: Hg, D65, FL1, FL2, FL3, FL12, LED1, LED2, LED3
     SOURCES = [
-        ReferenceSource.FL,
+        ReferenceSource.HG,
+        ReferenceSource.D65,
+        ReferenceSource.FL1,
         ReferenceSource.FL2,
         ReferenceSource.FL3,
-        ReferenceSource.FL4,
-        ReferenceSource.FL5,
-        ReferenceSource.A,
-        ReferenceSource.D65,
-        ReferenceSource.HG,
+        ReferenceSource.FL12,
         ReferenceSource.LED,
         ReferenceSource.LED2,
         ReferenceSource.LED3,
@@ -115,10 +113,10 @@ class CalibrationMode(BaseMode):
         ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
 
     def on_start(self, ctx: ModeContext) -> None:
-        """Select FL as default source and update source button states."""
-        self.select_source(ReferenceSource.FL)
-        for s in ReferenceSource:
-            ctx.display.set_button_active(f"source_{s.name.lower()}", s == ReferenceSource.FL)
+        """Select Hg as default source and update source button states."""
+        self.select_source(ReferenceSource.HG)
+        for s in self.SOURCES:
+            ctx.display.set_button_active(f"source_{s.name.lower()}", s == ReferenceSource.HG)
 
     def update_display(
         self,
@@ -149,7 +147,7 @@ class CalibrationMode(BaseMode):
     def _on_select_source(self, ctx: ModeContext, source: ReferenceSource) -> None:
         """Handle reference source selection."""
         self.select_source(source)
-        for s in ReferenceSource:
+        for s in self.SOURCES:
             ctx.display.set_button_active(f"source_{s.name.lower()}", source == s)
 
     def _on_toggle_overlay(self, ctx: ModeContext) -> None:
@@ -312,18 +310,16 @@ class CalibrationMode(BaseMode):
     def get_buttons(self) -> list[ButtonDefinition]:
         """Get calibration mode buttons."""
         return [
-            # Row 1: Source selection, spacer, SENS/LEVEL/CALIB/R
-            ButtonDefinition("FL", "source_fl", row=1),
+            # Row 1: Source selection (Hg, D65, FL1, FL2, FL3, FL12, LED1, LED2, LED3)
             ButtonDefinition("Hg", "source_hg", row=1),
             ButtonDefinition("D65", "source_d65", row=1),
+            ButtonDefinition("FL1", "source_fl1", row=1),
+            ButtonDefinition("FL2", "source_fl2", row=1),
+            ButtonDefinition("FL3", "source_fl3", row=1),
+            ButtonDefinition("FL12", "source_fl12", row=1),
             ButtonDefinition("LED1", "source_led", row=1),
             ButtonDefinition("LED2", "source_led2", row=1),
             ButtonDefinition("LED3", "source_led3", row=1),
-            ButtonDefinition("FL2", "source_fl2", row=1),
-            ButtonDefinition("FL3", "source_fl3", row=1),
-            ButtonDefinition("FL4", "source_fl4", row=1),
-            ButtonDefinition("FL5", "source_fl5", row=1),
-            ButtonDefinition("A", "source_a", row=1),
             ButtonDefinition("Overlay", "toggle_overlay", is_toggle=True, row=1),
             ButtonDefinition("__spacer__", "__spacer_left__", row=1),
             ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=1),
@@ -387,9 +383,12 @@ class CalibrationMode(BaseMode):
 
         # Color based on source
         colors = {
-            ReferenceSource.FL: (255, 200, 0),  # Yellow
             ReferenceSource.HG: (255, 0, 255),  # Magenta
             ReferenceSource.D65: (100, 200, 255),  # Daylight blue
+            ReferenceSource.FL1: (255, 200, 0),  # Yellow
+            ReferenceSource.FL2: (200, 255, 100),  # Light green
+            ReferenceSource.FL3: (255, 220, 150),  # Light orange
+            ReferenceSource.FL12: (255, 200, 0),  # Yellow
             ReferenceSource.LED: (200, 200, 200),  # White/gray
             ReferenceSource.LED2: (180, 220, 220),  # Light cyan
             ReferenceSource.LED3: (220, 200, 220),  # Light purple

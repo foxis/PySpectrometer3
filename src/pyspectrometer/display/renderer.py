@@ -317,20 +317,20 @@ class DisplayManager:
         if messages.shape[1] != width:
             messages = cv2.resize(messages, (width, messages.shape[0]))
 
-        # Get status text for overlay
-        status_text = self._control_bar.get_status_text()
+        # Get status segments for overlay (supports colored "Calibrate" in non-calibration modes)
+        status_segments = self._control_bar.get_status_segments()
 
         match self._preview_mode:
             case "none":
                 # No preview - just control bar with spectrum graph
                 # Draw status at bottom of graph
-                self._draw_status_bar(graph, status_text)
+                self._draw_status_bar(graph, status_segments)
                 spectrum_vertical = np.vstack((messages, graph))
             case "window":
                 # Windowed preview (cropped) above spectrum graph
                 # NO lines drawn - just show the clean cropped spectrum image
                 # Draw status on preview strip
-                self._draw_status_overlay(cropped, status_text)
+                self._draw_status_overlay(cropped, status_segments)
                 spectrum_vertical = np.vstack((messages, cropped, graph))
             case "full":
                 # Full camera view REPLACES the spectrum graph entirely
@@ -366,16 +366,16 @@ class DisplayManager:
                         original_height,
                     )
                     # Draw status at bottom of camera view
-                    self._draw_status_bar(display, status_text)
+                    self._draw_status_bar(display, status_segments)
 
                     spectrum_vertical = np.vstack((messages, display))
                 else:
                     # No raw frame available, fall back to windowed
-                    self._draw_status_overlay(cropped, status_text)
+                    self._draw_status_overlay(cropped, status_segments)
                     spectrum_vertical = np.vstack((messages, cropped, graph))
             case _:
                 # Default to windowed - no lines, just clean preview
-                self._draw_status_overlay(cropped, status_text)
+                self._draw_status_overlay(cropped, status_segments)
                 spectrum_vertical = np.vstack((messages, cropped, graph))
 
         # Non-blocking autolevel overlay (replaces content below control bar)
@@ -384,7 +384,10 @@ class DisplayManager:
             img = self._autolevel_overlay
             if img.shape[1] != width or img.shape[0] != content_height:
                 img = cv2.resize(img, (width, content_height))
-            self._draw_status_bar(img, status_text + "  [Click or 'a' to close]")
+            autolevel_segments = status_segments + [
+                ("  [Click or 'a' to close]", (0, 255, 255))
+            ]
+            self._draw_status_bar(img, autolevel_segments)
             spectrum_vertical = np.vstack((messages, img))
 
         # Show the composed image
@@ -627,61 +630,76 @@ class DisplayManager:
         p1 = (int(center_line_orig[1, 0] * scale_x), int(center_line_orig[1, 1] * scale_y))
         cv2.line(frame, p0, p1, (255, 255, 0), 1)
 
-    def _draw_status_overlay(self, image: np.ndarray, status_text: str) -> None:
-        """Draw status text overlaid on the preview strip (semi-transparent background)."""
-        if not status_text:
-            return
-
+    def _draw_status_segments(
+        self,
+        image: np.ndarray,
+        segments: list[tuple[str, tuple[int, int, int]]],
+        x: int,
+        y: int,
+        shadow: bool = True,
+    ) -> None:
+        """Draw status segments with per-segment colors."""
         font = self._font
         font_scale = self.config.display.font_scale
         thickness = 1
+        for text, color in segments:
+            if not text:
+                continue
+            if shadow:
+                cv2.putText(
+                    image, text, (x + 1, y + 1), font, font_scale,
+                    (0, 0, 0), thickness, cv2.LINE_AA
+                )
+            cv2.putText(
+                image, text, (x, y), font, font_scale, color, thickness, cv2.LINE_AA
+            )
+            (w, _), _ = cv2.getTextSize(text, font, font_scale, thickness)
+            x += w
 
-        # Get text size
+    def _draw_status_overlay(
+        self,
+        image: np.ndarray,
+        segments: list[tuple[str, tuple[int, int, int]]],
+    ) -> None:
+        """Draw status segments overlaid on the preview strip (semi-transparent background)."""
+        if not segments:
+            return
+
+        full_text = "".join(s[0] for s in segments)
+        font = self._font
+        font_scale = self.config.display.font_scale
+        thickness = 1
         (text_width, text_height), baseline = cv2.getTextSize(
-            status_text, font, font_scale, thickness
+            full_text, font, font_scale, thickness
         )
 
-        # Position at bottom-left with small padding
         padding = 3
         x = padding
         y = image.shape[0] - padding
 
-        # Draw semi-transparent background rectangle
         bg_x1 = x - padding
         bg_y1 = y - text_height - padding
         bg_x2 = x + text_width + padding
         bg_y2 = y + baseline + padding
 
-        # Create overlay for transparency effect
         overlay = image.copy()
         cv2.rectangle(overlay, (bg_x1, bg_y1), (bg_x2, bg_y2), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.5, image, 0.5, 0, image)
 
-        # Draw text
-        cv2.putText(
-            image, status_text, (x, y), font, font_scale, (0, 255, 255), thickness, cv2.LINE_AA
-        )
+        self._draw_status_segments(image, segments, x, y, shadow=False)
 
-    def _draw_status_bar(self, image: np.ndarray, status_text: str) -> None:
-        """Draw status text at the bottom of the image."""
-        if not status_text:
+    def _draw_status_bar(
+        self,
+        image: np.ndarray,
+        segments: list[tuple[str, tuple[int, int, int]]],
+    ) -> None:
+        """Draw status segments at the bottom of the image."""
+        if not segments:
             return
 
-        font = self._font
-        font_scale = self.config.display.font_scale
-        thickness = 1
-
-        # Position at bottom-left
         x = 5
         y = image.shape[0] - 5
-
-        # Draw with shadow for readability
-        cv2.putText(
-            image, status_text, (x + 1, y + 1), font, font_scale, (0, 0, 0), thickness, cv2.LINE_AA
-        )
-        cv2.putText(
-            image, status_text, (x, y), font, font_scale, (0, 255, 255), thickness, cv2.LINE_AA
-        )
+        self._draw_status_segments(image, segments, x, y, shadow=True)
 
     def get_waterfall_image(self) -> np.ndarray | None:
         """Get the current waterfall display image."""
@@ -740,8 +758,9 @@ class DisplayManager:
     ) -> None:
         """Update status values displayed in the control bar."""
         cal_result = self.calibration.result
-
-        self.set_status("Cal", cal_result.status_message[:12])
+        cal_label = "Calibrate" if self.mode != "calibration" else "Cal"
+        self._control_bar.set_calibrate_red(self.mode != "calibration")
+        self.set_status(cal_label, cal_result.status_message[:12])
         self.set_status("Gain", f"{camera_gain:.0f}")
         self.set_status("SG", str(savgol_poly))
         self.set_status("Ext", extraction_method[:3].upper())

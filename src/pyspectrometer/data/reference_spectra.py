@@ -1,11 +1,10 @@
 """Reference spectra for calibration.
 
 Uses colour-science for actual CIE reference spectra:
-- D65: CIE Illuminant D65 (daylight, 6504K) – the standard daylight spectrum
-- A: CIE Standard Illuminant A (incandescent, 2856K)
-- FL1–FL5: CIE fluorescent illuminants (actual spectra)
-- LED: CIE LED-B1 (phosphor white LED)
 - Hg: Low-pressure mercury emission lines (for wavelength calibration)
+- D65: CIE Illuminant D65 (daylight 6504K)
+- FL1, FL2, FL3, FL12: CIE fluorescent illuminants
+- LED1–LED3: CIE LED-B1/B2/B3 (phosphor white LEDs)
 
 All spectra from colour.SDS_ILLUMINANTS are CIE-standard, not approximations.
 """
@@ -27,14 +26,12 @@ except ImportError:
 class ReferenceSource(Enum):
     """Available reference light sources for calibration."""
 
-    FL = auto()  # CIE FL1 - Daylight fluorescent
+    HG = auto()  # Mercury low-pressure lamp
+    D65 = auto()  # CIE Illuminant D65 (daylight 6504K)
+    FL1 = auto()  # CIE FL1 - Daylight fluorescent
     FL2 = auto()  # CIE FL2 - Cool white fluorescent
     FL3 = auto()  # CIE FL3 - White fluorescent
-    FL4 = auto()  # CIE FL4 - Warm white fluorescent
-    FL5 = auto()  # CIE FL5 - Daylight fluorescent (alternative)
-    A = auto()  # CIE Standard Illuminant A (incandescent)
-    D65 = auto()  # CIE Illuminant D65 (daylight 6504K) - actual spectrum
-    HG = auto()  # Mercury low-pressure lamp
+    FL12 = auto()  # CIE FL12 - Daylight fluorescent (narrow band)
     LED = auto()  # CIE LED-B1 (phosphor white LED)
     LED2 = auto()  # CIE LED-B2 (phosphor white LED)
     LED3 = auto()  # CIE LED-B3 (phosphor white LED)
@@ -62,12 +59,10 @@ class ReferenceSpectrum:
 
 # colour-science SDS keys for each ReferenceSource
 _COLOUR_SDS_MAP = {
-    ReferenceSource.FL: "FL1",
+    ReferenceSource.FL1: "FL1",
     ReferenceSource.FL2: "FL2",
     ReferenceSource.FL3: "FL3",
-    ReferenceSource.FL4: "FL4",
-    ReferenceSource.FL5: "FL5",
-    ReferenceSource.A: "A",
+    ReferenceSource.FL12: "FL12",
     ReferenceSource.D65: "D65",
     ReferenceSource.LED: "LED-B1",
     ReferenceSource.LED2: "LED-B2",
@@ -115,15 +110,22 @@ LED_LINES = [
 
 REFERENCE_SPECTRA: dict[ReferenceSource, ReferenceSpectrum] = {
     ReferenceSource.HG: ReferenceSpectrum(
-        name="Mercury (Hg)",
+        name="Hg",
         source=ReferenceSource.HG,
         peaks=HG_LINES,
         description="Low-pressure mercury vapor lamp emission lines",
         colour_key=None,
     ),
-    ReferenceSource.FL: ReferenceSpectrum(
+    ReferenceSource.D65: ReferenceSpectrum(
+        name="D65",
+        source=ReferenceSource.D65,
+        peaks=D65_LINES,
+        description="CIE Illuminant D65 (daylight 6504K)",
+        colour_key="D65",
+    ),
+    ReferenceSource.FL1: ReferenceSpectrum(
         name="FL1",
-        source=ReferenceSource.FL,
+        source=ReferenceSource.FL1,
         peaks=FL_LINES,
         description="CIE fluorescent illuminant FL1, Daylight fluorescent",
         colour_key="FL1",
@@ -142,50 +144,29 @@ REFERENCE_SPECTRA: dict[ReferenceSource, ReferenceSpectrum] = {
         description="CIE fluorescent illuminant FL3, White fluorescent",
         colour_key="FL3",
     ),
-    ReferenceSource.FL4: ReferenceSpectrum(
-        name="FL4",
-        source=ReferenceSource.FL4,
+    ReferenceSource.FL12: ReferenceSpectrum(
+        name="FL12",
+        source=ReferenceSource.FL12,
         peaks=FL_LINES,
-        description="CIE fluorescent illuminant FL4, Warm white fluorescent",
-        colour_key="FL4",
-    ),
-    ReferenceSource.FL5: ReferenceSpectrum(
-        name="FL5",
-        source=ReferenceSource.FL5,
-        peaks=FL_LINES,
-        description="CIE fluorescent illuminant FL5, Daylight fluorescent",
-        colour_key="FL5",
-    ),
-    ReferenceSource.A: ReferenceSpectrum(
-        name="Illum A",
-        source=ReferenceSource.A,
-        peaks=[],
-        description="CIE Standard Illuminant A (incandescent)",
-        colour_key="A",
-    ),
-    ReferenceSource.D65: ReferenceSpectrum(
-        name="D65",
-        source=ReferenceSource.D65,
-        peaks=D65_LINES,
-        description="CIE Illuminant D65 (daylight 6504K)",
-        colour_key="D65",
+        description="CIE fluorescent illuminant FL12, Daylight fluorescent (narrow band)",
+        colour_key="FL12",
     ),
     ReferenceSource.LED: ReferenceSpectrum(
-        name="LED-B1",
+        name="LED1",
         source=ReferenceSource.LED,
         peaks=LED_LINES,
         description="CIE LED-B1 (phosphor white LED)",
         colour_key="LED-B1",
     ),
     ReferenceSource.LED2: ReferenceSpectrum(
-        name="LED-B2",
+        name="LED2",
         source=ReferenceSource.LED2,
         peaks=LED_LINES,
         description="CIE LED-B2 (phosphor white LED)",
         colour_key="LED-B2",
     ),
     ReferenceSource.LED3: ReferenceSpectrum(
-        name="LED-B3",
+        name="LED3",
         source=ReferenceSource.LED3,
         peaks=LED_LINES,
         description="CIE LED-B3 (phosphor white LED)",
@@ -229,7 +210,7 @@ def _generate_hg_spectrum(wavelengths: np.ndarray) -> np.ndarray:
 def get_reference_spectrum(source: ReferenceSource, wavelengths: np.ndarray) -> np.ndarray:
     """Get reference spectrum intensity for given wavelengths.
 
-    Uses colour-science for actual CIE spectra (D65, A, FL1–FL5, LED-B1).
+    Uses colour-science for actual CIE spectra (FL12, FL1, FL2, D65, LED-B1/B2/B3).
     Hg uses known emission lines (colour has HP1–HP5, not low-pressure Hg).
 
     Args:

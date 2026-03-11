@@ -87,6 +87,7 @@ class ControlBar:
         self._row1: ButtonBar | None = None
         self._row2: ButtonBar | None = None
         self._status_values: dict[str, str] = {}
+        self._calibrate_red: bool = False
         self._button_style: ButtonStyle | None = None
 
         self._setup_buttons(buttons)
@@ -213,6 +214,32 @@ class ControlBar:
             value: Value to display
         """
         self._status_values[key] = value
+
+    def set_calibrate_red(self, red: bool) -> None:
+        """Set whether 'Calibrate' label should be drawn in red (non-calibration modes)."""
+        self._calibrate_red = red
+
+    def get_status_segments(
+        self,
+        default_color: tuple[int, int, int] = (0, 255, 255),
+        red_color: tuple[int, int, int] = (0, 0, 255),
+    ) -> list[tuple[str, tuple[int, int, int]]]:
+        """Get status as segments for colored drawing.
+
+        Returns:
+            List of (text, BGR color). Use None color for default (caller substitutes).
+        """
+        segments: list[tuple[str, tuple[int, int, int]]] = []
+        items = list(self._status_values.items())
+        for i, (k, v) in enumerate(items):
+            if k == "Calibrate" and self._calibrate_red:
+                segments.append((f"{k}:", red_color))
+                segments.append((v, default_color))
+            else:
+                segments.append((f"{k}:{v}", default_color))
+            if i < len(items) - 1:
+                segments.append(("  ", default_color))
+        return segments
 
     def render(self) -> np.ndarray:
         """Render the control bar (buttons only, no status).

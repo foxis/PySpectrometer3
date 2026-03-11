@@ -43,6 +43,7 @@ class Spectrometer:
         camera: CameraInterface | None = None,
         mode: str = "measurement",
         laser_nm: float = 785.0,
+        load_calibration: bool = True,
     ):
         self.config = config or Config()
         self.mode = mode if mode in self.VALID_MODES else "measurement"
@@ -56,10 +57,11 @@ class Spectrometer:
             monochrome=self.config.camera.monochrome,
             bit_depth=self.config.camera.bit_depth,
         )
+        cal_file = self.config.calibration.data_file if load_calibration else None
         self._calibration = Calibration(
             width=self.config.camera.frame_width,
             height=self.config.camera.frame_height,
-            cal_file=self.config.calibration.data_file,
+            cal_file=cal_file,
             default_pixels=self.config.calibration.default_pixels,
             default_wavelengths=self.config.calibration.default_wavelengths,
         )
@@ -130,32 +132,6 @@ class Spectrometer:
         )
         self._ctx = self._build_context()
         self._mode_instance.setup(self._ctx)
-
-    def _sync_to_camera_dimensions(self) -> None:
-        """Sync config, extractor, calibration, and display to actual camera dimensions.
-
-        The capturer returns frames at the actual sensor size (e.g. from raw stream).
-        This ensures all pipeline components use that size rather than config defaults.
-        """
-        actual_width = self._camera.width
-        actual_height = self._camera.height
-        if (
-            actual_width == self.config.camera.frame_width
-            and actual_height == self.config.camera.frame_height
-        ):
-            return
-
-        self.config.camera.frame_width = actual_width
-        self.config.camera.frame_height = actual_height
-        self._extractor.set_dimensions(actual_width, actual_height)
-        self._calibration.width = actual_width
-        self._calibration.height = actual_height
-
-        # Update default pixels for new width (used when calibration file missing)
-        self.config.calibration.default_pixels = (0, actual_width // 2, actual_width)
-
-        # Update display components that cache width
-        self._display.set_frame_dimensions(actual_width, actual_height)
 
     def _build_context(self) -> ModeContext:
         """Build mode context with services and callbacks."""
@@ -254,9 +230,12 @@ class Spectrometer:
     def _check_window_closed(self) -> None:
         """Check if window was closed by user and stop if so."""
         try:
-            if cv2.getWindowProperty(self.config.spectrograph_title, cv2.WND_PROP_VISIBLE) < 1:
+            visible = cv2.getWindowProperty(
+                self.config.spectrograph_title, cv2.WND_PROP_VISIBLE
+            )
+            if visible < 1:  # 0 or -1 when closed
                 self._ctx.running = False
-        except cv2.error:
+        except Exception:
             self._ctx.running = False
 
     def _clear_autolevel_overlay(self) -> None:
@@ -295,7 +274,6 @@ class Spectrometer:
             prompt_calibrate()
 
         self._camera.start()
-        self._sync_to_camera_dimensions()
         self._display.setup_windows()
         self._ctx.running = True
         self._ctx.last_data = None
@@ -313,10 +291,8 @@ class Spectrometer:
                     self._ctx, processed, self.config.display.graph_height
                 )
                 self._render_frame(processed)
+                cv2.waitKey(1)  # Process window events (including close) before checking
                 self._check_window_closed()
-                cv2.waitKey(
-                    1
-                )  # Required: process window events, throttle loop, allow display refresh
         finally:
             self._camera.stop()
             self._display.destroy()

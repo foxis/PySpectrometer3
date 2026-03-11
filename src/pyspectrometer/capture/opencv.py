@@ -148,13 +148,20 @@ class Capture(CameraInterface):
         self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
         self._cap.set(cv2.CAP_PROP_FPS, self._fps)
 
-        # Read back actual values (for logging; we keep requested dimensions)
-        actual_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        actual_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        # Use actual dimensions from first frame (streams may ignore requested size)
+        ret, frame = self._cap.read()
+        if ret and frame is not None:
+            self._height, self._width = frame.shape[:2]
+            print(f"OpenCV camera: source={self._source}")
+            print(f"  Dimensions: {self._width}x{self._height} (from stream)")
+        else:
+            actual_w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or self._width
+            actual_h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or self._height
+            self._width = actual_w
+            self._height = actual_h
+            print(f"OpenCV camera: source={self._source}")
+            print(f"  Dimensions: {self._width}x{self._height}")
         actual_fps = self._cap.get(cv2.CAP_PROP_FPS)
-
-        print(f"OpenCV camera: source={self._source}")
-        print(f"  Requested: {self._width}x{self._height}, actual: {actual_w}x{actual_h}")
         print(f"  FPS: {actual_fps:.1f}")
         print("  Gain/exposure: no-op (source does not support)")
 
@@ -190,9 +197,4 @@ class Capture(CameraInterface):
 
         # Scale 8-bit (0-255) to 10-bit (0-1023) for pipeline contract
         out = (gray.astype(np.float32) * 1023.0 / 255.0).astype(np.uint16)
-
-        # Resize if dimensions don't match (e.g. stream sends different size)
-        if out.shape[0] != self._height or out.shape[1] != self._width:
-            out = cv2.resize(out, (self._width, self._height))
-
         return out

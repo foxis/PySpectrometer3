@@ -253,7 +253,6 @@ def main() -> int:
         bit_depth=args.bit_depth,
     )
 
-    camera = None
     if args.camera is not None:
         from .capture.opencv import Capture
 
@@ -266,6 +265,31 @@ def main() -> int:
             fps=config.camera.fps,
         )
         print(f"Using camera: {args.camera}")
+    else:
+        from .capture.picamera import Capture
+
+        camera = Capture(
+            width=config.camera.frame_width,
+            height=config.camera.frame_height,
+            gain=config.camera.gain,
+            fps=config.camera.fps,
+            monochrome=config.camera.monochrome,
+            bit_depth=config.camera.bit_depth,
+        )
+
+    camera.start()
+    config_width_before = config.camera.frame_width
+    config_height_before = config.camera.frame_height
+    load_calibration = True
+    if config_width_before != camera.width or config_height_before != camera.height:
+        print(
+            f"WARNING: Config dimensions ({config_width_before}x{config_height_before}) differ "
+            f"from camera ({camera.width}x{camera.height}) - uncalibrated"
+        )
+        load_calibration = False
+    config.camera.frame_width = camera.width
+    config.camera.frame_height = camera.height
+    config.calibration.default_pixels = (0, camera.width // 2, camera.width)
 
     try:
         spectrometer = Spectrometer(
@@ -273,6 +297,7 @@ def main() -> int:
             camera=camera,
             mode=args.mode,
             laser_nm=args.laser,
+            load_calibration=load_calibration,
         )
         spectrometer.run()
         return 0

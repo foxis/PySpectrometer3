@@ -70,9 +70,9 @@ def detect_orientation_and_offset(
     grad_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=ksize)
     magnitude = np.sqrt(grad_x**2 + grad_y**2)
 
-    n_rows = min(20, height)
-    noise_max = float(magnitude[:n_rows].max()) if magnitude.size > 0 else 0.0
-    mag_thresh = max(noise_max * 3.0, magnitude.min() * 1.1)
+    # 50% threshold: keep only top half of gradient magnitudes for narrower peaks
+    # and more precise angle extraction (less liberal than noise-based threshold)
+    mag_thresh = float(np.percentile(magnitude, 50))
     strong_mask = magnitude > mag_thresh
 
     y_coords, x_coords = np.where(strong_mask)
