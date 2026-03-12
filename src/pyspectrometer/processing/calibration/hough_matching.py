@@ -845,28 +845,25 @@ def calibrate_spectrum_anchors(
 
     wl_linear = best_m * px_arr + best_c
 
-    # Collect cal_points: all measured features that land within 3% of spectrum range
-    soft_tol = (wl_linear[-1] - wl_linear[0]) * 0.03
-    cal_points: list[tuple[int, float]] = [
-        (0, float(wl_linear[0])),
-        (n_pixels - 1, float(wl_linear[-1])),
-    ]
-    for i in range(len(px)):
-        pxi = int(px[i])
-        if 0 <= pxi < n_pixels:
-            pred = wl_linear[pxi]
-            same = rd == md[i]
-            if not np.any(same):
-                continue
-            j = int(np.argmin(np.abs(rw[same] - pred)))
-            if float(np.abs(rw[same][j] - pred)) <= soft_tol:
-                cal_points.append((pxi, float(rw[same][j])))
+    # Collect cal_points from reference features via inverse linear mapping.
+    # This avoids local kinks caused by a single mis-snapped measured feature.
+    cal_points: list[tuple[int, float]] = []
+    for w_ref in rw:
+        px_f = (float(w_ref) - best_c) / best_m if best_m != 0.0 else 0.0
+        if 0.0 <= px_f <= float(n_pixels - 1):
+            cal_points.append((int(round(px_f)), float(w_ref)))
+
+    # Always anchor the full span.
+    cal_points.append((0, float(wl_linear[0])))
+    cal_points.append((n_pixels - 1, float(wl_linear[-1])))
 
     cal_points = _filter_non_crossing(_dedupe_cal_points(sorted(cal_points, key=lambda x: x[0])))
     if len(cal_points) < 3:
-        cal_points = [(0, float(wl_linear[0])),
-                      (n_pixels // 2, float(wl_linear[n_pixels // 2])),
-                      (n_pixels - 1, float(wl_linear[-1]))]
+        cal_points = [
+            (0, float(wl_linear[0])),
+            (n_pixels // 2, float(wl_linear[n_pixels // 2])),
+            (n_pixels - 1, float(wl_linear[-1])),
+        ]
 
     px_fit = np.array([p for p, _ in cal_points], dtype=np.float64)
     wl_fit = np.array([w for _, w in cal_points], dtype=np.float64)
@@ -880,6 +877,8 @@ def calibrate_spectrum_anchors(
     wavelengths = wl_cauchy if sc_cau >= sc_lin else wl_lin2
     m_final = m_fit if sc_cau < sc_lin else (float(wl_cauchy[-1]) - float(wl_cauchy[0])) / (n_pixels - 1)
     c_final = c_fit if sc_cau < sc_lin else float(wl_cauchy[0])
+
+    soft_tol = (float(wavelengths[-1]) - float(wavelengths[0])) * 0.03
 
     n_peak_match = n_dip_match = n_no_match = 0
     for i in range(len(px)):
