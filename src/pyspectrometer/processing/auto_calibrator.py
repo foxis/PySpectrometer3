@@ -2,7 +2,8 @@
 
 Accepts measured spectrum (pixels, intensity) and reference SPD (nm, intensity).
 Returns calibration points (pixel, wavelength). No CSV, no reference data import.
-Uses calibration module for peak/extremum detection, matching, and fit.
+Uses calibrate_spectrum_anchors for peak/dip matching. Falls back to correlation
+if anchors yield <4 points.
 """
 
 from __future__ import annotations
@@ -10,7 +11,8 @@ from __future__ import annotations
 import numpy as np
 from scipy.optimize import minimize
 
-from .calibration import calibrate as triplet_calibrate
+from .calibration import calibrate_spectrum_anchors, extract
+from .calibration.extremum import valid_positions
 
 
 def calibrate(
@@ -23,14 +25,14 @@ def calibrate(
     """Calibrate pixels to wavelengths from measured and reference spectra.
 
     Standalone: pass measured intensity (per pixel) and reference SPD (nm, intensity).
-    Uses triplet-based matching from calibration module. Falls back to correlation
-    if triplet fails.
+    Uses SPD-based peak/dip matching (calibrate_spectrum_anchors). Falls back to
+    correlation if anchors yield <4 points.
 
     Args:
         measured_intensity: Intensity per pixel (0..n-1)
         reference_wl: Reference wavelengths (nm)
         reference_intensity: Reference SPD at those wavelengths
-        max_extremums: Max peaks/dips for triplet matching
+        max_extremums: Max peaks/dips for feature extraction
 
     Returns:
         List of (pixel, wavelength) calibration points, or [] on failure
@@ -44,22 +46,41 @@ def calibrate(
     if ref_wl.size != ref_int.size or ref_wl.size < 4:
         return []
 
-    # Initial positions: linear 380–750 nm over pixels (uncalibrated guess)
-    positions = np.linspace(380.0, 750.0, n, dtype=np.float64)
+    wl_ref = np.linspace(380, 750, 500)
+    ref_spd = np.interp(wl_ref, ref_wl, ref_int)
+    pos = valid_positions(None, n)
 
-    # Triplet-based calibration (uses calibration module: extract, match, fit)
-    result = triplet_calibrate(
+    meas = extract(
         measured_intensity,
-        positions,
-        ref_wl.tolist(),
-        ref_int.tolist(),
-        max_extremums=max_extremums,
+        pos,
+        position_px=np.arange(n, dtype=np.intp),
+        max_count=max_extremums,
+    )
+    ref_ext = extract(ref_spd, wl_ref, position_px=None, max_count=max_extremums)
+
+    meas_px = np.array([e.position_px for e in meas if e.position_px is not None], dtype=np.float64)
+    meas_int = np.array([abs(e.height) for e in meas if e.position_px is not None], dtype=np.float64)
+    meas_is_dip = np.array([e.is_dip for e in meas if e.position_px is not None], dtype=bool)
+    ref_feat_wl = np.array([e.position for e in ref_ext], dtype=np.float64)
+    ref_int_arr = np.array([abs(e.height) for e in ref_ext], dtype=np.float64)
+    ref_is_dip = np.array([e.is_dip for e in ref_ext], dtype=bool)
+
+    if len(meas_px) < 2 or len(ref_feat_wl) < 2:
+        return _correlation_fallback(measured_intensity, ref_wl, ref_int)
+
+    result = calibrate_spectrum_anchors(
+        n,
+        meas_pixels=meas_px,
+        meas_is_dip=meas_is_dip,
+        meas_intensities=meas_int,
+        ref_feat_wl=ref_feat_wl,
+        ref_feat_is_dip=ref_is_dip,
+        ref_feat_intensities=ref_int_arr,
     )
 
     if result is not None and len(result.cal_points) >= 4:
         return [(int(p), float(w)) for p, w in result.cal_points]
 
-    # Fallback: correlation when triplet yields <4 points
     return _correlation_fallback(measured_intensity, ref_wl, ref_int)
 
 

@@ -252,9 +252,9 @@ class CalibrationMode(BaseMode):
         ref_wl = np.linspace(380.0, 750.0, 100)
         ref_int = get_reference_spectrum(self.cal_state.current_source, ref_wl)
         cal_points = run_calibration(measured, ref_wl, ref_int)
-        if len(cal_points) >= 3:
+        if len(cal_points) >= 4:
             self.cal_state.calibration_points = cal_points
-            print(f"[CAL] Auto-calibration found {len(cal_points)} points (4+ preferred)")
+            print(f"[CAL] Auto-calibration found {len(cal_points)} points")
             for pixel, wl in cal_points:
                 print(f"  Pixel {pixel} -> {wl:.1f} nm")
             pixels = [p for p, w in cal_points]
@@ -276,17 +276,12 @@ class CalibrationMode(BaseMode):
     def _on_save_calibration(self, ctx: ModeContext) -> None:
         """Save calibration and extraction params."""
         cal_points = self.get_calibration_points()
-        if len(cal_points) < 4:
-            pixels = ctx.calibration.cal_pixels
-            wavelengths = ctx.calibration.cal_wavelengths
-        else:
-            pixels = [p for p, w in cal_points]
-            wavelengths = [w for p, w in cal_points]
+        pixels = [p for p, w in cal_points] if cal_points else ctx.calibration.cal_pixels
+        wavelengths = [w for p, w in cal_points] if cal_points else ctx.calibration.cal_wavelengths
         saved_wl = False
-        if len(pixels) >= 4:
-            if ctx.calibration.save(pixels, wavelengths):
-                print(f"[CAL] Wavelength calibration saved ({len(pixels)} points)")
-                saved_wl = True
+        if ctx.calibration.save(pixels, wavelengths):
+            print(f"[CAL] Wavelength calibration saved ({len(pixels)} points)")
+            saved_wl = True
         ctx.calibration.save_extraction_params(
             rotation_angle=ctx.extractor.rotation_angle,
             spectrum_y_center=ctx.extractor.spectrum_y_center,

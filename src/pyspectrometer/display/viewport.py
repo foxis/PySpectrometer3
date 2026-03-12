@@ -90,8 +90,15 @@ class Viewport:
         center = center_data_x if center_data_x is not None else (self.x_start + self.x_end) / 2
         new_span = span / factor
         half = new_span / 2
-        self.x_start = center - half
-        self.x_end = center + half
+        x_start = center - half
+        x_end = center + half
+
+        # Clamp and push the opposite edge to preserve the full requested span
+        if x_start < 0.0:
+            x_end -= x_start
+            x_start = 0.0
+        self.x_start = x_start
+        self.x_end = x_end
 
     def zoom_y(self, factor: float, center_intensity: float | None = None) -> None:
         """Zoom vertically. factor>1 zooms in."""
@@ -104,11 +111,27 @@ class Viewport:
             else (self.y_min + self.y_max) / 2
         )
         new_span = span / factor
+
+        # Full zoom-out: snap to full range
+        if new_span >= 1.0:
+            self.y_min = 0.0
+            self.y_max = 1.0
+            return
+
         half = new_span / 2
-        self.y_min = max(0.0, center - half)
-        self.y_max = min(1.0, center + half)
-        if self.y_max <= self.y_min:
-            self.y_max = self.y_min + 0.01
+        y_min = center - half
+        y_max = center + half
+
+        # Clamp and push the opposite edge to preserve the full requested span
+        if y_min < 0.0:
+            y_max = min(1.0, y_max - y_min)
+            y_min = 0.0
+        if y_max > 1.0:
+            y_min = max(0.0, y_min - (y_max - 1.0))
+            y_max = 1.0
+
+        self.y_min = y_min
+        self.y_max = y_max
 
     def clamp_x(self, data_width: int) -> None:
         """Clamp x range to valid data indices."""

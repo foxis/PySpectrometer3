@@ -1,4 +1,4 @@
-"""CLI entry points for Poetry scripts: calibrate, measure, colors, raman, lint, format, stream."""
+"""CLI entry points for Poetry scripts: calibrate, measure, colors, raman, lint, format, stream, waterfall."""
 
 import subprocess
 import numpy as np
@@ -114,3 +114,8 @@ def stream() -> int:
     if camera is not None:
         cmd.extend(["--camera", camera])
     return subprocess.call(cmd)
+
+
+def waterfall() -> int:
+    """Run waterfall mode (standalone). Usage: poetry run waterfall [camera_source]"""
+    return _run("waterfall", _camera_arg())

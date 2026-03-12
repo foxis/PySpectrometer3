@@ -30,6 +30,7 @@ raman = "pyspectrometer.cli:raman"
 lint = "pyspectrometer.cli:lint"
 format = "pyspectrometer.cli:format_src"
 stream = "pyspectrometer.cli:stream"
+waterfall = "pyspectrometer.cli:waterfall"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

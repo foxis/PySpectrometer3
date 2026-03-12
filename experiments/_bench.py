@@ -4,7 +4,7 @@ import numpy as np
 sys.path.insert(0, 'src')
 from pyspectrometer.processing.calibration.hough_matching import (
     calibrate_spectrum_anchors,
-    _feature_pair_score,
+    _best_match_score,
 )
 from pyspectrometer.data.reference_spectra import ReferenceSource, get_reference_spectrum
 from pyspectrometer.processing.calibration.extremum import extract
@@ -30,7 +30,7 @@ def load(f):
 def pair_score(meas_px, meas_dip, meas_int, ref_wl, ref_is_dip, ref_int, wl_arr, sigma=8.0):
     mi_n = meas_int / meas_int.max() if meas_int.max() > 0 else meas_int
     ri_n = ref_int / ref_int.max() if ref_int.max() > 0 else ref_int
-    return _feature_pair_score(meas_px, meas_dip, mi_n, ref_wl, ref_is_dip, ri_n, wl_arr, sigma, 0.3)
+    return _best_match_score(meas_px, meas_dip, mi_n, ref_wl, ref_is_dip, ri_n, wl_arr, sigma, 0.3)
 
 
 def exact_matches(meas_px, meas_dip, ref_wl, ref_is_dip, wl_arr, threshold=5.0):

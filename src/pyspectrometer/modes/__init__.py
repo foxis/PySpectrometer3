@@ -5,6 +5,7 @@ from .calibration import CalibrationMode
 from .colorscience import ColorScienceMode
 from .measurement import MeasurementMode
 from .raman import RamanMode
+from .waterfall import WaterfallMode
 
 __all__ = [
     "BaseMode",
@@ -13,4 +14,5 @@ __all__ = [
     "MeasurementMode",
     "RamanMode",
     "ColorScienceMode",
+    "WaterfallMode",
 ]

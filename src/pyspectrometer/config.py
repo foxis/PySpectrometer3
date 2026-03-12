@@ -101,6 +101,7 @@ def _config_to_dict(config: "Config") -> dict:
             "rotation_angle": config.calibration.rotation_angle,
             "spectrum_y_center": config.calibration.spectrum_y_center,
             "perpendicular_width": config.calibration.perpendicular_width,
+            "monotonicity_threshold_nm": config.calibration.monotonicity_threshold_nm,
             "default_pixels": list(config.calibration.default_pixels),
             "default_wavelengths": [float(w) for w in config.calibration.default_wavelengths],
         },
@@ -158,6 +159,8 @@ def _apply_config(config: "Config", data: dict) -> None:
             config.calibration.spectrum_y_center = int(cal["spectrum_y_center"])
         if "perpendicular_width" in cal:
             config.calibration.perpendicular_width = int(cal["perpendicular_width"])
+        if "monotonicity_threshold_nm" in cal:
+            config.calibration.monotonicity_threshold_nm = float(cal["monotonicity_threshold_nm"])
         if "default_pixels" in cal:
             config.calibration.default_pixels = tuple(cal["default_pixels"])
         if "default_wavelengths" in cal:
@@ -272,6 +275,11 @@ class CalibrationConfig:
     rotation_angle: float = 0.0
     spectrum_y_center: int = 0
     perpendicular_width: int = 20
+
+    # Monotonicity tolerance (nm): allow diff up to -threshold before rejecting Cauchy fit.
+    # Set to 0.1 nm — well below the ~0.29 nm/pixel sensor resolution, but safely above
+    # floating-point noise in polynomial evaluation (~0.001–0.01 nm range).
+    monotonicity_threshold_nm: float = 0.1
 
     # Defaults when no calibration in config
     default_pixels: tuple[int, ...] = (0, 640, 1280)

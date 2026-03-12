@@ -31,28 +31,22 @@ class CalibrationResult:
 
     @property
     def is_accurate(self) -> bool:
-        """Check if calibration is considered accurate (3rd order poly)."""
-        return self.order >= 3
+        """Check if calibration is considered accurate (4+ points)."""
+        return self.order > 0
 
     @property
     def status_message(self) -> str:
         """Human-readable calibration status."""
         if self.order == 0:
             return "UNCALIBRATED!"
-        elif self.order == 2:
-            return "Calibrated!!"
-        else:
-            return "Calibrated!!!"
+        return "Calibrated!!!"
 
     @property
     def detail_message(self) -> str:
         """Human-readable calibration detail."""
         if self.order == 0:
             return "Perform Calibration!"
-        elif self.order == 2:
-            return "Monotonic (3 points)"
-        else:
-            return "Cauchy (prism)"
+        return "Cauchy (prism)"
 
 
 @dataclass
@@ -130,11 +124,11 @@ class Calibration:
         self._spectrum_y_center = cal.spectrum_y_center or self.height // 2
         self._perpendicular_width = cal.perpendicular_width
 
-        has_errors = len(self._cal_pixels) < 3 or len(self._cal_pixels) != len(self._cal_wavelengths)
+        has_errors = len(self._cal_pixels) < 4 or len(self._cal_pixels) != len(self._cal_wavelengths)
         if has_errors:
             self._cal_pixels = list(self.default_pixels)
             self._cal_wavelengths = list(self.default_wavelengths)
-            print("Calibration: using default wavelength data (need 3+ points in config)")
+            print("Calibration: using default wavelength data (need 4+ points in config)")
         else:
             path = self._config_path or "default"
             print(f"Loading calibration from config ({path})")
@@ -166,12 +160,8 @@ class Calibration:
         Returns:
             True if calibration was saved successfully
         """
-        if len(pixel_data) < 3:
-            print("Need at least 3 calibration points!")
-            return False
-
-        if len(pixel_data) != len(wavelength_data):
-            print("Pixel and wavelength arrays must have same length!")
+        if err := _validate_cal_points(pixel_data, wavelength_data):
+            print(err)
             return False
 
         if rotation_angle is not None:
@@ -272,12 +262,8 @@ class Calibration:
         Returns:
             True if calibration was applied successfully
         """
-        if len(pixel_data) < 3:
-            print("Need at least 3 calibration points!")
-            return False
-
-        if len(pixel_data) != len(wavelength_data):
-            print("Pixel and wavelength arrays must have same length!")
+        if err := _validate_cal_points(pixel_data, wavelength_data):
+            print(err)
             return False
 
         self._cal_pixels = list(pixel_data)
@@ -317,7 +303,7 @@ class Calibration:
                 interp_wl = self._fallback_interp(px, wl, method)
 
         wavelength_data = np.round(interp_wl, 6).astype(np.float64)
-        order = 0 if has_errors else (3 if len(px) >= 4 else 2)
+        order = 0 if has_errors else 3
 
         pixel_grid = np.arange(self.width, dtype=np.float64)
         predicted = np.interp(px, pixel_grid, wavelength_data)
@@ -363,8 +349,29 @@ class Calibration:
 
         full_wl = 1.0 / np.sqrt(pred_inv) * 1000.0  # µm⁻¹ → nm
         d = np.diff(full_wl)
-        if not (np.all(d > 0) or np.all(d < 0)):
-            print("Cauchy fit produced non-monotonic result; falling back to linear.")
+        tol = getattr(
+            self._config.calibration, "monotonicity_threshold_nm", 0.001
+        )
+        inc_ok = np.all(d > -tol)
+        dec_ok = np.all(d < tol)
+        if not (inc_ok or dec_ok):
+            # Determine intended direction from majority of steps, then find
+            # only the actual violation for that direction.
+            if float(np.median(d)) >= 0:
+                direction, bad = "increasing", d <= -tol
+                limit = f"-{tol}"
+            else:
+                direction, bad = "decreasing", d >= tol
+                limit = f"+{tol}"
+            idx = int(np.where(bad)[0][0])  # first actual violation
+            wl_a = float(full_wl[idx])
+            wl_b = float(full_wl[idx + 1])
+            diff_val = float(d[idx])
+            print(
+                f"Cauchy fit monotonicity failed at pixel {idx}→{idx + 1}: "
+                f"wl={wl_a:.3f} nm → {wl_b:.3f} nm, diff={diff_val:.4f} nm "
+                f"(limit {limit} nm for {direction}); falling back to linear."
+            )
             return np.zeros(self.width), "pchip" if _SCIPY_AVAILABLE else "linear"
 
         print("Calculating Cauchy-inverse fit (prism dispersion) over full pixel range...")
@@ -405,7 +412,11 @@ class Calibration:
         return out
 
     def _generate_graticule(self) -> GraticuleData:
-        """Generate graticule data for wavelength markers."""
+        """Generate graticule data for wavelength markers.
+
+        Uses searchsorted for deterministic tick placement so ticks stay fixed
+        when wavelength data has slight float variations between frames.
+        """
         wavelength_data = self.wavelengths
 
         low = int(round(wavelength_data[0])) - 10
@@ -418,18 +429,50 @@ class Calibration:
             if target_nm % 10 != 0:
                 continue
 
-            position = min(enumerate(wavelength_data), key=lambda x: abs(target_nm - x[1]))
-
-            if abs(target_nm - position[1]) >= 1:
+            idx = _closest_index_stable(wavelength_data, target_nm)
+            if idx < 0 or abs(wavelength_data[idx] - target_nm) >= 1:
                 continue
 
             if target_nm % 50 == 0:
-                label = int(round(position[1]))
-                fifties.append((position[0], label))
+                label = int(round(wavelength_data[idx]))
+                fifties.append((idx, label))
             else:
-                tens.append(position[0])
+                tens.append(idx)
 
         return GraticuleData(tens=tens, fifties=fifties)
+
+
+_MIN_CAL_POINTS = 4
+_MIN_CAL_RANGE_NM = 100.0
+
+
+def _validate_cal_points(pixels: list[int], wavelengths: list[float]) -> str | None:
+    """Return an error message if cal points are invalid, else None."""
+    if len(pixels) < _MIN_CAL_POINTS:
+        return f"Need at least {_MIN_CAL_POINTS} calibration points!"
+    if len(pixels) != len(wavelengths):
+        return "Pixel and wavelength arrays must have same length!"
+    wl_range = max(wavelengths) - min(wavelengths)
+    if wl_range < _MIN_CAL_RANGE_NM:
+        return f"Calibration range too narrow: {wl_range:.1f} nm (need {_MIN_CAL_RANGE_NM:.0f}+ nm)."
+    return None
+
+
+def _closest_index_stable(x_values: np.ndarray, target: float) -> int:
+    """Index of closest value to target, deterministic for ties.
+
+    Uses searchsorted and prefers lower index when equidistant,
+    so ticks stay fixed across frames with slight float variations.
+    """
+    idx = int(np.searchsorted(x_values, target))
+    if idx <= 0:
+        return 0
+    if idx >= len(x_values):
+        return len(x_values) - 1
+    # Prefer lower index when equidistant for stable placement
+    if abs(x_values[idx - 1] - target) <= abs(x_values[idx] - target):
+        return idx - 1
+    return idx
 
 
 def graticule_from_x_axis(
@@ -438,6 +481,9 @@ def graticule_from_x_axis(
     unit_suffix: str = "nm",
 ) -> GraticuleData:
     """Generate graticule from arbitrary x-axis (wavelength or wavenumber).
+
+    Uses searchsorted for deterministic tick placement so ticks stay fixed
+    when x-axis has slight float variations between frames.
 
     Args:
         x_values: X-axis values (same length as spectrum)
@@ -454,14 +500,11 @@ def graticule_from_x_axis(
     for target in range(low, high):
         if target % (step // 5) != 0 and target % step != 0:
             continue
-        position = min(
-            enumerate(x_values),
-            key=lambda x: abs(target - x[1]),
-        )
-        if abs(target - position[1]) >= step / 10:
+        idx = _closest_index_stable(x_values, target)
+        if abs(x_values[idx] - target) >= step / 10:
             continue
         if target % step == 0:
-            fifties.append((position[0], target))
+            fifties.append((idx, target))
         else:
-            tens.append(position[0])
+            tens.append(idx)
     return GraticuleData(tens=tens, fifties=fifties, unit=unit_suffix)

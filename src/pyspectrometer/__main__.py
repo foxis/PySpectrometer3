@@ -99,9 +99,9 @@ Examples:
         "--mode",
         type=str,
         default="measurement",
-        choices=["calibration", "measurement", "raman", "colorscience"],
+        choices=["calibration", "measurement", "raman", "colorscience", "waterfall"],
         metavar="MODE",
-        help="Operating mode: calibration, measurement, raman, colorscience (default: measurement)",
+        help="Operating mode: calibration, measurement, raman, colorscience, waterfall (default: measurement)",
     )
 
     parser.add_argument(
@@ -217,6 +217,7 @@ def main() -> int:
         "measurement": "Measurement",
         "raman": "Raman",
         "colorscience": "Color Science",
+        "waterfall": "Waterfall",
     }
 
     print(f"PySpectrometer 3 - {mode_names.get(args.mode, args.mode)} Mode")

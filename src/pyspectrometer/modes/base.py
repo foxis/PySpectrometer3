@@ -95,6 +95,15 @@ class BaseMode(ABC):
         """
         pass
 
+    @property
+    def preview_modes(self) -> list[str]:
+        """Ordered preview modes cycled by the Prev button.
+
+        Subclasses override to add or remove modes.
+        Available renderer cases: "window" (crop bands), "spectrum" (wavelength bar), "full", "none"
+        """
+        return ["window", "spectrum", "full", "none"]
+
     @abstractmethod
     def process_spectrum(
         self,

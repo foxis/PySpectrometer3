@@ -24,6 +24,7 @@ from .modes.calibration import CalibrationMode
 from .modes.colorscience import ColorScienceMode
 from .modes.measurement import MeasurementMode
 from .modes.raman import RamanMode
+from .modes.waterfall import WaterfallMode
 from .processing.auto_controls import AutoExposureController, AutoGainController
 from .processing.extraction import ExtractionMethod, SpectrumExtractor
 from .processing.filters import SavitzkyGolayFilter
@@ -35,7 +36,7 @@ from .utils.dialog import prompt_calibrate
 class Spectrometer:
     """Thin orchestrator: wires components, passes context to mode, runs loop."""
 
-    VALID_MODES = ("calibration", "measurement", "raman", "colorscience")
+    VALID_MODES = ("calibration", "measurement", "raman", "colorscience", "waterfall")
 
     def __init__(
         self,
@@ -133,6 +134,9 @@ class Spectrometer:
                 self._mode_instance = RamanMode(laser_nm=self.laser_nm)
             case "colorscience":
                 self._mode_instance = ColorScienceMode()
+            case "waterfall":
+                self._mode_instance = WaterfallMode()
+                self.config.display.waterfall_enabled = True
             case _:
                 self._measurement_mode = MeasurementMode()
                 self._mode_instance = self._measurement_mode
@@ -269,9 +273,12 @@ class Spectrometer:
     def _check_window_closed(self) -> None:
         """Check if window was closed by user and stop if so."""
         try:
-            visible = cv2.getWindowProperty(
-                self.config.spectrograph_title, cv2.WND_PROP_VISIBLE
+            title = (
+                self.config.waterfall_title
+                if self.mode == "waterfall"
+                else self.config.spectrograph_title
             )
+            visible = cv2.getWindowProperty(title, cv2.WND_PROP_VISIBLE)
             if visible < 1:  # 0 or -1 when closed
                 self._ctx.running = False
         except Exception:

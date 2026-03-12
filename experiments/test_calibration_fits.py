@@ -102,20 +102,8 @@ def run_peaks_calibration(
     *,
     debug: bool = True,
 ) -> list[tuple[int, float]]:
-    """Run SRP peak-based calibration."""
-    from pyspectrometer.data.reference_spectra import ReferenceSource
-
-    source_map = {
-        "FL12": ReferenceSource.FL12,
-        "FL1": ReferenceSource.FL1,
-        "HG": ReferenceSource.HG,
-        "D65": ReferenceSource.D65,
-    }
-    source = source_map.get(source_name.upper(), ReferenceSource.FL12)
-
-    from pyspectrometer.processing.calibration import calibrate_peaks
-
-    return calibrate_peaks(measured, wavelengths, source, debug=debug)
+    """Run SPD-based peak/dip calibration via calibrate_spectrum_anchors."""
+    return _run_anchors_calibration(measured, wavelengths, source_name)
 
 
 def run_extremum_calibration(
@@ -126,11 +114,25 @@ def run_extremum_calibration(
     debug: bool = True,
     return_outcomes: bool = False,
 ):
-    """Run feature-based extremum matching: peaks with peaks, dips with dips.
+    """Run SPD-based peak/dip calibration via calibrate_spectrum_anchors.
 
-    When return_outcomes=True, returns (cal_points, [euclidean_outcome, cosine_outcome]).
+    When return_outcomes=True, returns (cal_points, [result], None) for compatibility.
     """
-    from pyspectrometer.data.reference_spectra import ReferenceSource
+    cal_points = _run_anchors_calibration(measured, wavelengths, source_name)
+    if return_outcomes:
+        return cal_points, [], None
+    return cal_points
+
+
+def _run_anchors_calibration(
+    measured: np.ndarray,
+    wavelengths: np.ndarray,
+    source_name: str,
+) -> list[tuple[int, float]]:
+    """Shared SPD-based calibration via calibrate_spectrum_anchors."""
+    from pyspectrometer.data.reference_spectra import ReferenceSource, get_reference_spectrum
+    from pyspectrometer.processing.calibration import calibrate_spectrum_anchors, extract
+    from pyspectrometer.processing.calibration.extremum import valid_positions
 
     source_map = {
         "FL12": ReferenceSource.FL12,
@@ -139,12 +141,36 @@ def run_extremum_calibration(
         "D65": ReferenceSource.D65,
     }
     source = source_map.get(source_name.upper(), ReferenceSource.FL12)
+    n = len(measured)
 
-    from pyspectrometer.processing.calibration import calibrate_extremums
+    wl_ref = np.linspace(380, 750, 500)
+    ref_spd = get_reference_spectrum(source, wl_ref)
+    pos = valid_positions(wavelengths if np.any(wavelengths > 0) else None, n)
+    position_px = np.arange(n, dtype=np.intp)
 
-    return calibrate_extremums(
-        measured, wavelengths, source, debug=debug, return_outcomes=return_outcomes
+    meas = extract(measured, pos, position_px=position_px, max_count=40)
+    ref_ext = extract(ref_spd, wl_ref, position_px=None, max_count=40)
+
+    meas_px = np.array([e.position_px for e in meas if e.position_px is not None], dtype=np.float64)
+    meas_int = np.array([abs(e.height) for e in meas if e.position_px is not None], dtype=np.float64)
+    meas_is_dip = np.array([e.is_dip for e in meas if e.position_px is not None], dtype=bool)
+    ref_wl = np.array([e.position for e in ref_ext], dtype=np.float64)
+    ref_int = np.array([abs(e.height) for e in ref_ext], dtype=np.float64)
+    ref_is_dip = np.array([e.is_dip for e in ref_ext], dtype=bool)
+
+    if len(meas_px) < 2 or len(ref_wl) < 2:
+        return []
+
+    result = calibrate_spectrum_anchors(
+        n,
+        meas_pixels=meas_px,
+        meas_is_dip=meas_is_dip,
+        meas_intensities=meas_int,
+        ref_feat_wl=ref_wl,
+        ref_feat_is_dip=ref_is_dip,
+        ref_feat_intensities=ref_int,
     )
+    return [(int(p), float(w)) for p, w in result.cal_points] if result else []
 
 
 def run_correlation_calibration(

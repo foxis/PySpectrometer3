@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 
 from ..core.spectrum import SpectrumData
-from ..utils.color import apply_luminosity, wavelength_to_rgb
+from ..utils.color import apply_luminosity, rgb_to_bgr, wavelength_to_rgb
 
 
 class WaterfallDisplay:
@@ -63,8 +63,9 @@ class WaterfallDisplay:
             # Intensity is 0-1 (normalized by extraction)
             luminosity = float(intensity)
             scaled = apply_luminosity(rgb, luminosity)
+            bgr = rgb_to_bgr(scaled)
 
-            line[0, i] = (scaled.r, scaled.g, scaled.b)
+            line[0, i] = bgr
 
         line = cv2.addWeighted(
             line,

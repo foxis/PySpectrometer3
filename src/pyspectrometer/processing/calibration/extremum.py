@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from ..peak_detection import DEFAULT_MAX_EXTREMUMS, extract_extremums
 from ...core.spectrum import Extremum
 
@@ -46,3 +48,14 @@ def from_known_lines(
             )
         )
     return result
+
+
+def valid_positions(wavelengths: np.ndarray | None, n: int) -> np.ndarray:
+    """Valid monotonic wavelength positions or linear 380–750."""
+    if wavelengths is None or len(wavelengths) < 2:
+        return np.linspace(380, 750, n)
+    wl = np.asarray(wavelengths)
+    if wl.size != n:
+        return np.linspace(380, 750, n)
+    ok = bool(np.all(np.diff(wl) > 0) and 300 < wl.min() < wl.max() < 900)
+    return wl if ok else np.linspace(380, 750, n)

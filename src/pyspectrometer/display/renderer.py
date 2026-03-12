@@ -130,7 +130,7 @@ class DisplayManager:
         self._waterfall: WaterfallDisplay | None = None
 
         display_width = config.display.window_width
-        if config.display.waterfall_enabled:
+        if config.display.waterfall_enabled or mode == "waterfall":
             self._waterfall = WaterfallDisplay(
                 width=display_width,
                 height=config.display.graph_height,
@@ -214,12 +214,19 @@ class DisplayManager:
         self._zoom_horizontal_prev = 1.0
 
         def _on_zoom_vertical(val: float) -> None:
-            if self._zoom_vertical_prev > 0:
+            if val <= self._zoom_vertical.min_val:
+                self._viewport.y_min = 0.0
+                self._viewport.y_max = 1.0
+            elif self._zoom_vertical_prev > 0:
                 self._viewport.zoom_y(val / self._zoom_vertical_prev)
             self._zoom_vertical_prev = val
 
         def _on_zoom_horizontal(val: float) -> None:
-            if self._zoom_horizontal_prev > 0:
+            if val <= self._zoom_horizontal.min_val:
+                self._viewport.x_start = 0.0
+                if self._last_data_width > 0:
+                    self._viewport.x_end = float(self._last_data_width - 1)
+            elif self._zoom_horizontal_prev > 0:
                 self._viewport.zoom_x(val / self._zoom_horizontal_prev)
             self._zoom_horizontal_prev = val
 
@@ -260,47 +267,50 @@ class DisplayManager:
 
         title1 = self.config.spectrograph_title
         title2 = self.config.waterfall_title
+        waterfall_mode = self.mode == "waterfall"
 
         # WINDOW_GUI_NORMAL (0x10 = 16) disables the Qt/GTK toolbar and statusbar
-        # WINDOW_GUI_EXPANDED (0x00) shows toolbar (default)
-        # We want NORMAL (no toolbar)
         WINDOW_GUI_NORMAL = getattr(cv2, "WINDOW_GUI_NORMAL", 0x00000010)
         win_w = self.config.display.window_width
         win_h = self.config.display.stack_height
 
-        if self.config.display.waterfall_enabled:
+        if waterfall_mode:
+            # Waterfall mode: single window (waterfall only)
             cv2.namedWindow(title2, cv2.WINDOW_NORMAL | WINDOW_GUI_NORMAL)
             cv2.resizeWindow(title2, win_w, win_h)
-            cv2.moveWindow(title2, win_w + 10, 0)
-
-        if self.config.display.fullscreen:
-            # True fullscreen - fills entire screen, no toolbar
-            cv2.namedWindow(title1, cv2.WINDOW_NORMAL | WINDOW_GUI_NORMAL)
-            cv2.setWindowProperty(
-                title1,
-                cv2.WND_PROP_FULLSCREEN,
-                cv2.WINDOW_FULLSCREEN,
-            )
+            cv2.moveWindow(title2, 0, 0)
+            cv2.setMouseCallback(title2, self._handle_mouse)
         else:
-            # Windowed mode - fixed size for display (e.g. Waveshare 640x400)
-            cv2.namedWindow(title1, cv2.WINDOW_NORMAL | WINDOW_GUI_NORMAL)
-            cv2.resizeWindow(title1, win_w, win_h)
-            cv2.moveWindow(title1, 0, 0)
+            if self.config.display.waterfall_enabled:
+                cv2.namedWindow(title2, cv2.WINDOW_NORMAL | WINDOW_GUI_NORMAL)
+                cv2.resizeWindow(title2, win_w, win_h)
+                cv2.moveWindow(title2, win_w + 10, 0)
 
-        cv2.setMouseCallback(title1, self._handle_mouse)
+            if self.config.display.fullscreen:
+                cv2.namedWindow(title1, cv2.WINDOW_NORMAL | WINDOW_GUI_NORMAL)
+                cv2.setWindowProperty(
+                    title1,
+                    cv2.WND_PROP_FULLSCREEN,
+                    cv2.WINDOW_FULLSCREEN,
+                )
+            else:
+                cv2.namedWindow(title1, cv2.WINDOW_NORMAL | WINDOW_GUI_NORMAL)
+                cv2.resizeWindow(title1, win_w, win_h)
+                cv2.moveWindow(title1, 0, 0)
+
+            cv2.setMouseCallback(title1, self._handle_mouse)
 
         self._windows_created = True
 
     def cycle_preview_mode(self) -> str:
-        """Cycle through preview display modes.
-
-        Returns:
-            Current mode name after cycling
-        """
-        modes = ["window", "full", "none"]
+        """Cycle through preview modes defined by the active mode instance."""
+        modes = (
+            self._mode_instance.preview_modes
+            if self._mode_instance is not None
+            else ["window", "spectrum", "full", "none"]
+        )
         current_idx = modes.index(self._preview_mode) if self._preview_mode in modes else 0
-        next_idx = (current_idx + 1) % len(modes)
-        self._preview_mode = modes[next_idx]
+        self._preview_mode = modes[(current_idx + 1) % len(modes)]
         print(f"[PREVIEW] Mode: {self._preview_mode}")
         return self._preview_mode
 
@@ -342,16 +352,23 @@ class DisplayManager:
                 if self._zoom_horizontal.visible:
                     self._zoom_horizontal.handle_mouse_move(x, y)
                 if self._panning:
-                    dx = self._viewport.screen_x_to_data(
-                        self._pan_last_x, width
-                    ) - self._viewport.screen_x_to_data(x, width)
-                    dy = self._viewport.screen_y_to_intensity(
-                        self._pan_last_y, graph_height
-                    ) - self._viewport.screen_y_to_intensity(
-                        graph_rel_y, graph_height
+                    x_zoomed = self._last_data_width > 0 and (
+                        self._viewport.x_end - self._viewport.x_start < self._last_data_width - 1
                     )
-                    self._viewport.pan_x(dx)
-                    self._viewport.pan_y(dy)
+                    y_zoomed = self._viewport.y_max - self._viewport.y_min < 0.99
+
+                    if x_zoomed:
+                        dx = self._viewport.screen_x_to_data(
+                            self._pan_last_x, width
+                        ) - self._viewport.screen_x_to_data(x, width)
+                        self._viewport.pan_x(dx)
+                    if y_zoomed:
+                        dy = self._viewport.screen_y_to_intensity(
+                            self._pan_last_y, graph_height
+                        ) - self._viewport.screen_y_to_intensity(
+                            graph_rel_y, graph_height
+                        )
+                        self._viewport.pan_y(dy)
                     self._pan_last_x = x
                     self._pan_last_y = graph_rel_y
 
@@ -490,11 +507,6 @@ class DisplayManager:
         )
         self._render_cursor(graph, data)
 
-        if self._slider_panel.any_visible():
-            self._render_sliders_on_graph(graph)
-        if self._zoom_vertical.visible or self._zoom_horizontal.visible:
-            self._render_zoom_sliders_on_graph(graph)
-
         message_height = self.config.display.message_height
         preview_height = self.config.display.preview_height
 
@@ -513,10 +525,11 @@ class DisplayManager:
         # Handle preview mode
         cropped = data.cropped_frame
 
-        # Scale camera crop to fit preview area, maintaining aspect ratio
+        # Scale camera crop to fit preview area, then apply horizontal viewport zoom
         if cropped is not None:
             if cropped.shape[1] != width or cropped.shape[0] != preview_height:
                 cropped = _scale_to_fit(cropped, width, preview_height)
+            cropped = self._apply_viewport_to_preview(cropped, width)
         else:
             cropped = np.zeros([preview_height, width, 3], dtype=np.uint8)
 
@@ -534,11 +547,14 @@ class DisplayManager:
                 self._draw_status_bar(graph, status_segments)
                 spectrum_vertical = np.vstack((messages, graph))
             case "window":
-                # Windowed preview (cropped) above spectrum graph
-                # NO lines drawn - just show the clean cropped spectrum image
-                # Draw status on preview strip
+                # Windowed preview (cropped bands) above spectrum graph
                 self._draw_status_overlay(cropped, status_segments)
                 spectrum_vertical = np.vstack((messages, cropped, graph))
+            case "spectrum":
+                # Wavelength-colored spectrum bar replacing the camera preview strip
+                spec_bar = self._render_spectrum_bar(data, width, preview_height)
+                self._draw_status_overlay(spec_bar, status_segments)
+                spectrum_vertical = np.vstack((messages, spec_bar, graph))
             case "full":
                 # Full camera view REPLACES the spectrum graph entirely
                 # Show UNROTATED frame with a ROTATED crop box
@@ -600,27 +616,41 @@ class DisplayManager:
             spectrum_vertical = np.vstack((messages, img))
 
         # Pixel-perfect: canvas built at (window_width, stack_height), no scaling
-        cv2.imshow(self.config.spectrograph_title, spectrum_vertical)
+        waterfall_mode = self.mode == "waterfall"
 
-        if self._waterfall is not None and self.config.display.waterfall_enabled:
+        if self._waterfall is not None and (
+            self.config.display.waterfall_enabled or waterfall_mode
+        ):
             self._waterfall.update(data)
             waterfall_img = self._waterfall.render()
 
-            # Use cropped preview for waterfall if available
-            if cropped is None:
-                cropped = np.zeros([preview_height, width, 3], dtype=np.uint8)
             # Defensive: ensure waterfall matches width for vstack
             if waterfall_img.shape[1] != width:
                 waterfall_img = cv2.resize(waterfall_img, (width, waterfall_img.shape[0]))
-            waterfall_vertical = np.vstack((messages, cropped, waterfall_img))
 
+            waterfall_img = self._apply_viewport_to_waterfall(waterfall_img, width)
+
+            waterfall_vertical = self._build_waterfall_frame(
+                messages, graph, cropped, waterfall_img,
+                preview_height, message_height, width,
+            )
+            graticule_y_offset = waterfall_vertical.shape[0] - waterfall_img.shape[0]
             self._graticule.render_on_waterfall(
                 waterfall_vertical,
                 self.calibration.graticule,
-                y_offset=message_height + preview_height + 2,
+                y_offset=graticule_y_offset + 2,
+                viewport=self._viewport,
             )
-
-            cv2.imshow(self.config.waterfall_title, waterfall_vertical)
+            if waterfall_mode:
+                self._render_overlays(waterfall_vertical)
+                cv2.imshow(self.config.waterfall_title, waterfall_vertical)
+            else:
+                self._render_overlays(spectrum_vertical)
+                cv2.imshow(self.config.spectrograph_title, spectrum_vertical)
+                cv2.imshow(self.config.waterfall_title, waterfall_vertical)
+        else:
+            self._render_overlays(spectrum_vertical)
+            cv2.imshow(self.config.spectrograph_title, spectrum_vertical)
 
     def set_mode_overlay(
         self,
@@ -710,6 +740,31 @@ class DisplayManager:
             thickness=1,
             viewport=self._viewport,
         )
+
+    def _render_spectrum_bar(
+        self, data: SpectrumData, width: int, height: int
+    ) -> np.ndarray:
+        """Render a wavelength-colored intensity bar at preview_height.
+
+        Each column is colored by its wavelength and brightness-scaled by intensity,
+        producing a vertical strip that shows the spectrum as a glowing colored bar.
+        """
+        bar = np.zeros((height, width, 3), dtype=np.uint8)
+        n = len(data.intensity)
+        if n == 0:
+            return bar
+
+        for x in range(width):
+            data_x = self._viewport.screen_x_to_data(x, width)
+            idx = int(round(data_x))
+            idx = max(0, min(n - 1, idx))
+            intensity = float(data.intensity[idx])
+            rgb = wavelength_to_rgb(round(data.wavelengths[idx]))
+            bgr = rgb_to_bgr(rgb)
+            scaled = tuple(int(c * intensity) for c in bgr)
+            bar[:, x] = scaled
+
+        return bar
 
     def _render_spectrum(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render the spectrum: black line + optional contiguous colored fill.
@@ -976,24 +1031,6 @@ class DisplayManager:
                 1,
                 cv2.LINE_AA,
             )
-
-    def _render_zoom_sliders_on_graph(self, graph: np.ndarray) -> None:
-        """Render zoom sliders on graph with graph-relative coordinates."""
-        message_height = self.config.display.message_height
-        preview_height = self.config.display.preview_height
-        offset_y = message_height + preview_height
-
-        if self._zoom_vertical.visible:
-            orig_y = self._zoom_vertical.y
-            self._zoom_vertical.y = orig_y - offset_y
-            self._zoom_vertical.render(graph)
-            self._zoom_vertical.y = orig_y
-
-        if self._zoom_horizontal.visible:
-            orig_y = self._zoom_horizontal.y
-            self._zoom_horizontal.y = graph.shape[0] - 25
-            self._zoom_horizontal.render(graph)
-            self._zoom_horizontal.y = orig_y
 
     def _draw_rotated_crop_box(
         self,
@@ -1315,30 +1352,100 @@ class DisplayManager:
         """Get LED intensity slider value (0–100% PWM)."""
         return self._slider_panel.led_intensity_slider.value
 
-    def _render_sliders_on_graph(self, graph: np.ndarray) -> None:
-        """Render sliders directly on the graph area."""
-        # Sliders are positioned relative to the full window, but we render
-        # them on the graph portion. Adjust slider coordinates temporarily.
-        panel = self._slider_panel
+    def _apply_viewport_to_preview(self, img: np.ndarray, width: int) -> np.ndarray:
+        """Crop the (already display-scaled) preview strip to the current horizontal viewport.
 
-        # Calculate offset from slider position to graph-relative position
-        message_height = self.config.display.message_height
-        preview_height = self.config.display.preview_height
+        The strip has been scaled to `width` pixels wide, covering the full data
+        range [0, data_width-1]. We crop to the viewport x range and resize back
+        so the preview stays aligned with the spectrum graph below it.
+        """
+        data_width = max(1, self._last_data_width)
+        col_start = int(self._viewport.x_start / data_width * width)
+        col_end = int(self._viewport.x_end / data_width * width) + 1
+        col_start = max(0, col_start)
+        col_end = min(width, col_end)
+        if col_end - col_start < 2:
+            return img
+        region = img[:, col_start:col_end, :]
+        return cv2.resize(region, (width, img.shape[0]), interpolation=cv2.INTER_AREA)
 
-        # Sliders render directly on graph, so we adjust their Y positions
-        # to be graph-relative (subtract the offset above graph)
-        offset_y = message_height + preview_height
+    def _render_overlays(self, frame: np.ndarray) -> None:
+        """Render all visible control overlays (sliders) on the final composed frame.
 
-        # Temporarily adjust slider positions for graph rendering
-        originals = [(s, s.y) for s in panel._sliders]
-        for s, _ in originals:
-            s.y = s.y - offset_y
+        Sliders store absolute window y-coordinates (including message and preview
+        heights). When the frame is shorter than the full window (e.g. "none"
+        preview mode omits the preview strip), we shift slider positions by the
+        height difference so they stay in the graph/waterfall area.
+        """
+        expected_h = (
+            self.config.display.message_height
+            + self.config.display.preview_height
+            + self.config.display.graph_height
+        )
+        dy = frame.shape[0] - expected_h  # 0 normally; -preview_height in "none" mode
 
-        panel.render(graph)
+        if self._slider_panel.any_visible():
+            sliders = self._slider_panel._sliders
+            for s in sliders:
+                s.y += dy
+            self._slider_panel.render(frame)
+            for s in sliders:
+                s.y -= dy
 
-        # Restore original positions for mouse handling
-        for s, y_orig in originals:
-            s.y = y_orig
+        if self._zoom_vertical.visible:
+            self._zoom_vertical.y += dy
+            self._zoom_vertical.render(frame)
+            self._zoom_vertical.y -= dy
+
+        if self._zoom_horizontal.visible:
+            self._zoom_horizontal.y += dy
+            self._zoom_horizontal.render(frame)
+            self._zoom_horizontal.y -= dy
+
+    def _apply_viewport_to_waterfall(self, img: np.ndarray, width: int) -> np.ndarray:
+        """Crop and stretch waterfall image to match the current horizontal viewport."""
+        x_start = int(self._viewport.x_start)
+        x_end = int(self._viewport.x_end)
+        if x_start <= 0 and x_end >= img.shape[1] - 1:
+            return img
+        x_start = max(0, x_start)
+        x_end = min(img.shape[1] - 1, x_end)
+        if x_end <= x_start:
+            return img
+        cropped = img[:, x_start : x_end + 1, :]
+        return cv2.resize(cropped, (width, img.shape[0]), interpolation=cv2.INTER_AREA)
+
+    def _build_waterfall_frame(
+        self,
+        messages: np.ndarray,
+        graph: np.ndarray,
+        cropped: np.ndarray | None,
+        waterfall_img: np.ndarray,
+        preview_height: int,
+        message_height: int,
+        width: int,
+    ) -> np.ndarray:
+        """Build the waterfall window frame respecting current preview mode.
+
+        "window" → camera crop strip above waterfall (default).
+        "spectrum" → spectrum graph scaled to preview_height above waterfall.
+        "none" → waterfall only, no preview strip.
+        """
+        match self._preview_mode:
+            case "spectrum":
+                # Squash height only — preserve full width so x-axis aligns with waterfall
+                preview = cv2.resize(graph, (width, preview_height), interpolation=cv2.INTER_AREA)
+                return np.vstack((messages, preview, waterfall_img))
+            case "none":
+                return np.vstack((messages, waterfall_img))
+            case _:
+                # "window" and anything else: camera crop
+                strip = (
+                    cropped
+                    if cropped is not None
+                    else np.zeros((preview_height, width, 3), dtype=np.uint8)
+                )
+                return np.vstack((messages, strip, waterfall_img))
 
     def destroy(self) -> None:
         """Destroy all OpenCV windows."""
