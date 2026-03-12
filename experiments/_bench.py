@@ -88,6 +88,7 @@ for csv_path, src_name in [
         min_intercept=min_int,
         max_intercept=max_int_b,
         sigma_nm=10.0,
+        top_k=18,
     )
     if result is not None:
         ps_algo = pair_score(meas_px, meas_dip, meas_int, ref_wl, ref_is_dip, ref_int, result.wavelengths)

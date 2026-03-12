@@ -644,15 +644,68 @@ def _best_match_score(
     wl_m = wl_arr[px]                                    # (n_meas,)
     d_nm = wl_m[:, None] - ref_feat_wl[None, :]          # (n_meas, n_ref)
     g_nm = np.exp(-d_nm * d_nm / (sigma_nm * sigma_nm))  # (n_meas, n_ref)
+    # Intensity similarity in [0, 1]: favour peaks of comparable prominence.
+    d_int = h_m[:, None] - ref_feat_h[None, :]
+    sigma_i = max(1e-6, sigma_int)
+    g_int = np.exp(-d_int * d_int / (sigma_i * sigma_i))
     sign = np.where(is_dip_m[:, None] == ref_feat_is_dip[None, :], 1.0, -1.0)
     same = (sign > 0).astype(np.float64)                 # 1 = same type, 0 = cross
 
     # Best weighted same-or-cross-type match per reference feature
-    best_match = (h_m[:, None] * g_nm * sign).max(axis=0)     # (n_ref,)
+    best_match = (h_m[:, None] * g_nm * g_int * sign).max(axis=0)     # (n_ref,)
     # Best same-type wavelength coverage per reference feature
     best_coverage = (g_nm * same).max(axis=0)                  # (n_ref,) ∈ [0, 1]
 
-    per_ref = ref_feat_h * (best_match + best_coverage - 1.0)
+    # Local structure term: compare left–center–right geometry in wavelength
+    # between reference and measured, using the best same-type match as center.
+    n_ref = ref_feat_wl.shape[0]
+    structure = np.ones(n_ref, dtype=np.float64)
+    if n_ref >= 3 and h_m.size > 1:
+        idx = np.arange(n_ref)
+        left_r = np.clip(idx - 1, 0, n_ref - 1)
+        right_r = np.clip(idx + 1, 0, n_ref - 1)
+        has_triplet = (idx > 0) & (idx < n_ref - 1)
+
+        # Best same-type measured index per reference feature
+        weighted_same = h_m[:, None] * g_nm * g_int * same  # (n_meas, n_ref)
+        best_idx = np.argmax(weighted_same, axis=0)  # (n_ref,)
+        left_m = np.clip(best_idx - 1, 0, h_m.size - 1)
+        right_m = np.clip(best_idx + 1, 0, h_m.size - 1)
+
+        sigma_struct = 0.08
+        sign_ref = np.where(ref_feat_is_dip, -1.0, 1.0)
+        sign_meas = np.where(is_dip_m, -1.0, 1.0)
+
+        t_idx = np.where(has_triplet)[0]
+        if t_idx.size > 0:
+            lamL_ref = ref_feat_wl[left_r[t_idx]]
+            lamC_ref = ref_feat_wl[t_idx]
+            lamR_ref = ref_feat_wl[right_r[t_idx]]
+            span_ref = np.maximum(lamR_ref - lamL_ref, 1e-6)
+            rel_ref = (lamC_ref - lamL_ref) / span_ref
+
+            lamL_meas = wl_m[left_m[t_idx]]
+            lamC_meas = wl_m[best_idx[t_idx]]
+            lamR_meas = wl_m[right_m[t_idx]]
+            span_meas = np.maximum(lamR_meas - lamL_meas, 1e-6)
+            rel_meas = (lamC_meas - lamL_meas) / span_meas
+
+            # Neighbour type pattern match (peak/dip of left/right neighbours)
+            left_ref_sign = sign_ref[left_r[t_idx]]
+            right_ref_sign = sign_ref[right_r[t_idx]]
+            left_meas_sign = sign_meas[left_m[t_idx]]
+            right_meas_sign = sign_meas[right_m[t_idx]]
+            pattern_ok = (left_ref_sign == left_meas_sign) & (right_ref_sign == right_meas_sign)
+            pattern_penalty = np.where(pattern_ok, 1.0, 0.3)
+
+            diff_rel = rel_meas - rel_ref
+            s_struct = np.exp(-diff_rel * diff_rel / (2.0 * sigma_struct * sigma_struct))
+            s_struct *= pattern_penalty
+
+            structure[t_idx] = s_struct
+
+    alpha = 0.7
+    per_ref = ref_feat_h * (best_match + best_coverage + alpha * structure - (1.0 + alpha))
     return float(per_ref.sum())
 
 
@@ -671,7 +724,7 @@ def calibrate_spectrum_anchors(
     max_intercept: float = 500.0,
     sigma_nm: float = 10.0,
     sigma_int: float = 0.3,
-    top_k: int = 14,
+    top_k: int = 18,
 ) -> PeakDipResult | None:
     """2-anchor RANSAC: fit on a pair of features, score on ALL features.
 
