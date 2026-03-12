@@ -28,7 +28,7 @@ from ..data.reference_spectra import (
     get_reference_spectrum,
 )
 from ..display.calibration_preview import render as render_calibration_preview
-from ..processing.auto_calibrator import AutoCalibrator
+from ..processing.auto_calibrator import calibrate as run_calibration
 from ..processing.sensitivity_correction import SensitivityCorrection
 from ..utils.graph_scale import scale_intensity_to_graph
 from .base import BaseMode, ButtonDefinition, ModeType
@@ -82,7 +82,6 @@ class CalibrationMode(BaseMode):
         self.cal_state = CalibrationState()
         self.state.auto_gain_enabled = True
         self._sensitivity = SensitivityCorrection()
-        self._auto_calibrator = AutoCalibrator()
 
     def setup(self, ctx: ModeContext) -> None:
         """Register calibration-specific handlers."""
@@ -247,14 +246,12 @@ class CalibrationMode(BaseMode):
         if ctx.last_data is None:
             print("[CAL] No data available (dismissed too late)")
             return
-        cal_points = self._auto_calibrator.calibrate(
-            measured_intensity=measured,
-            wavelengths=ctx.last_data.wavelengths,
-            peak_indices=[],
-            source=self.cal_state.current_source,
-            sensitivity=self._sensitivity,
-            sensitivity_enabled=self.cal_state.sensitivity_correction_enabled,
-        )
+        wl = ctx.last_data.wavelengths
+        if self.cal_state.sensitivity_correction_enabled and self._sensitivity is not None:
+            measured = self._sensitivity.apply(measured, wl)
+        ref_wl = np.linspace(380.0, 750.0, 100)
+        ref_int = get_reference_spectrum(self.cal_state.current_source, ref_wl)
+        cal_points = run_calibration(measured, ref_wl, ref_int)
         if len(cal_points) >= 3:
             self.cal_state.calibration_points = cal_points
             print(f"[CAL] Auto-calibration found {len(cal_points)} points (4+ preferred)")
@@ -478,15 +475,12 @@ class CalibrationMode(BaseMode):
         wavelengths: np.ndarray,
         peak_indices: list,
     ) -> list[tuple[int, float]]:
-        """Perform automatic calibration. Delegates to AutoCalibrator."""
-        return self._auto_calibrator.calibrate(
-            measured_intensity=measured_intensity,
-            wavelengths=wavelengths,
-            peak_indices=peak_indices,
-            source=self.cal_state.current_source,
-            sensitivity=self._sensitivity,
-            sensitivity_enabled=self.cal_state.sensitivity_correction_enabled,
-        )
+        """Perform automatic calibration. Uses triplet matching + correlation fallback."""
+        if self.cal_state.sensitivity_correction_enabled and self._sensitivity is not None:
+            measured_intensity = self._sensitivity.apply(measured_intensity, wavelengths)
+        ref_wl = np.linspace(380.0, 750.0, 100)
+        ref_int = get_reference_spectrum(self.cal_state.current_source, ref_wl)
+        return run_calibration(measured_intensity, ref_wl, ref_int)
 
     def calibrate_from_peaks(
         self,
@@ -494,16 +488,12 @@ class CalibrationMode(BaseMode):
         wavelengths: np.ndarray,
         peak_indices: list[int],
     ) -> list[tuple[int, float]]:
-        """Manual calibration by matching detected peaks to reference lines."""
-        calibration_points = self._auto_calibrator.calibrate_from_peaks(
-            measured_intensity, wavelengths, peak_indices, self.cal_state.current_source
-        )
-        if calibration_points:
-            self.cal_state.calibration_points = calibration_points
-            print(f"[Calibration] Peak-matched {len(calibration_points)} points:")
-            for pixel, wl in calibration_points:
-                print(f"  Pixel {pixel} -> {wl:.1f} nm")
-        return calibration_points
+        """Calibration by triplet matching (peak_indices unused; extraction is automatic)."""
+        cal_points = self.auto_calibrate(measured_intensity, wavelengths, peak_indices)
+        if cal_points:
+            self.cal_state.calibration_points = cal_points
+            print(f"[Calibration] Matched {len(cal_points)} points")
+        return cal_points
 
     def get_calibration_points(self) -> list[tuple[int, float]]:
         """Get current calibration points for saving.

@@ -14,11 +14,9 @@ from pathlib import Path
 
 import numpy as np
 
-# Add project root and .tmp for calibration_srp
 ROOT = Path(__file__).resolve().parent.parent
 TMP = ROOT / ".tmp"
 sys.path.insert(0, str(ROOT / "src"))
-sys.path.insert(0, str(TMP))
 
 try:
     import matplotlib.pyplot as plt
@@ -115,7 +113,7 @@ def run_peaks_calibration(
     }
     source = source_map.get(source_name.upper(), ReferenceSource.FL12)
 
-    from calibration_srp.calibrate import calibrate_peaks  # noqa: E402
+    from pyspectrometer.processing.calibration import calibrate_peaks
 
     return calibrate_peaks(measured, wavelengths, source, debug=debug)
 
@@ -142,7 +140,7 @@ def run_extremum_calibration(
     }
     source = source_map.get(source_name.upper(), ReferenceSource.FL12)
 
-    from calibration_srp.calibrate import calibrate_extremums  # noqa: E402
+    from pyspectrometer.processing.calibration import calibrate_extremums
 
     return calibrate_extremums(
         measured, wavelengths, source, debug=debug, return_outcomes=return_outcomes
@@ -153,9 +151,9 @@ def run_correlation_calibration(
     measured: np.ndarray,
     source_name: str,
 ) -> list[tuple[int, float]]:
-    """Run current correlation-based auto-calibrator."""
+    """Run calibration: triplet + correlation fallback."""
     from pyspectrometer.data.reference_spectra import ReferenceSource, get_reference_spectrum
-    from pyspectrometer.processing.auto_calibrator import AutoCalibrator
+    from pyspectrometer.processing.auto_calibrator import calibrate
 
     source_map = {
         "FL12": ReferenceSource.FL12,
@@ -167,17 +165,9 @@ def run_correlation_calibration(
         "LED": ReferenceSource.LED,
     }
     source = source_map.get(source_name.upper(), ReferenceSource.FL12)
-
-    cal = AutoCalibrator()
-    points = cal.calibrate(
-        measured_intensity=measured,
-        wavelengths=np.linspace(380, 750, len(measured)),  # dummy
-        peak_indices=[],
-        source=source,
-        sensitivity=None,
-        sensitivity_enabled=False,
-    )
-    return points
+    ref_wl = np.linspace(380.0, 750.0, 100)
+    ref_int = get_reference_spectrum(source, ref_wl)
+    return calibrate(measured, ref_wl, ref_int)
 
 
 def plot_fit(

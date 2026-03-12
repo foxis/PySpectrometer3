@@ -6,12 +6,13 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .detect import Extremum
+from ...core.spectrum import Extremum
 
 # [height, width, A-h/h, B-h/h, A-w/w, B-w/w, rel_pos]
 DESC_LABELS = ["height", "width", "A-h/h", "B-h/h", "A-w/w", "B-w/w", "rel_pos"]
 # Exaggerate rel_pos so matching favors similar relative position of center within span.
-DEFAULT_WEIGHTS = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 2.5], dtype=np.float64)
+DEFAULT_WEIGHTS = np.array([3.0, 0.5, 1.0, 1.0, 0.01, 0.01, 1.0], dtype=np.float64)
+# DEFAULT_WEIGHTS = np.array([1.0, 0.7, 0.8, 0.9, 0.75, 0.8, 1.1], dtype=np.float64)
 
 
 @dataclass
@@ -43,6 +44,8 @@ def build(extremums: list[Extremum]) -> list[Triplet]:
         w = center.width + eps
         a_w_ratio = left.width / w
         b_w_ratio = right.width / w
+        if not (0.30 <= rel_pos <= 0.70):
+            return
         desc = np.array(
             [center.height, center.width, a_h_ratio, b_h_ratio, a_w_ratio, b_w_ratio, rel_pos],
             dtype=np.float64,
@@ -113,3 +116,27 @@ def best_pair_score(
             if s > best:
                 best = s
     return best
+
+
+def best_pair_triplets(
+    center_a: int,
+    center_b: int,
+    triplets_a: list[Triplet],
+    triplets_b: list[Triplet],
+    a: list[Extremum],
+    b: list[Extremum],
+    weights: np.ndarray,
+    metric: str = "euclidean",
+) -> tuple[Triplet | None, Triplet | None, float]:
+    """Best triplet pair for (center_a, center_b). Returns (ta, tb, score)."""
+    ta_list = [t for t in triplets_a if t.center_idx == center_a]
+    tb_list = [t for t in triplets_b if t.center_idx == center_b]
+    if not ta_list or not tb_list:
+        return None, None, -1e9
+    best_ta, best_tb, best_s = None, None, -1e9
+    for ta in ta_list:
+        for tb in tb_list:
+            s = score(ta, tb, a, b, weights, metric)
+            if s > best_s:
+                best_s, best_ta, best_tb = s, ta, tb
+    return best_ta, best_tb, best_s

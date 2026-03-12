@@ -10,7 +10,6 @@ from dataclasses import dataclass
 import numpy as np
 
 
-
 @dataclass
 class MeasuredPeak:
     """Peak or dip in measured spectrum (SPD A)."""
@@ -18,7 +17,7 @@ class MeasuredPeak:
     pixel: int
     intensity: float
     width_nm: float
-    is_dip: bool = False  # True = local minimum (absorption dip)
+    is_dip: bool = False
 
 
 @dataclass
@@ -52,7 +51,6 @@ def _find_dips(
     rng = float(np.max(arr) - np.min(arr))
     if rng <= 0:
         return []
-    # Peaks in -y are minima
     inverted = -arr
     height = float(np.min(inverted) + prominence * rng)
     idx, _ = scipy_find_peaks(
@@ -69,7 +67,7 @@ def _find_dips(
     disp = (wavelengths[-1] - wavelengths[0]) / max(n - 1, 1)
     result = []
     for i, px in enumerate(idx):
-        depth = float(np.max(arr) - arr[px])  # strength of dip
+        depth = float(np.max(arr) - arr[px])
         w_nm = float(widths_px[i]) * disp if i < len(widths_px) else 0.0
         result.append((int(px), depth, w_nm))
     return result
@@ -84,11 +82,8 @@ def detect_peaks_measured(
     prominence: float = 0.005,
     include_dips: bool = True,
 ) -> list[MeasuredPeak]:
-    """Detect peaks and optionally thin strong dips in measured intensity (SPD A).
-
-    Returns peaks (and dips) sorted by pixel position. Dips use depth as intensity.
-    """
-    from pyspectrometer.processing.peak_detection import find_peaks, peak_widths_nm
+    """Detect peaks and optionally thin strong dips in measured intensity (SPD A)."""
+    from ..peak_detection import find_peaks, peak_widths_nm
 
     peaks = find_peaks(
         intensity,
@@ -124,13 +119,8 @@ def get_reference_peaks(
     source,
     merge_threshold_nm: float = 8.0,
 ) -> list[ReferencePeak]:
-    """Get peaks from reference spectrum (SPD B).
-
-    Uses known spectral lines. Merges peaks within merge_threshold_nm
-    (spectrometer resolution may join close lines).
-    """
-    from pyspectrometer.data.reference_spectra import get_reference_peaks as get_ref
-    from pyspectrometer.data.reference_spectra import SpectralLine
+    """Get peaks from reference spectrum (SPD B)."""
+    from ...data.reference_spectra import SpectralLine, get_reference_peaks as get_ref
 
     raw = get_ref(source)
     if len(raw) < 2:

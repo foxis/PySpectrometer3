@@ -1,4 +1,4 @@
-"""Orchestrate SRP calibration: detect → descriptor → match → fit."""
+"""Orchestrate triplet calibration: detect → descriptor → match → fit."""
 
 from __future__ import annotations
 
@@ -6,10 +6,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .descriptor import DEFAULT_WEIGHTS, build as build_triplets
-from .detect import DEFAULT_MAX_COUNT, extract, from_known_lines
-from .fit import fit_cal_points
+from .cauchy_fit import fit_cal_points
+from .detect_peaks import get_reference_peaks
+from .extremum import DEFAULT_MAX_COUNT, extract, from_known_lines
 from .matcher import match
+from .triplet import DEFAULT_WEIGHTS, build as build_triplets
 
 
 @dataclass
@@ -21,7 +22,7 @@ class CalibrationResult:
     metric: str
 
 
-def _valid_positions(wavelengths: np.ndarray, n: int) -> np.ndarray:
+def _valid_positions(wavelengths: np.ndarray | None, n: int) -> np.ndarray:
     """Valid monotonic positions or linear 380–750."""
     if wavelengths is None or len(wavelengths) < 2:
         return np.linspace(380, 750, n)
@@ -68,7 +69,7 @@ def calibrate(
     path_euc = match(meas, ref, triplets_meas, triplets_ref, weights=w, metric="euclidean")
     path_cos = match(meas, ref, triplets_meas, triplets_ref, weights=w, metric="cosine")
     path = path_euc if len(path_euc) >= len(path_cos) else path_cos
-    metric = "euclidean" if path == path_euc else "cosine"
+    metric_used = "euclidean" if path == path_euc else "cosine"
 
     cal_points = [
         (meas[i_m].position_px, ref[i_r].position)
@@ -81,14 +82,15 @@ def calibrate(
         return None
 
     wavelengths = fit_cal_points(cal_points, n)
-    return CalibrationResult(cal_points=cal_points, wavelengths=wavelengths, metric=metric)
+    return CalibrationResult(cal_points=cal_points, wavelengths=wavelengths, metric=metric_used)
 
 
-def _filter_non_crossing(cal_points: list[tuple[int, float]]) -> list[tuple[int, float]]:
+def _filter_non_crossing(cal_points: list[tuple[int | None, float]]) -> list[tuple[int, float]]:
     """Enforce: sorted by pixel, ref_wl strictly increasing."""
-    if len(cal_points) < 2:
-        return cal_points
-    sorted_pts = sorted(cal_points, key=lambda x: x[0])
+    valid = [(p, w) for p, w in cal_points if p is not None]
+    if len(valid) < 2:
+        return valid
+    sorted_pts = sorted(valid, key=lambda x: x[0])
     result: list[tuple[int, float]] = [sorted_pts[0]]
     for px, ref_wl in sorted_pts[1:]:
         if ref_wl > result[-1][1]:
@@ -98,6 +100,8 @@ def _filter_non_crossing(cal_points: list[tuple[int, float]]) -> list[tuple[int,
 
 @dataclass
 class Outcome:
+    """Calibration outcome with metric and score."""
+
     metric: str
     cal_points: list[tuple[int, float]]
     score: float
@@ -105,6 +109,8 @@ class Outcome:
 
 @dataclass
 class AllPeaksInfo:
+    """All detected peaks/dips for debugging."""
+
     pixels: list[int]
     positions: list[float]
     heights: list[float]
@@ -120,9 +126,7 @@ def calibrate_extremums(
     return_outcomes: bool = False,
     max_extremums: int = DEFAULT_MAX_COUNT,
 ):
-    """Feature-based extremum matching. Returns cal_points or (cal_points, outcomes, all_peaks)."""
-    from .detect_peaks import get_reference_peaks
-
+    """Feature-based extremum matching."""
     ref_peaks = get_reference_peaks(source)
     ref_wl = [p.wavelength for p in ref_peaks]
     ref_int = [p.intensity for p in ref_peaks]
@@ -183,7 +187,7 @@ def calibrate_peaks(
     debug: bool = False,
 ) -> list[tuple[int, float]]:
     """Legacy peak-only calibration (hypothesis-based). Fallback when extremum fails."""
-    from .detect_peaks import detect_peaks_measured, get_reference_peaks
+    from .detect_peaks import detect_peaks_measured
     from .hypotheses import Hypothesis, generate_sequential_hypotheses
     from .scorer import score_hypothesis
 
@@ -211,7 +215,7 @@ def calibrate_peaks(
         min_matches=4,
         tolerance_nm=25.0,
         max_hypotheses=500,
-        initial_wavelengths=initial_wl,
+        initial_wavelengths=initial_wl.tolist(),
     )
     if not hypotheses:
         return []

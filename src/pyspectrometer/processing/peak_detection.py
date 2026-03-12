@@ -18,84 +18,6 @@ except ImportError:
     _SCIPY_AVAILABLE = False
 
 
-def find_peak_indexes(
-    y: np.ndarray,
-    threshold: float = 0.3,
-    min_dist: int = 1,
-    threshold_abs: bool = False,
-) -> np.ndarray:
-    """Find peak indexes in a signal.
-
-    This implementation is based on peakutils:
-    https://bitbucket.org/lucashnegri/peakutils
-
-    Copyright (c) 2014-2022 Lucas Hermann Negri. MIT License.
-
-    Args:
-        y: Input signal array
-        threshold: Threshold for peak detection (relative to signal range)
-        min_dist: Minimum distance between peaks in samples
-        threshold_abs: If True, threshold is absolute; if False, relative
-
-    Returns:
-        Array of peak indexes
-
-    Raises:
-        ValueError: If y contains unsigned integers
-    """
-    if isinstance(y, np.ndarray) and np.issubdtype(y.dtype, np.unsignedinteger):
-        raise ValueError("y must be signed")
-
-    if not threshold_abs:
-        threshold = threshold * (np.max(y) - np.min(y)) + np.min(y)
-
-    min_dist = int(min_dist)
-
-    dy = np.diff(y)
-
-    zeros = np.where(dy == 0)[0]
-
-    if len(zeros) == len(y) - 1:
-        return np.array([])
-
-    if len(zeros):
-        zeros_diff = np.diff(zeros)
-        zeros_diff_not_one = np.add(np.where(zeros_diff != 1), 1)[0]
-        zero_plateaus = np.split(zeros, zeros_diff_not_one)
-
-        if zero_plateaus[0][0] == 0:
-            dy[zero_plateaus[0]] = dy[zero_plateaus[0][-1] + 1]
-            zero_plateaus.pop(0)
-
-        if len(zero_plateaus) and zero_plateaus[-1][-1] == len(dy) - 1:
-            dy[zero_plateaus[-1]] = dy[zero_plateaus[-1][0] - 1]
-            zero_plateaus.pop(-1)
-
-        for plateau in zero_plateaus:
-            median = np.median(plateau)
-            dy[plateau[plateau < median]] = dy[plateau[0] - 1]
-            dy[plateau[plateau >= median]] = dy[plateau[-1] + 1]
-
-    peaks = np.where(
-        (np.hstack([dy, 0.0]) < 0.0) & (np.hstack([0.0, dy]) > 0.0) & (np.greater(y, threshold))
-    )[0]
-
-    if peaks.size > 1 and min_dist > 1:
-        highest = peaks[np.argsort(y[peaks])][::-1]
-        rem = np.ones(y.size, dtype=bool)
-        rem[peaks] = False
-
-        for peak in highest:
-            if not rem[peak]:
-                sl = slice(max(0, peak - min_dist), peak + min_dist + 1)
-                rem[sl] = True
-                rem[peak] = False
-
-        peaks = np.arange(y.size)[~rem]
-
-    return peaks
-
-
 def find_peak_indexes_scipy(
     y: np.ndarray,
     *,
@@ -140,90 +62,144 @@ def find_peak_indexes_scipy(
     return np.asarray(idx, dtype=np.intp)
 
 
-def _find_raw_peaks_and_dips(
+def _widths_nm(
     arr: np.ndarray,
-    *,
-    peak_prominence: float = 0.005,
-    peak_min_dist: int = 8,
-    dip_prominence: float = 0.025,
-    dip_min_dist: int = 15,
-) -> list[tuple[int, float, bool]]:
-    """Returns (index, height_or_depth, is_dip)."""
-    if not _SCIPY_AVAILABLE:
+    positions: np.ndarray,
+    indices: np.ndarray,
+    is_dip: bool,
+    rel_height: float = REL_HEIGHT_WIDTH,
+) -> list[float]:
+    """Width in nm from scipy peak_widths at rel_height."""
+    if not _SCIPY_AVAILABLE or indices.size == 0:
         return []
+    n = len(positions)
+    disp = (positions[-1] - positions[0]) / max(n - 1, 1)
+    signal = np.asarray(-arr if is_dip else arr, dtype=np.float64)
+    try:
+        widths_px, _, _, _ = scipy_peak_widths(
+            signal, indices.astype(np.intp), rel_height=rel_height
+        )
+    except (ValueError, IndexError):
+        return [disp] * len(indices)
+    return [float(w) * disp if w > 0 else disp for w in widths_px]
+
+
+def extract_peaks(
+    intensity: np.ndarray,
+    positions: np.ndarray,
+    *,
+    prominence: float = 0.005,
+    min_dist: int = 8,
+    rel_height: float = REL_HEIGHT_WIDTH,
+) -> list[tuple[int, float, float, float]]:
+    """Extract peaks. Returns (idx, position, height, width) per peak.
+
+    Height from scipy prominence. Width from scipy peak_widths at rel_height.
+    """
+    if not _SCIPY_AVAILABLE or intensity.size < 3:
+        return []
+    arr = np.asarray(intensity, dtype=np.float64)
     rng = float(np.max(arr) - np.min(arr))
     if rng <= 0:
         return []
-    prom_peak = max(peak_prominence * rng, 1e-12)
-    prom_dip = max(dip_prominence * rng, 1e-12)
-    result: list[tuple[int, float, bool]] = []
-    pk_idx, _ = scipy_find_peaks(arr, prominence=prom_peak, distance=max(1, peak_min_dist))
-    for i in pk_idx:
-        result.append((int(i), float(arr[i]), False))
-    inv = -arr
-    dip_idx, _ = scipy_find_peaks(inv, prominence=prom_dip, distance=max(1, dip_min_dist))
-    for i in dip_idx:
-        depth = float(np.max(arr) - arr[i])
-        result.append((int(i), depth, True))
-    result.sort(key=lambda x: x[0])
+    prom = max(prominence * rng, 1e-12)
+    idx, props = scipy_find_peaks(
+        arr,
+        prominence=prom,
+        distance=max(1, min_dist),
+    )
+    if idx.size == 0:
+        return []
+    heights = props["prominences"]
+    widths = _widths_nm(arr, positions, idx, is_dip=False, rel_height=rel_height)
+    n = len(positions)
+    result = []
+    for i in range(idx.size):
+        px = int(idx[i])
+        pos = float(positions[px])
+        h = float(heights[i])
+        w = widths[i] if i < len(widths) else 0.0
+        result.append((px, pos, h, w))
     return result
 
 
-def _height_and_width_at_rel_height(
-    arr: np.ndarray,
+def extract_dips(
+    intensity: np.ndarray,
     positions: np.ndarray,
-    center_idx: int,
-    height_raw: float,
-    is_dip: bool,
     *,
+    prominence: float = 0.08,
+    min_dist: int = 15,
     rel_height: float = REL_HEIGHT_WIDTH,
-) -> tuple[float, float]:
-    """Height = max(left, right). Width = 2 * min(left_half, right_half) in nm."""
-    n = len(arr)
-    if n < 2 or center_idx < 0 or center_idx >= n:
-        return 0.0, 0.0
-    disp = (positions[-1] - positions[0]) / max(n - 1, 1)
-    if is_dip:
-        thresh = np.max(arr) - height_raw * (1.0 - rel_height)
-    else:
-        thresh = height_raw * rel_height
-    if thresh <= 0 or (is_dip and thresh >= np.max(arr)):
-        return 0.0, 0.0
-    left_ips = float(center_idx)
-    for i in range(center_idx, 0, -1):
-        if i > 0 and (
-            (not is_dip and arr[i - 1] < thresh <= arr[i])
-            or (is_dip and arr[i - 1] > thresh >= arr[i])
-        ):
-            t = (thresh - arr[i]) / (arr[i - 1] - arr[i]) if arr[i - 1] != arr[i] else 0.5
-            left_ips = i - t
-            break
-    right_ips = float(center_idx)
-    for i in range(center_idx, n - 1):
-        if i + 1 < n and (
-            (not is_dip and arr[i] >= thresh > arr[i + 1])
-            or (is_dip and arr[i] <= thresh < arr[i + 1])
-        ):
-            t = (thresh - arr[i]) / (arr[i + 1] - arr[i]) if arr[i + 1] != arr[i] else 0.5
-            right_ips = i + t
-            break
+    valley_only: bool = True,
+) -> list[tuple[int, float, float, float]]:
+    """Extract dips (valleys). Returns (idx, position, height, width) per dip.
 
-    lo = max(0, int(np.floor(left_ips)))
-    hi = min(n, int(np.ceil(right_ips)) + 1)
-    apex = float(arr[center_idx])
-    if is_dip:
-        baseline_left = float(np.max(arr[lo : center_idx + 1])) if lo <= center_idx else apex
-        baseline_right = float(np.max(arr[center_idx:hi])) if center_idx < hi else apex
-        height = max(baseline_left - apex, baseline_right - apex)
-    else:
-        baseline_left = float(np.min(arr[lo : center_idx + 1])) if lo <= center_idx else apex
-        baseline_right = float(np.min(arr[center_idx:hi])) if center_idx < hi else apex
-        height = max(apex - baseline_left, apex - baseline_right)
+    Only valleys between two peaks when valley_only=True.
+    Height = depth (scipy prominence on -arr). Width from scipy peak_widths.
+    """
+    if not _SCIPY_AVAILABLE or intensity.size < 3:
+        return []
+    arr = np.asarray(intensity, dtype=np.float64)
+    rng = float(np.max(arr) - np.min(arr))
+    if rng <= 0:
+        return []
+    prom = max(prominence * rng, 1e-12)
+    inv = -arr
+    pk_idx, _ = scipy_find_peaks(arr, prominence=prom * 0.5, distance=1)
+    peak_set = set(int(p) for p in pk_idx)
+    dip_idx, props = scipy_find_peaks(
+        inv,
+        prominence=prom,
+        distance=max(1, min_dist),
+    )
+    if dip_idx.size == 0:
+        return []
+    heights = props["prominences"]
+    widths = _widths_nm(arr, positions, dip_idx, is_dip=True, rel_height=rel_height)
+    result = []
+    for i in range(dip_idx.size):
+        px = int(dip_idx[i])
+        if valley_only and peak_set:
+            left_p = max((p for p in peak_set if p < px), default=None)
+            right_p = min((p for p in peak_set if p > px), default=None)
+            if left_p is None or right_p is None:
+                continue
+        pos = float(positions[px])
+        h = float(heights[i])
+        w = widths[i] if i < len(widths) else 0.0
+        result.append((px, pos, h, w))
+    return result
 
-    left_half = center_idx - left_ips
-    right_half = right_ips - center_idx
-    width = 2.0 * min(left_half, right_half) * disp
-    return height, max(0.0, width)
+
+def debug_raw_peaks_and_dips(
+    intensity: np.ndarray,
+    positions: np.ndarray,
+    *,
+    peak_prominence: float = 0.003,
+    dip_prominence: float = 0.02,
+    no_valley_filter: bool = False,
+) -> tuple[list[tuple[int, float, float, float]], list[tuple[int, float, float, float]]]:
+    """Return ALL raw peaks and dips with (index, position, height, width).
+
+    For debugging: lower prominence, optional valley filter bypass. Returns (peaks, dips).
+    Each item: (idx, pos_nm, height, width).
+    """
+    peaks_raw = extract_peaks(
+        intensity,
+        positions,
+        prominence=peak_prominence,
+        min_dist=1,
+    )
+    dips_raw = extract_dips(
+        intensity,
+        positions,
+        prominence=dip_prominence,
+        min_dist=1,
+        valley_only=not no_valley_filter,
+    )
+    peaks_out = [(px, pos, h, w) for px, pos, h, w in peaks_raw]
+    dips_out = [(px, pos, h, w) for px, pos, h, w in dips_raw]
+    return peaks_out, dips_out
 
 
 def extract_extremums(
@@ -233,35 +209,40 @@ def extract_extremums(
     position_px: np.ndarray | None = None,
     max_count: int = DEFAULT_MAX_EXTREMUMS,
 ) -> list[Extremum]:
-    """Extract peaks and dips. Take N strongest by abs(height). Sorted by position.
+    """Extract peaks and dips ranked by prominence. Works for emission and transmission spectra.
 
-    Find all peaks (height positive), all dips (height negative), concatenate,
-    sort by abs(height) descending, take max_count. No other filtering.
+    Combines peaks and dips, sorts by prominence (height/depth) desc, width asc,
+    takes top max_count. No preference for peaks over dips or vice versa.
     """
-    raw = _find_raw_peaks_and_dips(intensity)
-    if not raw:
+    peaks_raw = extract_peaks(intensity, positions)
+    dips_raw = extract_dips(intensity, positions)
+
+    combined: list[tuple[int, float, float, float, bool]] = []
+    for px, pos, h, w in peaks_raw:
+        combined.append((px, pos, h, w, False))
+    for px, pos, h, w in dips_raw:
+        combined.append((px, pos, h, w, True))
+    if not combined:
         return []
-    peaks = [(i, h, False) for i, h, d in raw if not d]
-    dips = [(i, h, True) for i, h, d in raw if d]
-    combined = peaks + dips
-    items: list[tuple[int, float, bool, float, float]] = []
-    for idx, height_raw, is_dip in combined:
-        h, w = _height_and_width_at_rel_height(
-            intensity, positions, idx, height_raw, is_dip, rel_height=REL_HEIGHT_WIDTH
-        )
-        items.append((idx, height_raw, is_dip, h, w))
-    items = sorted(items, key=lambda x: -abs(x[3]))[:max_count]
-    items = sorted(items, key=lambda x: x[0])
-    max_h = max(x[3] for x in items) or 1.0
+
+    # Rank by prominence/width (sharpness): narrow prominent features outrank wide shallow ones
+    def _rank(x: tuple) -> float:
+        _, _, h, w, _ = x
+        return h / max(w, 1e-9)
+
+    combined.sort(key=lambda x: -_rank(x))
+    top = combined[:max_count]
+    # Sort by position for display
+    top.sort(key=lambda x: x[1])
+    max_h = max(x[2] for x in top) or 1.0
     result: list[Extremum] = []
-    for k, (idx, _, is_dip, h_computed, w_computed) in enumerate(items):
-        pos = float(positions[idx])
+    for idx, pos, h_computed, w_computed, is_dip in top:
         h_norm = h_computed / max_h if max_h > 0 else 0.5
         h_signed = h_norm if not is_dip else -h_norm
         px = int(position_px[idx]) if position_px is not None else None
         result.append(
             Extremum(
-                index=k,
+                index=idx,
                 position=pos,
                 position_px=px,
                 height=h_signed,

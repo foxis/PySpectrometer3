@@ -1,6 +1,7 @@
 """CLI entry points for Poetry scripts: calibrate, measure, colors, raman, lint, format, stream."""
 
 import subprocess
+import numpy as np
 import sys
 from pathlib import Path
 
@@ -40,11 +41,17 @@ def fit_csv() -> int:
         return 1
     save_to_config = "--save" in sys.argv[1:]
 
+    from .data import get_reference_spectrum, load_spectrum_csv
     from .data.reference_spectra import ReferenceSource, get_reference_name
-    from .processing.auto_calibrator import AutoCalibrator
+    from .processing.auto_calibrator import calibrate
 
-    cal = AutoCalibrator()
-    points = cal.calibrate_from_csv(csv_path, source=ReferenceSource.FL12)
+    measured, n, _ = load_spectrum_csv(csv_path)
+    if n < 10:
+        print(f"[fit_csv] Need at least 10 pixels, got {n}")
+        return 1
+    ref_wl = np.linspace(380.0, 750.0, 100)
+    ref_int = get_reference_spectrum(ReferenceSource.FL12, ref_wl)
+    points = calibrate(measured, ref_wl, ref_int)
     if not points:
         return 1
     print(f"FL12 calibration: {len(points)} points")

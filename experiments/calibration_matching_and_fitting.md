@@ -36,7 +36,7 @@ flowchart TD
 ## 1. Extremum Detection
 
 **Source:** `pyspectrometer.processing.peak_detection.extract_extremums`  
-**Wrapper:** `calibration_srp.detect.extract`
+**Wrapper:** `pyspectrometer.processing.calibration.extract`
 
 - Find all peaks (local maxima) and dips (local minima) via `scipy.signal.find_peaks`
 - Peaks: prominence 0.5% of range, min distance 8 samples
@@ -49,7 +49,7 @@ flowchart TD
 
 ## 2. Triplet Descriptors
 
-**Source:** `calibration_srp.descriptor`
+**Source:** `pyspectrometer.processing.calibration.triplet`
 
 Each triplet is (left, center, right) with a 7-D descriptor:
 
@@ -112,7 +112,7 @@ Both metrics are run; the path with more points wins.
 
 ## 4. Inverse Cauchy Fit
 
-**Source:** `calibration_srp.fit`
+**Source:** `pyspectrometer.processing.calibration.cauchy_fit`
 
 Prism dispersion is modeled as inverse Cauchy: wavelength vs pixel follows `1/λ² ≈ poly(pixel)`.
 
@@ -143,11 +143,13 @@ When triplet matching yields &lt;4 cal points, the system falls back to hypothes
 
 ```mermaid
 flowchart LR
-    detect["detect.py"] --> descriptor["descriptor.py"]
-    descriptor --> matcher["matcher.py"]
-    matcher --> fit["fit.py"]
-    calibrate["calibrate.py"] --> detect
-    calibrate --> descriptor
-    calibrate --> matcher
-    calibrate --> fit
+    subgraph processing["pyspectrometer.processing.calibration"]
+        extremum["extremum.py"] --> triplet["triplet.py"]
+        triplet --> matcher["matcher.py"]
+        matcher --> cauchy["cauchy_fit.py"]
+        calibrate["calibrate.py"] --> extremum
+        calibrate --> triplet
+        calibrate --> matcher
+        calibrate --> cauchy
+    end
 ```

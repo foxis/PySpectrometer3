@@ -1,7 +1,4 @@
-"""Score hypotheses: polynomial fit, peak alignment, width/strength penalty.
-
-Single responsibility: assign a score to each hypothesis.
-"""
+"""Score hypotheses: polynomial fit, peak alignment, width/strength penalty."""
 
 from __future__ import annotations
 
@@ -12,7 +9,7 @@ from .hypotheses import Hypothesis
 
 
 def _linearity_score(points: list[tuple[int, float]]) -> float:
-    """R² of linear fit pixel→wavelength. Higher = more linear (Snell's law approx)."""
+    """R² of linear fit pixel→wavelength."""
     if len(points) < 2:
         return 1.0
     px = np.array([p[0] for p in points], dtype=np.float64)
@@ -27,19 +24,19 @@ def _linearity_score(points: list[tuple[int, float]]) -> float:
 
 
 def _strength_penalty(norm_meas: float, norm_ref: float) -> float:
-    """Penalty for strong-weak mismatch. 0=no penalty, 1=full penalty."""
+    """Penalty for strong-weak mismatch."""
     return abs(norm_meas - norm_ref)
 
 
 def _strength_bonus(norm_meas: float, norm_ref: float) -> float:
-    """Bonus for matching strong peaks. Product: strong-strong=1, strong-weak≈0."""
+    """Bonus for matching strong peaks."""
     return norm_meas * norm_ref
 
 
 def _width_penalty(w_meas: float, w_ref: float) -> float:
-    """Penalty for width mismatch. 0=similar, 1=very different. Neutral when unknown."""
+    """Penalty for width mismatch."""
     if w_meas <= 0 or w_ref <= 0:
-        return 0.0  # neutral when width unknown
+        return 0.0
     ratio = min(w_meas, w_ref) / max(w_meas, w_ref)
     return 1.0 - ratio
 
@@ -51,11 +48,7 @@ def _alignment_score(
     matches: list,
     tolerance_nm: float = 5.0,
 ) -> float:
-    """Fraction of matched peaks that align after polynomial fit.
-
-    Fit poly through cal_points, then check how many (pixel, wl) pairs
-    have |poly(pixel) - ref_wl| <= tolerance.
-    """
+    """Fraction of matched peaks that align after polynomial fit."""
     if len(cal_points) < 3:
         return 0.0
     px = np.array([p[0] for p in cal_points], dtype=np.float64)
@@ -85,7 +78,7 @@ def score_hypothesis(
     w_strength_pen: float = 0.1,
     w_width: float = 0.0,
 ) -> float:
-    """Score a hypothesis. Higher = better. Prefers strong-strong matches."""
+    """Score a hypothesis. Higher = better."""
     cal_points = hypothesis.to_cal_points(measured, reference)
     if len(cal_points) < 4:
         return -1e9
@@ -110,7 +103,7 @@ def score_hypothesis(
         nr = pr.intensity / max_ref if max_ref > 1e-9 else 0
         strength_pen += _strength_penalty(nm, nr)
         strength_bonus += _strength_bonus(nm, nr)
-        if nm * nr < 0.08:  # Only penalize very weak matches
+        if nm * nr < 0.08:
             weak_match_penalty += 0.3
         if nm >= 0.5 and nr >= 0.5:
             strong_match_count += 1
@@ -125,7 +118,7 @@ def score_hypothesis(
     if strong_match_count < 2:
         return -1e9
     extra_strong_bonus = 0.15 * max(0, strong_match_count - 2)
-    match_count_bonus = 0.12 * max(0, n - 4)  # Prefer more matches (5+)
+    match_count_bonus = 0.12 * max(0, n - 4)
     score = (
         w_linearity * linearity
         + w_alignment * alignment

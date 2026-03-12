@@ -1,5 +1,6 @@
 """Data files and reference spectra for PySpectrometer3."""
 
+from .io import load_spectrum_csv
 from .reference_spectra import (
     ReferenceSource,
     SpectralLine,
@@ -11,6 +12,7 @@ from .reference_spectra import (
 )
 
 __all__ = [
+    "load_spectrum_csv",
     "ReferenceSource",
     "get_reference_spectrum",
     "get_reference_peaks",

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from .descriptor import Triplet, best_pair_score, DEFAULT_WEIGHTS
-from .detect import Extremum
+from ...core.spectrum import Extremum
+
+from .triplet import DEFAULT_WEIGHTS, Triplet, best_pair_score
 
 
 def _would_cross(

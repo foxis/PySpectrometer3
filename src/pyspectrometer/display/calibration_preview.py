@@ -7,20 +7,37 @@ and lines connecting matched pairs. User clicks to dismiss and continue.
 
 import numpy as np
 
-from ..data.reference_spectra import (
-    ReferenceSource,
-    get_reference_peaks,
-    get_reference_spectrum,
-)
-from ..processing.auto_calibrator import (
-    _merge_close_reference_peaks,
-    _linearity_score,
-    _intensity_similarity,
-    _reference_peak_widths_nm,
-    _width_similarity,
-)
+from ..data.reference_spectra import ReferenceSource, get_reference_spectrum
+from ..processing.calibration import get_reference_peaks
+from ..processing.calibration.detect_peaks import reference_peak_widths_from_spectrum
 from ..processing.peak_detection import extract_extremums, peak_widths_nm
 from ..utils.graph_scale import scale_intensity_to_graph
+
+
+def _linearity_score(pts: list[tuple[int | float, float]]) -> float:
+    """R² of linear fit pixel→wavelength."""
+    if len(pts) < 2:
+        return 1.0
+    px = np.array([p[0] for p in pts], dtype=np.float64)
+    wl = np.array([p[1] for p in pts], dtype=np.float64)
+    ss_tot = np.sum((wl - wl.mean()) ** 2)
+    if ss_tot < 1e-12:
+        return 1.0
+    slope, intercept = np.polyfit(px, wl, 1)
+    ss_res = np.sum((wl - (slope * px + intercept)) ** 2)
+    return 1.0 - ss_res / ss_tot
+
+
+def _intensity_similarity(a: float, b: float) -> float:
+    """Similarity 0-1. 1 = identical."""
+    return 1.0 - abs(a - b)
+
+
+def _width_similarity(wa: float, wb: float) -> float:
+    """Similarity of widths. 1 = same order."""
+    if wa <= 0 or wb <= 0:
+        return 0.5
+    return min(wa, wb) / max(wa, wb)
 
 
 def _wavelength_to_pixel(wavelengths: np.ndarray, wl: float) -> float:
@@ -46,6 +63,7 @@ def _match_peaks_to_reference(
     ref_peaks: list,
     measured_intensity: np.ndarray,
     ref_spectrum: np.ndarray,
+    source,
     tolerance_nm: float = 35.0,
     w_linearity: float = 0.60,
     w_intensity: float = 0.20,
@@ -69,9 +87,11 @@ def _match_peaks_to_reference(
         for p in measured_peaks
     ]
 
-    ref_effective = _merge_close_reference_peaks(ref_peaks)
+    ref_effective = get_reference_peaks(source, merge_threshold_nm=8.0) if source else ref_peaks
     meas_widths = peak_widths_nm(measured_intensity, wavelengths, peak_pixels)
-    ref_width_map = _reference_peak_widths_nm(ref_spectrum, wavelengths, ref_effective)
+    ref_width_map = reference_peak_widths_from_spectrum(
+        ref_spectrum, wavelengths, ref_effective
+    ) if ref_effective else {}
     ref_sorted = sorted(ref_effective, key=lambda r: r.wavelength)
     max_ref = max(r.intensity for r in ref_sorted) if ref_sorted else 1.0
     norm_ref_map = {
@@ -205,7 +225,7 @@ def render(
     dips = [e for e in extremums if e.is_dip]
     ref_peaks = get_reference_peaks(source)
     matches = _match_peaks_to_reference(
-        peaks, wavelengths, ref_peaks, measured_intensity, ref
+        peaks, wavelengths, ref_peaks, measured_intensity, ref, source
     )
 
     # Map pixel to screen x (data spans full width)

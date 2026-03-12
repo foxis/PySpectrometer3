@@ -1,8 +1,4 @@
-"""Generate sequential peak-match hypotheses.
-
-Single responsibility: produce valid matchings. No scoring.
-Constraint: peaks match sequentially (never criss-cross).
-"""
+"""Generate sequential peak-match hypotheses."""
 
 from __future__ import annotations
 
@@ -21,10 +17,7 @@ class Match:
 
 @dataclass
 class Hypothesis:
-    """A hypothesis: list of (measured_idx, reference_idx) matches.
-
-    Invariant: when ordered by measured_idx, reference_idx is non-decreasing.
-    """
+    """A hypothesis: list of (measured_idx, reference_idx) matches."""
 
     matches: list[Match]
 
@@ -48,13 +41,8 @@ def generate_sequential_hypotheses(
     tolerance_nm: float = 35.0,
     max_hypotheses: int = 200,
     initial_wavelengths: list | None = None,
-    peak_pixels: list[int] | None = None,
 ) -> list[Hypothesis]:
-    """Generate sequential match hypotheses.
-
-    Uses initial_wavelengths (pixel->wl) when provided, else linear guess.
-    Sequential only.
-    """
+    """Generate sequential match hypotheses."""
     import numpy as np
 
     n_meas = len(measured)
@@ -109,7 +97,6 @@ def generate_sequential_hypotheses(
 
     recurse(0, 0, [])
 
-    # Deduplicate
     seen: set[tuple[tuple[int, int], ...]] = set()
     unique: list[Hypothesis] = []
     for h in hypotheses:

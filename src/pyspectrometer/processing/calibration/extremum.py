@@ -1,10 +1,9 @@
-"""Extremum detection: re-export from pyspectrometer, add reference helpers."""
+"""Extremum detection: re-export from peak_detection, add reference helpers."""
 
 from __future__ import annotations
 
-from pyspectrometer.core.spectrum import Extremum
-from pyspectrometer.processing.peak_detection import extract_extremums
-from pyspectrometer.processing.peak_detection import DEFAULT_MAX_EXTREMUMS
+from ..peak_detection import DEFAULT_MAX_EXTREMUMS, extract_extremums
+from ...core.spectrum import Extremum
 
 DEFAULT_MAX_COUNT = DEFAULT_MAX_EXTREMUMS
 
@@ -15,8 +14,8 @@ def extract(
     *,
     position_px=None,
     max_count=DEFAULT_MAX_COUNT,
-):
-    """Thin wrapper: use pyspectrometer extract_extremums."""
+) -> list[Extremum]:
+    """Thin wrapper: use peak_detection extract_extremums."""
     return extract_extremums(
         intensity,
         positions,
