@@ -40,6 +40,7 @@ from pyspectrometer.processing.calibration.hough_matching import (
     calibrate_hough,
     calibrate_peak_dip_grid,
     calibrate_ransac,
+    calibrate_spectrum_anchors,
     count_aligned_features,
     find_best_linear_spd,
 )
@@ -177,112 +178,54 @@ def main() -> int:
         meas_px = np.array([p for p, _ in result.cal_points], dtype=np.float64) if result else np.array([])
         ref_wl = wl_ref_grid
     elif args.mode == "peakdip":
-        # SPD correlation (full-spectrum) with tight bounds; then refine with peak/dip
+        # Match two raw spectra directly — no reference peak wavelengths required.
+        # The algorithm works with any reference spectrum.
         wl_ref_grid = np.linspace(380, 750, 500)
         ref_spd_full = get_reference_spectrum(src, wl_ref_grid)
-        ref_extremums = extract(
-            ref_spd_full,
-            wl_ref_grid,
-            position_px=None,
-            max_count=25,
-        )
+
+        # ALL detected measured features (no top-k cut)
         meas_px = np.array([e.position_px for e in meas if e.position_px is not None], dtype=np.float64)
         meas_int = np.array([abs(e.height) for e in meas if e.position_px is not None], dtype=np.float64)
         meas_is_dip = np.array([e.is_dip for e in meas if e.position_px is not None], dtype=bool)
+
+        # ALL reference features extracted from the actual SPD shape (not from known lines)
+        ref_extremums = extract(ref_spd_full, wl_ref_grid, position_px=None, max_count=40)
         ref_wl = np.array([e.position for e in ref_extremums], dtype=np.float64)
         ref_int = np.array([abs(e.height) for e in ref_extremums], dtype=np.float64)
         ref_is_dip = np.array([e.is_dip for e in ref_extremums], dtype=bool)
 
-        result = None
-        spd_result = find_best_linear_spd(
-            measured,
-            wl_ref_grid,
-            ref_spd_full,
+        print(f"  Measured features: {len(meas_px)} | Ref features (SPD): {len(ref_wl)}")
+
+        # 2-anchor RANSAC: no grid, no known emission wavelengths.
+        # Tries all pairs of prominent same-type features as linear anchors,
+        # then scores the mapping against ALL detected peaks and dips.
+        result = calibrate_spectrum_anchors(
             n,
-            wl_min=380.0,
-            wl_max=750.0,
-            n_display_points=30,
-            num_slopes=200,
-            num_intercepts=200,
-            min_slope=0.24,
-            max_slope=0.30,
-            min_intercept=382.0,
-            max_intercept=408.0,
+            meas_pixels=meas_px,
+            meas_is_dip=meas_is_dip,
+            meas_intensities=meas_int,
+            ref_feat_wl=ref_wl,
+            ref_feat_is_dip=ref_is_dip,
+            ref_feat_intensities=ref_int,
+            min_slope=0.15,
+            max_slope=0.70,
+            min_intercept=200.0,
+            max_intercept=500.0,
+            sigma_nm=10.0,
+            top_k=14,
         )
-        peakdip_result = calibrate_peak_dip_grid(
-            meas_px, meas_is_dip, meas_int, ref_wl, ref_is_dip, ref_int, n,
-            num_slopes=120,
-            num_intercepts=120,
-            min_slope=0.24,
-            max_slope=0.30,
-            min_intercept=382.0,
-            max_intercept=408.0,
-        )
-        csv_result = None
-        if wl_csv is not None and n >= 2 and wl_csv[0] > 350 and wl_csv[n - 1] < 800:
-            # Use actual per-pixel CSV calibration, not linearised
-            sc_csv = alignment_score_from_wavelengths(
-                meas_px, meas_is_dip, meas_int, ref_wl, ref_is_dip, ref_int,
-                wl_csv,
-                delta_scale_nm=15.0,
-                delta_exponent=2.0,
-            )
-            m_csv = (wl_csv[n - 1] - wl_csv[0]) / (n - 1)
-            c_csv = float(wl_csv[0])
-            csv_result = PeakDipResult(
-                slope=m_csv,
-                intercept=c_csv,
-                score=sc_csv,
-                n_peak_match=0,
-                n_dip_match=0,
-                n_mismatch=0,
-                score_grid=np.array([[sc_csv]]),
-                m_bins=np.array([m_csv]),
-                c_bins=np.array([c_csv]),
-                cal_points=[(0, float(wl_csv[0])), (n - 1, float(wl_csv[n - 1]))],
-                wavelengths=wl_csv,
-            )
-        candidates: list[tuple[float, str, PeakDipResult]] = []
-        if peakdip_result is not None:
-            sc_pd = alignment_score_from_wavelengths(
-                meas_px, meas_is_dip, meas_int, ref_wl, ref_is_dip, ref_int,
-                peakdip_result.wavelengths,
-                delta_scale_nm=15.0,
-                delta_exponent=2.0,
-            )
-            candidates.append((sc_pd, "peakdip", peakdip_result))
-        if spd_result is not None:
-            sc_spd = alignment_score_from_wavelengths(
-                meas_px, meas_is_dip, meas_int, ref_wl, ref_is_dip, ref_int,
-                spd_result.wavelengths,
-                delta_scale_nm=15.0,
-                delta_exponent=2.0,
-            )
-            px_cp = np.array([p for p, _ in spd_result.cal_points], dtype=np.float64)
-            wl_cp = np.array([w for _, w in spd_result.cal_points], dtype=np.float64)
-            coeffs = np.polyfit(px_cp, wl_cp, 1)
-            spd_as_pd = PeakDipResult(
-                slope=float(coeffs[0]),
-                intercept=float(coeffs[1]),
-                score=float(sc_spd),
-                n_peak_match=len(spd_result.cal_points),
-                n_dip_match=0,
-                n_mismatch=0,
-                score_grid=spd_result.score_grid,
-                m_bins=spd_result.m_bins,
-                c_bins=spd_result.c_bins,
-                cal_points=spd_result.cal_points,
-                wavelengths=spd_result.wavelengths,
-            )
-            candidates.append((sc_spd, "SPD", spd_as_pd))
-        if csv_result is not None:
-            candidates.append((csv_result.score, "CSV", csv_result))
-        if candidates:
-            best_sc, src_name, result = max(candidates, key=lambda x: x[0])
-            print(f"  Best: {src_name} (score={best_sc:.1f})")
+
         if result is None:
             print("Calibration failed")
             return 1
+
+        print(f"  slope={result.slope:.5f}  intercept={result.intercept:.2f}  "
+              f"peaks={result.n_peak_match}  dips={result.n_dip_match}  miss={result.n_mismatch}")
+        if wl_csv is not None:
+            m_gt = (wl_csv[n - 1] - wl_csv[0]) / (n - 1)
+            c_gt = float(wl_csv[0])
+            print(f"  GT   slope={m_gt:.5f}  intercept={c_gt:.2f}  "
+                  f"dm={result.slope - m_gt:+.5f}  dc={result.intercept - c_gt:+.2f}")
     elif args.mode == "ransac":
         meas_px = np.array([e.position_px for e in meas if e.position_px is not None], dtype=np.float64)
         meas_int = np.array([abs(e.height) for e in meas if e.position_px is not None], dtype=np.float64)
@@ -360,9 +303,9 @@ def main() -> int:
         meas_px_pd = np.array([e.position_px for e in meas if e.position_px is not None], dtype=np.float64)
         meas_is_dip = np.array([e.is_dip for e in meas if e.position_px is not None], dtype=bool)
         meas_int = np.array([abs(e.height) for e in meas if e.position_px is not None], dtype=np.float64)
-        ref_wl_pd = np.array([e.position for e in ref_extremums], dtype=np.float64)
-        ref_is_dip = np.array([e.is_dip for e in ref_extremums], dtype=bool)
-        ref_int = np.array([abs(e.height) for e in ref_extremums], dtype=np.float64)
+        ref_wl_pd = np.array([e.position for e in ref], dtype=np.float64)
+        ref_is_dip = np.array([e.is_dip for e in ref], dtype=bool)
+        ref_int = np.array([abs(e.height) for e in ref], dtype=np.float64)
         if len(meas_px_pd) > 0 and len(ref_wl_pd) > 0:
             score_linear = alignment_score_from_wavelengths(
                 meas_px_pd, meas_is_dip, meas_int, ref_wl_pd, ref_is_dip, ref_int, wl_linear,
@@ -530,6 +473,11 @@ def main() -> int:
         print(f"  Correlation: r={result.correlation:.3f}")
     elif args.mode == "peakdip" and isinstance(result, PeakDipResult):
         print(f"  Peak/dip: score={result.score:.1f} (+{result.n_peak_match} peaks +{result.n_dip_match} dips -{result.n_mismatch} mismatch)")
+        print(f"  slope={result.slope:.4f} nm/px  intercept={result.intercept:.2f} nm")
+        if wl_csv is not None:
+            m_gt = (wl_csv[n - 1] - wl_csv[0]) / (n - 1)
+            c_gt = float(wl_csv[0])
+            print(f"  GT:    slope={m_gt:.4f} nm/px  intercept={c_gt:.2f} nm  (algo err: dm={result.slope-m_gt:+.4f}  dc={result.intercept-c_gt:+.2f})")
         print(f"  Linear: {aligned_linear} aligned, Cauchy: {aligned_cauchy} aligned")
     elif args.mode == "ransac" and isinstance(result, RansacResult):
         print(f"  RANSAC: {result.n_inliers} inliers, {len(result.cal_points)} cal points")
