@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 import numpy as np
@@ -25,13 +26,12 @@ class Triplet:
     descriptor: np.ndarray
 
 
-def build(extremums: list[Extremum]) -> list[Triplet]:
-    """Build triplets: left=immediate left, right=each to the right."""
-    triplets: list[Triplet] = []
+def generate(extremums: list[Extremum]) -> Iterator[Triplet]:
+    """Yield proper triplets: left=immediate left, right=each to the right, center in [0.30, 0.70]."""
     n = len(extremums)
     eps = 1e-9
 
-    def add(left_idx: int, c: int, right_idx: int) -> None:
+    def add(left_idx: int, c: int, right_idx: int) -> Triplet | None:
         left = extremums[left_idx]
         center = extremums[c]
         right = extremums[right_idx]
@@ -45,22 +45,32 @@ def build(extremums: list[Extremum]) -> list[Triplet]:
         a_w_ratio = left.width / w
         b_w_ratio = right.width / w
         if not (0.30 <= rel_pos <= 0.70):
-            return
+            return None
         desc = np.array(
             [center.height, center.width, a_h_ratio, b_h_ratio, a_w_ratio, b_w_ratio, rel_pos],
             dtype=np.float64,
         )
-        triplets.append(Triplet(center_idx=c, left_idx=left_idx, right_idx=right_idx, descriptor=desc))
+        return Triplet(center_idx=c, left_idx=left_idx, right_idx=right_idx, descriptor=desc)
 
     if n >= 2:
-        add(0, 0, 1)
+        t = add(0, 0, 1)
+        if t is not None:
+            yield t
     for c in range(1, n - 1):
         left_idx = c - 1
         for right_idx in range(c + 1, n):
-            add(left_idx, c, right_idx)
+            t = add(left_idx, c, right_idx)
+            if t is not None:
+                yield t
     if n >= 2:
-        add(n - 2, n - 1, n - 1)
-    return triplets
+        t = add(n - 2, n - 1, n - 1)
+        if t is not None:
+            yield t
+
+
+def build(extremums: list[Extremum]) -> list[Triplet]:
+    """Build triplets: left=immediate left, right=each to the right."""
+    return list(generate(extremums))
 
 
 def score(
