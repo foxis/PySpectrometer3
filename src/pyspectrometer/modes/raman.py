@@ -58,7 +58,7 @@ class RamanMode(BaseMode):
             ButtonDefinition("Set Ref", "set_reference", row=1),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=1),
             ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=1),
-            ButtonDefinition("Black", "set_dark", row=1),
+            ButtonDefinition("Black", "set_dark", is_toggle=True, row=1),
             ButtonDefinition("Peak", "capture_peak", is_toggle=True, row=1),
             ButtonDefinition("Peaks", "show_peaks", is_toggle=True, row=2),
             ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=2),
@@ -111,7 +111,13 @@ class RamanMode(BaseMode):
         print("[RAMAN] Reference spectrum set")
 
     def _on_set_dark(self, ctx: ModeContext) -> None:
-        """Set dark reference from raw intensity (pre-correction)."""
+        """Toggle dark reference: set if unset, clear if already set."""
+        if self.raman_state.dark_spectrum is not None:
+            self.raman_state.dark_spectrum = None
+            ctx.display.set_button_active("set_dark", False)
+            print("[RAMAN] Dark reference cleared")
+            return
+
         raw = (
             ctx.last_raw_intensity
             if ctx.last_raw_intensity is not None
@@ -121,6 +127,7 @@ class RamanMode(BaseMode):
             print("[RAMAN] No spectrum data available")
             return
         self.raman_state.dark_spectrum = raw.copy()
+        ctx.display.set_button_active("set_dark", True)
         print("[RAMAN] Dark reference set")
 
     def _on_toggle_averaging(self, ctx: ModeContext) -> None:

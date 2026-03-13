@@ -48,8 +48,8 @@ def inverse_cauchy(
     d = np.diff(full_wl)
     if not (np.all(d > 0) or np.all(d < 0)):
         return _fallback_interp(px, wl, n_pixels)
-    # Reject Cauchy if extrapolation is nonsensical (e.g. pixel 0 → 70 nm)
-    if full_wl[0] < 350 or full_wl[-1] > 800 or full_wl[0] > full_wl[-1]:
+    # Reject Cauchy if extrapolation is nonsensical (e.g. pixel 0 → 70 nm or > 1000 nm)
+    if full_wl[0] < 200 or full_wl[-1] > 1100 or full_wl[0] > full_wl[-1]:
         return _linear_extrap(px, wl, n_pixels)
 
     return full_wl

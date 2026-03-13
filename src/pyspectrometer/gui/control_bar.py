@@ -128,6 +128,9 @@ class ControlBar:
 
         for btn_def in buttons:
             bar = self._row1 if btn_def.row == 1 else self._row2
+            if btn_def.action_name.startswith("__gap__"):
+                bar.add_separator(width=12)
+                continue
             if btn_def.action_name.startswith("__spacer"):
                 left_width = bar._next_x - bar.x
                 spacer_idx = next(i for i, b in enumerate(buttons) if b is btn_def)

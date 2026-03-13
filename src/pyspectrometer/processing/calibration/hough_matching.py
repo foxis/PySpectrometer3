@@ -89,6 +89,52 @@ def alignment_score_from_wavelengths(
     return total
 
 
+def dot_score(
+    measured: np.ndarray,
+    wl_arr: np.ndarray,
+    ref_wl: np.ndarray,
+    ref_spd: np.ndarray,
+) -> float:
+    """Pearson correlation between measured and reference SPD in their overlap region.
+
+    Only evaluates where the proposed sensor wavelength range intersects the
+    reference grid — no zero-padding artifacts at the edges.  The coverage
+    term penalises candidates whose sensor span is much wider than the overlap,
+    i.e. it rewards physically plausible calibrations.
+
+    Defined as  pearson(measured_resampled, ref_in_range) × coverage²
+    where coverage = overlap_nm / sensor_span_nm.
+    """
+    in_range = (ref_wl >= wl_arr[0]) & (ref_wl <= wl_arr[-1])
+    if not in_range.any():
+        return -1e9
+
+    ref_valid = ref_spd[in_range]
+    meas_at_ref = np.interp(ref_wl[in_range], wl_arr, measured)
+
+    meas_max = float(meas_at_ref.max())
+    ref_max = float(ref_valid.max())
+    if meas_max <= 0.0 or ref_max <= 0.0:
+        return -1e9
+
+    meas_c = meas_at_ref / meas_max - (meas_at_ref / meas_max).mean()
+    ref_c = ref_valid / ref_max - (ref_valid / ref_max).mean()
+
+    denom = float(np.sqrt(np.dot(meas_c, meas_c) * np.dot(ref_c, ref_c)))
+    if denom <= 0.0:
+        return -1e9
+
+    pearson = float(np.dot(meas_c, ref_c) / denom)
+
+    overlap_nm = float(min(wl_arr[-1], ref_wl[-1]) - max(wl_arr[0], ref_wl[0]))
+    meas_span_nm = float(wl_arr[-1] - wl_arr[0])
+    coverage = max(0.0, overlap_nm / meas_span_nm) if meas_span_nm > 0 else 0.0
+    if coverage < 0.25:
+        return -1e9
+
+    return pearson * (coverage * coverage)
+
+
 def _best_match_score(
     meas_px: np.ndarray,
     meas_is_dip: np.ndarray,
@@ -186,6 +232,17 @@ def _best_match_score(
 
     alpha = 0.7
     per_ref = ref_feat_h * (best_match + best_coverage + alpha * structure - (1.0 + alpha))
+
+    # Reference features outside the proposed calibration range cannot be detected
+    # by the sensor — do not penalise them.  Without this mask a stretched
+    # (over-wide) calibration wins because it "covers" more reference features
+    # even though the matches are wrong.
+    wl_lo, wl_hi = float(wl_arr[0]), float(wl_arr[-1])
+    if wl_lo > wl_hi:
+        wl_lo, wl_hi = wl_hi, wl_lo
+    out_of_range = (ref_feat_wl < wl_lo) | (ref_feat_wl > wl_hi)
+    per_ref[out_of_range] = 0.0
+
     return float(per_ref.sum())
 
 
@@ -393,6 +450,50 @@ def calibrate_spectrum_anchors(
         cal_points=cal_points,
         wavelengths=wavelengths,
     )
+
+
+def compute_score_grid(
+    n_pixels: int,
+    *,
+    meas_pixels: np.ndarray,
+    meas_is_dip: np.ndarray,
+    meas_intensities: np.ndarray,
+    ref_feat_wl: np.ndarray,
+    ref_feat_is_dip: np.ndarray,
+    ref_feat_intensities: np.ndarray,
+    min_slope: float = 0.15,
+    max_slope: float = 0.70,
+    min_intercept: float = 200.0,
+    max_intercept: float = 500.0,
+    sigma_nm: float = 10.0,
+    n_m: int = 60,
+    n_c: int = 60,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute 2D score grid over (slope, intercept) space for visualisation.
+
+    Returns (score_grid, m_bins, c_bins) where score_grid has shape (n_m, n_c).
+    """
+    px = np.asarray(meas_pixels, dtype=np.float64).ravel()
+    md = np.asarray(meas_is_dip, dtype=bool).ravel()
+    mi = np.asarray(meas_intensities, dtype=np.float64).ravel()
+    rw = np.asarray(ref_feat_wl, dtype=np.float64).ravel()
+    rd = np.asarray(ref_feat_is_dip, dtype=bool).ravel()
+    ri = np.asarray(ref_feat_intensities, dtype=np.float64).ravel()
+
+    mi_n = mi / float(mi.max()) if mi.max() > 0 else mi.copy()
+    ri_n = ri / float(ri.max()) if ri.max() > 0 else ri.copy()
+
+    m_bins = np.linspace(min_slope, max_slope, n_m)
+    c_bins = np.linspace(min_intercept, max_intercept, n_c)
+    px_arr = np.arange(n_pixels, dtype=np.float64)
+    grid = np.empty((n_m, n_c), dtype=np.float64)
+
+    for im, m in enumerate(m_bins):
+        for ic, c in enumerate(c_bins):
+            wl_a = m * px_arr + c
+            grid[im, ic] = _best_match_score(px, md, mi_n, rw, rd, ri_n, wl_a, sigma_nm, 0.3)
+
+    return grid, m_bins, c_bins
 
 
 def count_aligned_features(

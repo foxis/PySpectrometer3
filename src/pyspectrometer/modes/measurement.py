@@ -96,28 +96,35 @@ class MeasurementMode(BaseMode):
         ctx.display.set_button_active("toggle_averaging", False)
 
     def _on_set_dark(self, ctx: ModeContext) -> None:
-        """Set dark reference from raw intensity (pre-correction)."""
-        raw = (
-            ctx.last_raw_intensity
-            if ctx.last_raw_intensity is not None
-            else (ctx.last_data.intensity if ctx.last_data is not None else None)
-        )
+        """Toggle dark reference: set if unset, clear if already set."""
+        if self.meas_state.dark_spectrum is not None:
+            self.meas_state.dark_spectrum = None
+            self.meas_state.subtract_dark = True
+            ctx.display.set_button_active("set_dark", False)
+            print("[DARK] Dark reference cleared")
+            return
+
+        raw = _get_raw(ctx)
         if raw is None:
             print("[DARK] No spectrum data available")
             return
         self.set_dark_reference(raw)
+        ctx.display.set_button_active("set_dark", True)
 
     def _on_set_white(self, ctx: ModeContext) -> None:
-        """Set white reference from raw intensity (pre-correction)."""
-        raw = (
-            ctx.last_raw_intensity
-            if ctx.last_raw_intensity is not None
-            else (ctx.last_data.intensity if ctx.last_data is not None else None)
-        )
+        """Toggle white reference: set if unset, clear if already set."""
+        if self.meas_state.white_spectrum is not None:
+            self.meas_state.white_spectrum = None
+            ctx.display.set_button_active("set_white", False)
+            print("[WHITE] White reference cleared")
+            return
+
+        raw = _get_raw(ctx)
         if raw is None:
             print("[WHITE] No spectrum data available")
             return
         self.set_white_reference(raw)
+        ctx.display.set_button_active("set_white", True)
 
     def _on_clear_refs(self, ctx: ModeContext) -> None:
         """Clear all references."""
@@ -211,8 +218,8 @@ class MeasurementMode(BaseMode):
             ButtonDefinition("Peak", "capture_peak", is_toggle=True, shortcut="h", row=1),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=1),
             ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=1),
-            ButtonDefinition("Dark", "set_dark", row=1),
-            ButtonDefinition("White", "set_white", row=1),
+            ButtonDefinition("Dark", "set_dark", is_toggle=True, row=1),
+            ButtonDefinition("White", "set_white", is_toggle=True, row=1),
             ButtonDefinition("ClrRef", "clear_refs", row=1),
             # Row 2: Display and control
             ButtonDefinition("ShowRef", "show_reference", is_toggle=True, row=2),
@@ -354,3 +361,12 @@ class MeasurementMode(BaseMode):
             status[self.state.integration_mode.capitalize()] = str(self.state.accumulated_frames)
 
         return status
+
+
+def _get_raw(ctx: ModeContext) -> np.ndarray | None:
+    """Get the most recent raw spectrum intensity."""
+    if ctx.last_raw_intensity is not None:
+        return ctx.last_raw_intensity
+    if ctx.last_data is not None:
+        return ctx.last_data.intensity
+    return None

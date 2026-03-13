@@ -249,7 +249,7 @@ class CalibrationMode(BaseMode):
         wl = ctx.last_data.wavelengths
         if self.cal_state.sensitivity_correction_enabled and self._sensitivity is not None:
             measured = self._sensitivity.apply(measured, wl)
-        ref_wl = np.linspace(380.0, 750.0, 100)
+        ref_wl = np.linspace(380.0, 750.0, 500)
         ref_int = get_reference_spectrum(self.cal_state.current_source, ref_wl)
         cal_points = run_calibration(measured, ref_wl, ref_int)
         if len(cal_points) >= 4:
@@ -473,7 +473,7 @@ class CalibrationMode(BaseMode):
         """Perform automatic calibration. Uses triplet matching + correlation fallback."""
         if self.cal_state.sensitivity_correction_enabled and self._sensitivity is not None:
             measured_intensity = self._sensitivity.apply(measured_intensity, wavelengths)
-        ref_wl = np.linspace(380.0, 750.0, 100)
+        ref_wl = np.linspace(380.0, 750.0, 500)
         ref_int = get_reference_spectrum(self.cal_state.current_source, ref_wl)
         return run_calibration(measured_intensity, ref_wl, ref_int)
 

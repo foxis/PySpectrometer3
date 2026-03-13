@@ -20,7 +20,7 @@ def calibrate(
     reference_wl: np.ndarray,
     reference_intensity: np.ndarray,
     *,
-    max_extremums: int = 15,
+    max_extremums: int = 30,
 ) -> list[tuple[int, float]]:
     """Calibrate pixels to wavelengths from measured and reference spectra.
 

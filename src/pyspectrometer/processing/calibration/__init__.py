@@ -14,14 +14,18 @@ from .hough_matching import (
     PeakDipResult,
     alignment_score_from_wavelengths,
     calibrate_spectrum_anchors,
+    compute_score_grid,
     count_aligned_features,
+    dot_score,
 )
 
 __all__ = [
     "PeakDipResult",
     "calibrate_spectrum_anchors",
+    "compute_score_grid",
     "alignment_score_from_wavelengths",
     "count_aligned_features",
+    "dot_score",
     "extract",
     "from_known_lines",
     "get_reference_peaks",

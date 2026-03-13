@@ -2,7 +2,7 @@
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import cv2
@@ -72,6 +72,10 @@ class CursorState:
 
 # Max pixel movement to treat as click (not drag)
 _CLICK_DRAG_THRESHOLD = 5
+# Screen-pixel radius to grab an existing marker line for drag/remove
+_MARKER_GRAB_RADIUS = 10
+# Screen-pixel radius within which snap-to-peak activates while dragging
+_MARKER_SNAP_RADIUS = 15
 
 
 @dataclass
@@ -89,6 +93,9 @@ class DisplayState:
     # Click-to-include: single (center_index, half_width) in data coordinates, or None
     peak_include_region: tuple[int, int] | None = None
     peaks_visible: bool = True
+    # Vertical marker lines: list of data indices (max 10)
+    marker_lines: list[int] = field(default_factory=list)
+    snap_to_peaks: bool = False
 
     def __post_init__(self):
         if self.cursor is None:
@@ -168,6 +175,14 @@ class DisplayManager:
         # Autolevel non-blocking overlay
         self._autolevel_overlay: np.ndarray | None = None
         self._on_autolevel_click: Callable[[], None] | None = None
+        # Full graph area override (replaces spectrum rendering when set)
+        self._graph_override: np.ndarray | None = None
+        # Preview strip override (replaces camera crop when set)
+        self._preview_override: np.ndarray | None = None
+        # Prominent info text lines rendered on graph (e.g. XYZ/LAB values)
+        self._graph_info: list[str] = []
+        # Optional callback for left-clicks in the graph area: fn(x, rel_y)
+        self._on_graph_click: Callable[[int, int], None] | None = None
 
         self._font = cv2.FONT_HERSHEY_SIMPLEX
         self._graph_font = config.display.graph_label_font
@@ -243,6 +258,13 @@ class DisplayManager:
         self._click_for_region = False
         self._click_down_x = 0
         self._click_down_y = 0
+
+        # Marker line interaction state
+        self._dragging_marker_idx: int | None = None
+        self._drag_is_existing: bool = False
+        self._drag_start_x: int = 0
+        # Last known spectrum peaks for snap-to-peak
+        self._last_peaks: list = []
 
     def set_frame_dimensions(self, width: int, height: int) -> None:
         """Update dimensions (e.g. after camera reports actual size).
@@ -351,6 +373,8 @@ class DisplayManager:
                     self._zoom_vertical.handle_mouse_move(x, y)
                 if self._zoom_horizontal.visible:
                     self._zoom_horizontal.handle_mouse_move(x, y)
+                if self._dragging_marker_idx is not None:
+                    self._update_marker_drag(x, width)
                 if self._panning:
                     x_zoomed = self._last_data_width > 0 and (
                         self._viewport.x_end - self._viewport.x_start < self._last_data_width - 1
@@ -387,10 +411,14 @@ class DisplayManager:
             elif self._on_autolevel_click is not None:
                 self._on_autolevel_click()
             elif in_graph:
-                if self._is_zoomed():
+                if self._on_graph_click is not None:
+                    self._on_graph_click(x, graph_rel_y)
+                elif self._is_zoomed():
                     self._panning = True
                     self._pan_last_x = x
                     self._pan_last_y = graph_rel_y
+                elif self.mode == "waterfall":
+                    self._start_marker_interaction(x, width)
                 elif self.state.spectrum_bars_visible and self._last_data_width > 0:
                     data_x = self._viewport.screen_x_to_data(x, width)
                     idx = int(round(data_x))
@@ -411,6 +439,7 @@ class DisplayManager:
                     idx = max(0, min(self._last_data_width - 1, idx))
                     half_width = self.config.processing.peak_include_region_half_width
                     self.state.peak_include_region = (idx, half_width)
+            self._finalize_marker_drag(x)
             self._click_for_region = False
             self._mouse_down = False
             self._slider_panel.handle_mouse_up()
@@ -425,6 +454,105 @@ class DisplayManager:
         x_span = self._viewport.x_end - self._viewport.x_start
         y_span = self._viewport.y_max - self._viewport.y_min
         return x_span < self._last_data_width - 1 or y_span < 0.99
+
+    # ------------------------------------------------------------------ markers
+
+    def _find_nearby_marker(self, screen_x: int, width: int) -> int | None:
+        """Return marker_lines list index of the closest marker within grab radius, or None."""
+        best_idx = None
+        best_dist = _MARKER_GRAB_RADIUS + 1
+        for i, data_idx in enumerate(self.state.marker_lines):
+            sx = self._viewport.data_x_to_screen(float(data_idx), width)
+            dist = abs(sx - screen_x)
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = i
+        return best_idx
+
+    def _resolve_marker_position(self, data_x: float, screen_x: int, width: int) -> int:
+        """Convert data x float to marker data index, snapping to nearest peak when enabled."""
+        n = max(1, self._last_data_width)
+        raw_idx = max(0, min(n - 1, int(round(data_x))))
+        if not self.state.snap_to_peaks or not self._last_peaks:
+            return raw_idx
+        best_idx = raw_idx
+        best_dist = _MARKER_SNAP_RADIUS + 1
+        for peak in self._last_peaks:
+            peak_sx = self._viewport.data_x_to_screen(float(peak.index), width)
+            dist = abs(peak_sx - screen_x)
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = peak.index
+        return best_idx
+
+    def _start_marker_interaction(self, screen_x: int, width: int) -> None:
+        """Begin marker add-or-drag interaction on mouse-down in waterfall area."""
+        existing = self._find_nearby_marker(screen_x, width)
+        if existing is not None:
+            self._dragging_marker_idx = existing
+            self._drag_is_existing = True
+        elif len(self.state.marker_lines) < 10:
+            data_x = self._viewport.screen_x_to_data(screen_x, width)
+            idx = self._resolve_marker_position(data_x, screen_x, width)
+            self.state.marker_lines.append(idx)
+            self._dragging_marker_idx = len(self.state.marker_lines) - 1
+            self._drag_is_existing = False
+        self._drag_start_x = screen_x
+
+    def _update_marker_drag(self, screen_x: int, width: int) -> None:
+        """Update position of the marker being dragged."""
+        if self._dragging_marker_idx is None:
+            return
+        data_x = self._viewport.screen_x_to_data(screen_x, width)
+        idx = self._resolve_marker_position(data_x, screen_x, width)
+        self.state.marker_lines[self._dragging_marker_idx] = idx
+
+    def _finalize_marker_drag(self, screen_x: int) -> None:
+        """On mouse-up: remove existing marker if it was only tapped (not dragged)."""
+        if self._dragging_marker_idx is None:
+            return
+        dx = abs(screen_x - self._drag_start_x)
+        if self._drag_is_existing and dx < _CLICK_DRAG_THRESHOLD:
+            self.state.marker_lines.pop(self._dragging_marker_idx)
+        self._dragging_marker_idx = None
+        self._drag_is_existing = False
+
+    def _render_marker_lines(
+        self,
+        frame: np.ndarray,
+        y_offset: int,
+        wavelengths: np.ndarray,
+    ) -> None:
+        """Render vertical marker lines with wavelength labels on the waterfall area."""
+        width = frame.shape[1]
+        height = frame.shape[0]
+        n = len(wavelengths)
+        font = self._graph_font
+        font_scale = self._graph_font_scale
+
+        for i, data_idx in enumerate(self.state.marker_lines):
+            if data_idx < 0 or data_idx >= n:
+                continue
+            sx = self._viewport.data_x_to_screen(float(data_idx), width)
+            if not (0 <= sx < width):
+                continue
+
+            is_dragging = self._dragging_marker_idx == i
+            color = (0, 200, 255) if is_dragging else (0, 255, 255)
+
+            cv2.line(frame, (sx, y_offset), (sx, height - 1), color, 1, cv2.LINE_AA)
+
+            label = f"{wavelengths[data_idx]:.0f}"
+            (tw, th), _ = cv2.getTextSize(label, font, font_scale, 1)
+            lx = max(0, min(sx + 2, width - tw - 2))
+            ly = y_offset + th + 4
+            cv2.putText(frame, label, (lx + 1, ly + 1), font, font_scale, (0, 0, 0), 2, cv2.LINE_AA)
+            cv2.putText(frame, label, (lx, ly), font, font_scale, color, 1, cv2.LINE_AA)
+
+    def toggle_snap_to_peaks(self) -> bool:
+        """Toggle peak snapping for marker line placement. Returns new state."""
+        self.state.snap_to_peaks = not self.state.snap_to_peaks
+        return self.state.snap_to_peaks
 
     def render(
         self,
@@ -456,6 +584,7 @@ class DisplayManager:
         graph_height = self.config.display.graph_height
         data_width = len(data.intensity)
         self._last_data_width = data_width
+        self._last_peaks = list(data.peaks)
 
         # Update selected bar status and validate index
         sel = self.state.selected_spectrum_index
@@ -472,40 +601,50 @@ class DisplayManager:
         self._viewport.init_if_needed(data_width)
         self._viewport.clamp_x(data_width)
 
-        graph = np.zeros([graph_height, width, 3], dtype=np.uint8)
-        graph.fill(255)
+        if self._graph_override is not None:
+            src = self._graph_override
+            if src.shape[0] != graph_height or src.shape[1] != width:
+                graph = cv2.resize(src, (width, graph_height))
+            else:
+                graph = src.copy()
+        else:
+            graph = np.zeros([graph_height, width, 3], dtype=np.uint8)
+            graph.fill(255)
 
-        graticule = None
-        if self._mode_instance is not None and hasattr(self._mode_instance, "get_graticule"):
-            graticule = self._mode_instance.get_graticule(data)
-        if graticule is None:
-            graticule = self.calibration.graticule
-        self._graticule.render_lines_on_graph(graph, graticule, self._viewport)
-        self._graticule.render_horizontal_lines(graph)
+            graticule = None
+            if self._mode_instance is not None and hasattr(self._mode_instance, "get_graticule"):
+                graticule = self._mode_instance.get_graticule(data)
+            if graticule is None:
+                graticule = self.calibration.graticule
+            self._graticule.render_lines_on_graph(graph, graticule, self._viewport)
+            self._graticule.render_horizontal_lines(graph)
 
-        self._render_reference_spectrum(graph, data)
-        self._render_spectrum(graph, data)
-        self._render_mode_overlay(graph)
-        self._render_sensitivity_overlay(graph)
-        spectrum_screen_y = self._build_spectrum_screen_y(data, graph_height, width)
-        if self.state.peaks_visible:
-            self._render_peaks(graph, data, spectrum_screen_y)
+            self._render_reference_spectrum(graph, data)
+            self._render_spectrum(graph, data)
+            self._render_mode_overlay(graph)
+            self._render_sensitivity_overlay(graph)
+            spectrum_screen_y = self._build_spectrum_screen_y(data, graph_height, width)
+            if self.state.peaks_visible:
+                self._render_peaks(graph, data, spectrum_screen_y)
 
-        # Labels drawn last so they stay visible; overlap-aware placement
-        peak_screen_x = [
-            self._viewport.data_x_to_screen(float(p.index), width)
-            for p in data.peaks
-            if self._viewport.x_start <= p.index <= self._viewport.x_end
-            and self._viewport.y_min <= p.intensity <= self._viewport.y_max
-        ]
-        self._graticule.render_labels_on_graph(
-            graph,
-            graticule,
-            self._viewport,
-            peak_screen_x=peak_screen_x,
-            spectrum_screen_y=spectrum_screen_y,
-        )
-        self._render_cursor(graph, data)
+            # Labels drawn last so they stay visible; overlap-aware placement
+            peak_screen_x = [
+                self._viewport.data_x_to_screen(float(p.index), width)
+                for p in data.peaks
+                if self._viewport.x_start <= p.index <= self._viewport.x_end
+                and self._viewport.y_min <= p.intensity <= self._viewport.y_max
+            ]
+            self._graticule.render_labels_on_graph(
+                graph,
+                graticule,
+                self._viewport,
+                peak_screen_x=peak_screen_x,
+                spectrum_screen_y=spectrum_screen_y,
+            )
+            self._render_cursor(graph, data)
+
+        if self._graph_info:
+            self._render_graph_info(graph)
 
         message_height = self.config.display.message_height
         preview_height = self.config.display.preview_height
@@ -523,15 +662,22 @@ class DisplayManager:
         messages = self._control_bar.render()
 
         # Handle preview mode
-        cropped = data.cropped_frame
-
-        # Scale camera crop to fit preview area, then apply horizontal viewport zoom
-        if cropped is not None:
-            if cropped.shape[1] != width or cropped.shape[0] != preview_height:
-                cropped = _scale_to_fit(cropped, width, preview_height)
-            cropped = self._apply_viewport_to_preview(cropped, width)
+        if self._preview_override is not None:
+            # Mode has supplied a custom strip (e.g. solid color, spectrum bar)
+            src = self._preview_override
+            if src.shape[1] != width or src.shape[0] != preview_height:
+                cropped = cv2.resize(src, (width, preview_height))
+            else:
+                cropped = src.copy()
         else:
-            cropped = np.zeros([preview_height, width, 3], dtype=np.uint8)
+            cropped = data.cropped_frame
+            # Scale camera crop to fit preview area, then apply horizontal viewport zoom
+            if cropped is not None:
+                if cropped.shape[1] != width or cropped.shape[0] != preview_height:
+                    cropped = _scale_to_fit(cropped, width, preview_height)
+                cropped = self._apply_viewport_to_preview(cropped, width)
+            else:
+                cropped = np.zeros([preview_height, width, 3], dtype=np.uint8)
 
         # Defensive: resize messages if control bar width differs (e.g. before sync took effect)
         if messages.shape[1] != width:
@@ -642,6 +788,10 @@ class DisplayManager:
                 viewport=self._viewport,
             )
             if waterfall_mode:
+                if self.state.marker_lines:
+                    self._render_marker_lines(
+                        waterfall_vertical, graticule_y_offset, data.wavelengths
+                    )
                 self._render_overlays(waterfall_vertical)
                 cv2.imshow(self.config.waterfall_title, waterfall_vertical)
             else:
@@ -651,6 +801,57 @@ class DisplayManager:
         else:
             self._render_overlays(spectrum_vertical)
             cv2.imshow(self.config.spectrograph_title, spectrum_vertical)
+
+    @property
+    def preview_mode(self) -> str:
+        """Current preview mode string (set by cycle_preview_mode or directly)."""
+        return self._preview_mode
+
+    @preview_mode.setter
+    def preview_mode(self, value: str) -> None:
+        self._preview_mode = value
+
+    def set_preview_override(self, img: np.ndarray | None) -> None:
+        """Replace the camera-crop preview strip with a custom image.
+
+        Pass None to restore the live camera crop.
+        """
+        self._preview_override = img
+
+    def set_graph_click_callback(
+        self, callback: Callable[[int, int], None] | None
+    ) -> None:
+        """Register a callback for left-clicks in the graph area.
+
+        Signature: fn(x, rel_y) where rel_y is relative to the graph area top.
+        Pass None to deregister.
+        """
+        self._on_graph_click = callback
+
+    def set_graph_override(self, img: np.ndarray | None) -> None:
+        """Set a full-graph replacement image (e.g. chromaticity diagram).
+
+        When set, spectrum rendering is skipped and this image is shown instead.
+        Pass None to restore normal spectrum rendering.
+        """
+        self._graph_override = img
+
+    def set_graph_info(self, lines: list[str] | None) -> None:
+        """Set prominent info text lines rendered in the graph area.
+
+        Shown as large overlay text (e.g. XYZ/LAB colorimetry values).
+        Pass None or [] to clear.
+        """
+        self._graph_info = list(lines) if lines else []
+
+    def _render_graph_info(self, graph: np.ndarray) -> None:
+        """Render prominent info text in the top-left of the graph."""
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        y = 22
+        for line in self._graph_info:
+            cv2.putText(graph, line, (8, y + 1), font, 0.55, (0, 0, 0), 2, cv2.LINE_AA)
+            cv2.putText(graph, line, (8, y), font, 0.55, (0, 220, 220), 1, cv2.LINE_AA)
+            y += 24
 
     def set_mode_overlay(
         self,

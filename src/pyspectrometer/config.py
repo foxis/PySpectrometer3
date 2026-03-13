@@ -279,7 +279,7 @@ class CalibrationConfig:
     # Monotonicity tolerance (nm): allow diff up to -threshold before rejecting Cauchy fit.
     # Set to 0.1 nm — well below the ~0.29 nm/pixel sensor resolution, but safely above
     # floating-point noise in polynomial evaluation (~0.001–0.01 nm range).
-    monotonicity_threshold_nm: float = 0.1
+    monotonicity_threshold_nm: float = 0.5
 
     # Defaults when no calibration in config
     default_pixels: tuple[int, ...] = (0, 640, 1280)

@@ -28,6 +28,7 @@ from pyspectrometer.processing.calibration.hough_matching import (
     PeakDipResult,
     alignment_score_from_wavelengths,
     calibrate_spectrum_anchors,
+    compute_score_grid,
     count_aligned_features,
 )
 
@@ -147,6 +148,9 @@ def main() -> int:
 
     print(f"  Measured features: {len(meas_px)} | Ref features (SPD): {len(ref_wl)}")
 
+    slope_lo, slope_hi = 0.15, 0.70
+    intercept_lo, intercept_hi = 200.0, 500.0
+
     result = calibrate_spectrum_anchors(
         n,
         meas_pixels=meas_px,
@@ -155,10 +159,10 @@ def main() -> int:
         ref_feat_wl=ref_wl,
         ref_feat_is_dip=ref_is_dip,
         ref_feat_intensities=ref_int,
-        min_slope=0.15,
-        max_slope=0.70,
-        min_intercept=200.0,
-        max_intercept=500.0,
+        min_slope=slope_lo,
+        max_slope=slope_hi,
+        min_intercept=intercept_lo,
+        max_intercept=intercept_hi,
         sigma_nm=10.0,
         top_k=18,
     )
@@ -169,11 +173,19 @@ def main() -> int:
 
     print(f"  slope={result.slope:.5f}  intercept={result.intercept:.2f}  "
           f"peaks={result.n_peak_match}  dips={result.n_dip_match}  miss={result.n_mismatch}")
+
+    gt_valid = False
     if wl_csv is not None:
         m_gt = (wl_csv[n - 1] - wl_csv[0]) / (n - 1)
         c_gt = float(wl_csv[0])
-        print(f"  GT   slope={m_gt:.5f}  intercept={c_gt:.2f}  "
-              f"dm={result.slope - m_gt:+.5f}  dc={result.intercept - c_gt:+.2f}")
+        # GT is only meaningful if slope/intercept are plausible (not just the reference axis)
+        gt_valid = (slope_lo <= m_gt <= slope_hi) and (intercept_lo <= c_gt <= intercept_hi)
+        if gt_valid:
+            print(f"  GT   slope={m_gt:.5f}  intercept={c_gt:.2f}  "
+                  f"dm={result.slope - m_gt:+.5f}  dc={result.intercept - c_gt:+.2f}")
+        else:
+            print(f"  GT   slope={m_gt:.5f}  intercept={c_gt:.2f}  "
+                  f"[outside search bounds — stored calibration is placeholder, not ground truth]")
 
     # Reference SPD for overlay (full range)
     wl_ref = np.linspace(350, 750, 500)
@@ -214,50 +226,69 @@ def main() -> int:
             delta_scale_nm=args.delta_scale, delta_exponent=2.0,
         )
 
+    print("  Computing score grid for visualisation…")
+    score_grid, m_bins, c_bins = compute_score_grid(
+        n,
+        meas_pixels=meas_px,
+        meas_is_dip=meas_is_dip,
+        meas_intensities=meas_int,
+        ref_feat_wl=ref_wl,
+        ref_feat_is_dip=ref_is_dip,
+        ref_feat_intensities=ref_int,
+        min_slope=slope_lo,
+        max_slope=slope_hi,
+        min_intercept=intercept_lo,
+        max_intercept=intercept_hi,
+        sigma_nm=10.0,
+    )
+
     fig, axes = plt.subplots(4, 1, figsize=(12, 14), constrained_layout=True)
 
     # Panel 1: Score grid
     ax0 = axes[0]
-    grid = result.score_grid.T
     im = ax0.imshow(
-        grid,
+        score_grid.T,
         origin="lower",
         aspect="auto",
-        extent=[
-            result.m_bins[0],
-            result.m_bins[-1],
-            result.c_bins[0],
-            result.c_bins[-1],
-        ],
+        extent=[m_bins[0], m_bins[-1], c_bins[0], c_bins[-1]],
         cmap="viridis",
     )
-    ax0.axvline(result.slope, color="red", linestyle="--", linewidth=1.5, label="peak")
-    ax0.axhline(result.intercept, color="red", linestyle="--", linewidth=1.5)
+    ax0.axvline(result.slope, color="red", linestyle="--", linewidth=1.5, label=f"found m={result.slope:.4f}")
+    ax0.axhline(result.intercept, color="red", linestyle="--", linewidth=1.5, label=f"found c={result.intercept:.1f}")
+    if gt_valid:
+        m_gt = (wl_csv[n - 1] - wl_csv[0]) / (n - 1)
+        c_gt = float(wl_csv[0])
+        ax0.axvline(m_gt, color="cyan", linestyle=":", linewidth=1.5, label=f"GT m={m_gt:.4f}")
+        ax0.axhline(c_gt, color="cyan", linestyle=":", linewidth=1.5, label=f"GT c={c_gt:.1f}")
     ax0.set_xlabel("Slope m (nm/pixel)")
     ax0.set_ylabel("Intercept c (nm)")
     ax0.set_title(
-        f"Peak/dip alignment: score={result.score:.1f} "
-        f"(+{result.n_peak_match} peaks +{result.n_dip_match} dips -{result.n_mismatch} mismatch)"
+        f"Peak/dip alignment score grid — best score={result.score:.2f} "
+        f"(+{result.n_peak_match} peaks +{result.n_dip_match} dips -{result.n_mismatch} miss)"
     )
     plt.colorbar(im, ax=ax0, label="Score")
-    ax0.legend()
+    ax0.legend(fontsize=8)
+
+    # Determine display wavelength range from the calibrated result
+    wl_lo_disp = max(300.0, float(result.wavelengths[0]) - 20)
+    wl_hi_disp = min(900.0, float(result.wavelengths[-1]) + 20)
 
     # Panel 2: Measured linearly transformed on reference
     ax1 = axes[1]
-    mask_ref = (wl_ref >= 350) & (wl_ref <= 750)
+    mask_ref = (wl_ref >= wl_lo_disp) & (wl_ref <= wl_hi_disp)
     ax1.plot(wl_ref[mask_ref], ref_spd[mask_ref], "orange", alpha=0.8, linewidth=2, label="Reference SPD")
-    mask_meas = (wl_linear >= 350) & (wl_linear <= 750)
+    mask_meas = (wl_linear >= wl_lo_disp) & (wl_linear <= wl_hi_disp)
     ax1.plot(wl_linear[mask_meas], meas_norm[mask_meas], "b-", alpha=0.7, linewidth=1.5, label="Measured (linear)")
-    for px, ref_wl in result.cal_points:
-        if 0 <= px < n:
-            wl = wl_linear[px]
-            if 350 <= wl <= 750:
-                y_meas = float(meas_norm[px])
-                y_ref = float(np.interp(ref_wl, wl_ref, ref_spd))
-                ax1.scatter([wl], [y_meas], c="blue", s=40, zorder=5, edgecolors="black")
-                ax1.scatter([ref_wl], [y_ref], c="orange", s=40, zorder=5, edgecolors="black", marker="s")
-                ax1.plot([wl, ref_wl], [y_meas, y_ref], "gray", alpha=0.5, linewidth=1)
-    ax1.set_xlim(350, 750)
+    for cp_px, cp_wl in result.cal_points:
+        if 0 <= cp_px < n:
+            wl_at_px = wl_linear[cp_px]
+            if wl_lo_disp <= wl_at_px <= wl_hi_disp:
+                y_meas = float(meas_norm[cp_px])
+                y_ref = float(np.interp(cp_wl, wl_ref, ref_spd))
+                ax1.scatter([wl_at_px], [y_meas], c="blue", s=40, zorder=5, edgecolors="black")
+                ax1.scatter([cp_wl], [y_ref], c="orange", s=40, zorder=5, edgecolors="black", marker="s")
+                ax1.plot([wl_at_px, cp_wl], [y_meas, y_ref], "gray", alpha=0.5, linewidth=1)
+    ax1.set_xlim(wl_lo_disp, wl_hi_disp)
     ax1.set_ylabel("Intensity")
     align_str = ""
     if score_linear is not None:
@@ -269,18 +300,18 @@ def main() -> int:
     # Panel 3: After Cauchy tuning
     ax2 = axes[2]
     ax2.plot(wl_ref[mask_ref], ref_spd[mask_ref], "orange", alpha=0.8, linewidth=2, label="Reference SPD")
-    mask_cauchy = (wl_cauchy >= 350) & (wl_cauchy <= 750)
+    mask_cauchy = (wl_cauchy >= wl_lo_disp) & (wl_cauchy <= wl_hi_disp)
     ax2.plot(wl_cauchy[mask_cauchy], meas_norm[mask_cauchy], "g-", alpha=0.7, linewidth=1.5, label="Measured (Cauchy)")
-    for px, ref_wl in result.cal_points:
-        if 0 <= px < n:
-            wl = wl_cauchy[px]
-            if 350 <= wl <= 750:
-                y_meas = float(meas_norm[px])
-                y_ref = float(np.interp(ref_wl, wl_ref, ref_spd))
-                ax2.scatter([wl], [y_meas], c="green", s=40, zorder=5, edgecolors="black")
-                ax2.scatter([ref_wl], [y_ref], c="orange", s=40, zorder=5, edgecolors="black", marker="s")
-                ax2.plot([wl, ref_wl], [y_meas, y_ref], "gray", alpha=0.5, linewidth=1)
-    ax2.set_xlim(350, 750)
+    for cp_px, cp_wl in result.cal_points:
+        if 0 <= cp_px < n:
+            wl_at_px = wl_cauchy[cp_px]
+            if wl_lo_disp <= wl_at_px <= wl_hi_disp:
+                y_meas = float(meas_norm[cp_px])
+                y_ref = float(np.interp(cp_wl, wl_ref, ref_spd))
+                ax2.scatter([wl_at_px], [y_meas], c="green", s=40, zorder=5, edgecolors="black")
+                ax2.scatter([cp_wl], [y_ref], c="orange", s=40, zorder=5, edgecolors="black", marker="s")
+                ax2.plot([wl_at_px, cp_wl], [y_meas, y_ref], "gray", alpha=0.5, linewidth=1)
+    ax2.set_xlim(wl_lo_disp, wl_hi_disp)
     ax2.set_xlabel("Wavelength (nm)")
     ax2.set_ylabel("Intensity")
     cauchy_title = f"After Cauchy tuning — {len(result.cal_points)} cal points"
@@ -297,6 +328,8 @@ def main() -> int:
     px_curve = np.arange(n, dtype=np.float64)
     ax3.plot(px_curve, wl_linear, "b-", alpha=0.7, linewidth=1.5, label="Linear")
     ax3.plot(px_curve, wl_cauchy, "g-", alpha=0.7, linewidth=1.5, label="Cauchy")
+    if gt_valid and wl_csv is not None:
+        ax3.plot(px_curve, wl_csv, "c--", alpha=0.6, linewidth=1.0, label="GT (stored)")
     ax3.scatter(
         [p for p, _ in result.cal_points],
         [w for _, w in result.cal_points],
@@ -325,7 +358,7 @@ def main() -> int:
     if isinstance(result, PeakDipResult):
         print(f"  Peak/dip: score={result.score:.1f} (+{result.n_peak_match} peaks +{result.n_dip_match} dips -{result.n_mismatch} mismatch)")
         print(f"  slope={result.slope:.4f} nm/px  intercept={result.intercept:.2f} nm")
-        if wl_csv is not None:
+        if gt_valid and wl_csv is not None:
             m_gt = (wl_csv[n - 1] - wl_csv[0]) / (n - 1)
             c_gt = float(wl_csv[0])
             print(f"  GT:    slope={m_gt:.4f} nm/px  intercept={c_gt:.2f} nm  (algo err: dm={result.slope-m_gt:+.4f}  dc={result.intercept-c_gt:+.2f})")

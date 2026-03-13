@@ -49,7 +49,7 @@ def fit_csv() -> int:
     if n < 10:
         print(f"[fit_csv] Need at least 10 pixels, got {n}")
         return 1
-    ref_wl = np.linspace(380.0, 750.0, 100)
+    ref_wl = np.linspace(380.0, 750.0, 500)
     ref_int = get_reference_spectrum(ReferenceSource.FL12, ref_wl)
     points = calibrate(measured, ref_wl, ref_int)
     if not points:

@@ -78,7 +78,7 @@ class Button:
         style = self.style
 
         effective_state = self.state
-        if self.is_toggle and self.is_active and self.state != ButtonState.DISABLED:
+        if self.is_active and self.state != ButtonState.DISABLED:
             effective_state = ButtonState.ACTIVE
 
         bg_colors = {

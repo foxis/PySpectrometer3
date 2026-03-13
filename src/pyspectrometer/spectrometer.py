@@ -297,9 +297,19 @@ class Spectrometer:
         dark_intensity: np.ndarray | None = None,
         white_intensity: np.ndarray | None = None,
         metadata: dict | None = None,
+        extra_spectra: list[tuple[str, np.ndarray, np.ndarray]] | None = None,
     ) -> None:
-        """Save spectrum to CSV and optionally waterfall image."""
+        """Save spectrum to CSV and optionally waterfall image.
+
+        extra_spectra: list of (column_name, wavelengths, spectrum) tuples, one
+        per swatch.  Each swatch spectrum is interpolated to the main wavelength
+        grid inside the exporter.
+        """
         csv_path = self._exporter.generate_filename("Spectrum")
+        extra_columns = (
+            [(name, (wl, sp)) for name, wl, sp in extra_spectra]
+            if extra_spectra else None
+        )
         self._exporter.export(
             data,
             csv_path,
@@ -307,6 +317,7 @@ class Spectrometer:
             dark_intensity=dark_intensity,
             white_intensity=white_intensity,
             metadata=metadata,
+            extra_columns=extra_columns,
         )
         time_display = time.strftime(self.config.export.time_format)
         self._display.state.save_message = f"Last Save: {time_display}"

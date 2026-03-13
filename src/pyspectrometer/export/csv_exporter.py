@@ -11,6 +11,22 @@ from ..core.spectrum import SpectrumData
 from .base import ExporterInterface
 
 
+def _align(arr: np.ndarray | None, n: int) -> np.ndarray | None:
+    """Pad or trim arr to length n; return None if arr is None."""
+    if arr is None:
+        return None
+    if len(arr) == n:
+        return arr
+    return arr[:n] if len(arr) > n else np.pad(arr, (0, n - len(arr)))
+
+
+def _interpolate_to(values: np.ndarray, src_wl: np.ndarray, tgt_wl: np.ndarray) -> np.ndarray:
+    """Resample values from src_wl grid to tgt_wl grid via linear interpolation."""
+    if len(src_wl) == len(tgt_wl) and np.allclose(src_wl, tgt_wl, atol=0.1):
+        return values
+    return np.interp(tgt_wl, src_wl, values)
+
+
 def _write_header_comments(f, metadata: dict[str, Any]) -> None:
     """Write metadata as # key: value comment lines. Extensible for any fields."""
     for key, value in metadata.items():
@@ -65,6 +81,7 @@ class CSVExporter(ExporterInterface):
         dark_intensity: "np.ndarray | None" = None,
         white_intensity: "np.ndarray | None" = None,
         metadata: "dict[str, Any] | None" = None,
+        extra_columns: "list[tuple[str, np.ndarray]] | None" = None,
     ) -> Path:
         """Export spectrum data to CSV file.
 
@@ -88,9 +105,10 @@ class CSVExporter(ExporterInterface):
         if reference_intensity is not None:
             return self._export_calibration(data, path, reference_intensity, metadata)
 
-        if dark_intensity is not None or white_intensity is not None:
+        if dark_intensity is not None or white_intensity is not None or extra_columns:
             return self._export_with_references(
-                data, path, dark_intensity, white_intensity, metadata
+                data, path, dark_intensity, white_intensity, metadata,
+                extra_columns=extra_columns or [],
             )
 
         return self._export_standard(data, path, metadata)
@@ -124,8 +142,14 @@ class CSVExporter(ExporterInterface):
         dark_intensity: np.ndarray | None,
         white_intensity: np.ndarray | None,
         metadata: dict[str, Any] | None,
+        extra_columns: list[tuple[str, np.ndarray]] | None = None,
     ) -> Path:
-        """Export with Measured, Dark, White/Reference SPD columns."""
+        """Export with Measured, Dark, White/Reference SPD columns, plus optional extras.
+
+        Extra columns are interpolated to the main wavelength grid so the CSV
+        rows are all the same length.  Column names are taken from the tuple's
+        first element.
+        """
         x_label = getattr(data, "x_axis_label", "Wavelength (nm)")
         col_name = "Wavenumber" if "cm" in x_label else "Wavelength"
         meta = metadata.copy() if metadata else {}
@@ -137,25 +161,35 @@ class CSVExporter(ExporterInterface):
             cols.append("Dark")
         if white_intensity is not None:
             cols.append("White")
+        extra_cols = extra_columns or []
+        for name, _ in extra_cols:
+            cols.append(name)
 
         n = len(data.intensity)
-        dark = dark_intensity if dark_intensity is not None else None
-        white = white_intensity if white_intensity is not None else None
-        if dark is not None and len(dark) != n:
-            dark = dark[:n] if len(dark) > n else np.pad(dark, (0, n - len(dark)))
-        if white is not None and len(white) != n:
-            white = white[:n] if len(white) > n else np.pad(white, (0, n - len(white)))
+        wl = data.wavelengths
+
+        dark  = _align(dark_intensity,  n)
+        white = _align(white_intensity, n)
+        extra_aligned = []
+        for col_name, col_val in extra_cols:
+            if isinstance(col_val, tuple):
+                src_wl_col, src_vals = col_val
+            else:
+                src_wl_col, src_vals = wl, col_val
+            extra_aligned.append((col_name, _interpolate_to(src_vals, src_wl_col, wl)))
 
         with open(path, "w", newline="\n", encoding="utf-8") as f:
             _write_header_comments(f, meta)
             writer = csv.writer(f, lineterminator="\n")
             writer.writerow(cols)
             for i in range(n):
-                row = [i, float(data.wavelengths[i]), float(data.intensity[i])]
-                if dark is not None:
+                row = [i, float(wl[i]), float(data.intensity[i])]
+                if dark  is not None:
                     row.append(float(dark[i]))
                 if white is not None:
                     row.append(float(white[i]))
+                for _, vals in extra_aligned:
+                    row.append(float(vals[i]))
                 writer.writerow(row)
 
         return path
