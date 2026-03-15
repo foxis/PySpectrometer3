@@ -26,8 +26,8 @@ from ..processing.auto_controls import (
 # 10-bit sensor max
 _SENSOR_MAX = 1023
 
-# Target band (must match auto_controls: 0.80–0.95)
-TARGET_LOW = 0.80
+# Target band (must match auto_controls: 0.90–0.95)
+TARGET_LOW = 0.90
 TARGET_HIGH = 0.95
 
 # Convergence: expect peak in band within this many steps
@@ -37,7 +37,7 @@ STABILITY_STEPS = 150
 
 # Allowed peak when "converged": no overexposure, no strong underexposure
 PEAK_MAX_OK = 0.97
-PEAK_MIN_OK = 0.75
+PEAK_MIN_OK = 0.85
 
 # Frame period when exposure <= 1/30 s (30 fps)
 MIN_FRAME_PERIOD_SEC = 1.0 / 30.0
