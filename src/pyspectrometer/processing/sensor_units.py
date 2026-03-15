@@ -21,6 +21,11 @@ def counts_to_flux_proxy(
 ) -> float | None:
     """Counts per (exposure_sec × gain): proxy for scene intensity (stable across E×G for same light).
 
+    Only valid when the frame was captured with the same exposure and gain used here.
+    With pipeline lag (e.g. Picamera2), the frame may have been shot with previous E×G
+    while we pass current E×G, so flux_proxy will be wrong (typically understated after
+    increasing E). Use in steady state or when the camera reports per-frame E×G.
+
     Returns None if exposure or gain is missing/zero. Unit: counts · s⁻¹ · gain⁻¹.
     """
     if not exposure_us or not gain or gain <= 0:

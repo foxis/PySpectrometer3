@@ -87,11 +87,13 @@ class AutoExposureController:
         self._skip_remaining: int = 0  # frames to skip after a change (camera/filter lag)
         self.at_max: bool = False
 
-    def _peak_counts_suffix(self, peak: float, data: SpectrumData) -> str:
+    def _peak_counts_suffix(self, peak: float, data: SpectrumData, steady: bool = False) -> str:
         counts = peak_to_counts(peak, self.bit_depth)
-        flux = counts_to_flux_proxy(counts, data.exposure_us, data.gain)
-        if flux is not None:
-            return f" counts {counts:.0f} flux_proxy {flux:.1f}"
+        # flux_proxy only valid when frame was shot with this E×G; omit after we just changed (pipeline lag).
+        if steady:
+            flux = counts_to_flux_proxy(counts, data.exposure_us, data.gain)
+            if flux is not None:
+                return f" counts {counts:.0f} flux_proxy {flux:.1f}"
         return f" counts {counts:.0f}"
 
     @property
@@ -127,7 +129,7 @@ class AutoExposureController:
             set_display(new)
             self._skip_remaining = _SKIP_FRAMES_AFTER_CHANGE
             if self.verbose:
-                print(f"[AE] {new} us (peak {peak:.3f}↓{self._peak_counts_suffix(peak, data)})")
+                print(f"[AE] {new} us (peak {peak:.3f}↓{self._peak_counts_suffix(peak, data, steady=False)})")
             return True
 
         if peak < self.target_low:
@@ -147,7 +149,7 @@ class AutoExposureController:
             set_display(new)
             self._skip_remaining = _SKIP_FRAMES_AFTER_CHANGE
             if self.verbose:
-                print(f"[AE] {new} us (peak {peak:.3f}↑ pred{self._peak_counts_suffix(peak, data)})")
+                print(f"[AE] {new} us (peak {peak:.3f}↑ pred{self._peak_counts_suffix(peak, data, steady=False)})")
             return True
 
         self.at_max = False
@@ -194,11 +196,12 @@ class AutoGainController:
         self._ema: float | None = None
         self._skip_remaining: int = 0
 
-    def _peak_counts_suffix(self, peak: float, data: SpectrumData) -> str:
+    def _peak_counts_suffix(self, peak: float, data: SpectrumData, steady: bool = False) -> str:
         counts = peak_to_counts(peak, self.bit_depth)
-        flux = counts_to_flux_proxy(counts, data.exposure_us, data.gain)
-        if flux is not None:
-            return f" counts {counts:.0f} flux_proxy {flux:.1f}"
+        if steady:
+            flux = counts_to_flux_proxy(counts, data.exposure_us, data.gain)
+            if flux is not None:
+                return f" counts {counts:.0f} flux_proxy {flux:.1f}"
         return f" counts {counts:.0f}"
 
     @property
@@ -234,7 +237,7 @@ class AutoGainController:
             set_display(new)
             self._skip_remaining = _SKIP_FRAMES_AFTER_CHANGE
             if self.verbose:
-                print(f"[AG] {new:.2f}x (peak {peak:.3f}↓{self._peak_counts_suffix(peak, data)})")
+                print(f"[AG] {new:.2f}x (peak {peak:.3f}↓{self._peak_counts_suffix(peak, data, steady=False)})")
             return True
 
         if peak < self.target_low:
@@ -250,7 +253,7 @@ class AutoGainController:
             set_display(new)
             self._skip_remaining = _SKIP_FRAMES_AFTER_CHANGE
             if self.verbose:
-                print(f"[AG] {new:.2f}x (peak {peak:.3f}↑ pred{self._peak_counts_suffix(peak, data)})")
+                print(f"[AG] {new:.2f}x (peak {peak:.3f}↑ pred{self._peak_counts_suffix(peak, data, steady=False)})")
             return True
 
         if (
@@ -264,7 +267,7 @@ class AutoGainController:
                 set_display(new)
                 self._skip_remaining = _SKIP_FRAMES_AFTER_CHANGE
                 if self.verbose:
-                    print(f"[AG] {new:.2f}x (prefer exposure, peak {peak:.3f}{self._peak_counts_suffix(peak, data)})")
+                    print(f"[AG] {new:.2f}x (prefer exposure, peak {peak:.3f}{self._peak_counts_suffix(peak, data, steady=False)})")
                 return True
 
         return False
