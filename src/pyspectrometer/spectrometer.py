@@ -78,6 +78,7 @@ class Spectrometer:
             "median": ExtractionMethod.MEDIAN,
             "weighted_sum": ExtractionMethod.WEIGHTED_SUM,
             "gaussian": ExtractionMethod.GAUSSIAN,
+            "max": ExtractionMethod.MAX,
         }
         extraction_method = method_map.get(
             self.config.extraction.method,

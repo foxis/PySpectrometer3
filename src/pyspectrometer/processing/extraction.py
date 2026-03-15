@@ -23,6 +23,7 @@ class ExtractionMethod(Enum):
     MEDIAN = auto()
     WEIGHTED_SUM = auto()
     GAUSSIAN = auto()
+    MAX = auto()  # Max along perpendicular strip per column; for AE/AG so saturation is visible
 
     def __str__(self) -> str:
         return self.name.replace("_", " ").title()
@@ -58,6 +59,7 @@ class SpectrumExtractor:
     - Median: robust to outliers
     - Weighted Sum: best S/N ratio (default)
     - Gaussian: most accurate, fits profile
+    - Max: max along perpendicular per column; for streaming/AE so saturation is visible
     """
 
     def __init__(
@@ -196,6 +198,8 @@ class SpectrumExtractor:
                 return self._extract_weighted_sum(gray)
             case ExtractionMethod.GAUSSIAN:
                 return self._extract_gaussian(gray)
+            case ExtractionMethod.MAX:
+                return self._extract_max(gray)
 
     def _extract_median(self, gray: np.ndarray) -> np.ndarray:
         """Extract using median along vertical slices.
@@ -212,6 +216,19 @@ class SpectrumExtractor:
         intensity = np.median(roi, axis=0)
 
         # Return as float32, preserving original range
+        return intensity.astype(np.float32)
+
+    def _extract_max(self, gray: np.ndarray) -> np.ndarray:
+        """Extract using max along perpendicular strip per column.
+
+        Saturation in any pixel in the column shows as max; use for streaming/AE so
+        overexposure is visible to the controller.
+        """
+        half_perp = self.perpendicular_width // 2
+        y_start = max(0, self.spectrum_y_center - half_perp)
+        y_end = min(gray.shape[0], self.spectrum_y_center + half_perp + 1)
+        roi = gray[y_start:y_end, :]
+        intensity = np.max(roi, axis=0)
         return intensity.astype(np.float32)
 
     def _extract_weighted_sum(self, gray: np.ndarray) -> np.ndarray:

@@ -195,7 +195,7 @@ def _capture_loop(
     extractor = SpectrumExtractor(
         frame_width=width,
         frame_height=height,
-        method=ExtractionMethod.MEDIAN,
+        method=ExtractionMethod.MAX,
         rotation_angle=0.0,
         perpendicular_width=config.extraction.perpendicular_width,
         spectrum_y_center=height // 2,
