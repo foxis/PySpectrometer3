@@ -11,9 +11,6 @@ still over-correct and cause oscillation (saturated -> too dark -> saturated). S
 adjust we cooldown gain for a few frames so we see the new exposure before changing gain.
 """
 
-import time
-from unittest.mock import patch
-
 import numpy as np
 import pytest
 
@@ -26,8 +23,8 @@ from ..processing.auto_controls import (
 # 10-bit sensor max
 _SENSOR_MAX = 1023
 
-# Target band (must match auto_controls: 0.90–0.95)
-TARGET_LOW = 0.90
+# Target band (must match auto_controls: 0.80–0.95)
+TARGET_LOW = 0.80
 TARGET_HIGH = 0.95
 
 # Convergence: expect peak in band within this many steps
@@ -88,55 +85,47 @@ def test_auto_exposure_gain_converges_constant_light():
         exposure_min_us=100,
         exposure_max_us=1_000_000,
         exposure_preferred_max_us=500_000,
-        peak_smoothing_period_sec=0.04,
-        max_adjust_rate_hz=10.0,
+        peak_smoothing_period_sec=0.1,
         verbose=False,
     )
     auto_gain = AutoGainController(
         gain_min=1.0,
         gain_max=16.0,
-        peak_smoothing_period_sec=0.04,
-        max_adjust_rate_hz=10.0,
+        peak_smoothing_period_sec=0.1,
         verbose=False,
     )
 
-    sim_time = 0.0
     peaks: list[float] = []
     converged_at: int | None = None
-
-    def mock_monotonic() -> float:
-        return sim_time
 
     n_pixels = 64
     wavelengths = np.linspace(380.0, 720.0, n_pixels)
 
-    with patch("pyspectrometer.processing.auto_controls.time.monotonic", side_effect=mock_monotonic):
-        total_steps = CONVERGE_STEPS + STABILITY_STEPS
-        for step in range(total_steps):
-            # Frame period: exposure < 1/30 s → 30 fps
-            frame_period = _frame_period_sec(exposure_us)
-            sim_time += frame_period
+    total_steps = CONVERGE_STEPS + STABILITY_STEPS
+    for step in range(total_steps):
+        # Frame period: exposure < 1/30 s → 30 fps
+        frame_period = _frame_period_sec(exposure_us)
 
-            peak_val = _sensor_peak_10bit(exposure_us, gain)
-            peaks.append(peak_val)
-            intensity = np.full(n_pixels, peak_val, dtype=np.float64)
-            data = SpectrumData(
-                intensity=intensity,
-                wavelengths=wavelengths,
-                exposure_us=exposure_us,
-                gain=gain,
-            )
+        peak_val = _sensor_peak_10bit(exposure_us, gain)
+        peaks.append(peak_val)
+        intensity = np.full(n_pixels, peak_val, dtype=np.float64)
+        data = SpectrumData(
+            intensity=intensity,
+            wavelengths=wavelengths,
+            exposure_us=exposure_us,
+            gain=gain,
+        )
 
-            # Same order as mode_context: exposure first, then gain if exposure didn't change
-            exposure_adjusted = auto_exposure.adjust(
-                data, get_exposure, set_exposure, set_display_exposure
-            )
-            if not exposure_adjusted:
-                auto_gain.adjust(data, get_gain, set_gain, set_display_gain)
+        # Same order as mode_context: exposure first, then gain if exposure didn't change
+        exposure_adjusted = auto_exposure.adjust(
+            data, get_exposure, set_exposure, set_display_exposure
+        )
+        if not exposure_adjusted:
+            auto_gain.adjust(data, get_gain, set_gain, set_display_gain)
 
-            # Check convergence (first time peak in band)
-            if converged_at is None and TARGET_LOW <= peak_val <= TARGET_HIGH:
-                converged_at = step
+        # Check convergence (first time peak in band)
+        if converged_at is None and TARGET_LOW <= peak_val <= TARGET_HIGH:
+            converged_at = step
 
     # Must converge within CONVERGE_STEPS
     assert converged_at is not None, (
@@ -145,7 +134,7 @@ def test_auto_exposure_gain_converges_constant_light():
     )
     assert converged_at <= CONVERGE_STEPS, (
         f"Converged at step {converged_at}, expected within {CONVERGE_STEPS}. "
-        f"Peaks near convergence: {peaks[converged_at - 5 : converged_at + 10]}"
+        f"Peaks near convergence: {peaks[max(0, converged_at - 5) : converged_at + 10]}"
     )
 
     # Stability: after convergence, no major oscillations (peak should stay in/near band)
@@ -209,52 +198,44 @@ def test_auto_exposure_gain_from_overexposed_no_overshoot():
         exposure_min_us=100,
         exposure_max_us=1_000_000,
         exposure_preferred_max_us=500_000,
-        peak_smoothing_period_sec=0.04,
-        max_adjust_rate_hz=10.0,
+        peak_smoothing_period_sec=0.1,
         verbose=False,
     )
     auto_gain = AutoGainController(
         gain_min=1.0,
         gain_max=16.0,
-        peak_smoothing_period_sec=0.04,
-        max_adjust_rate_hz=10.0,
+        peak_smoothing_period_sec=0.1,
         verbose=False,
     )
 
-    sim_time = 0.0
     peaks: list[float] = []
     converged_at: int | None = None
-
-    def mock_monotonic() -> float:
-        return sim_time
 
     n_pixels = 64
     wavelengths = np.linspace(380.0, 720.0, n_pixels)
 
-    with patch("pyspectrometer.processing.auto_controls.time.monotonic", side_effect=mock_monotonic):
-        total_steps = CONVERGE_STEPS + STABILITY_STEPS
-        for step in range(total_steps):
-            frame_period = _frame_period_sec(exposure_us)
-            sim_time += frame_period
+    total_steps = CONVERGE_STEPS + STABILITY_STEPS
+    for step in range(total_steps):
+        frame_period = _frame_period_sec(exposure_us)
 
-            peak_val = _sensor_peak_10bit(exposure_us, gain)
-            peaks.append(peak_val)
-            intensity = np.full(n_pixels, peak_val, dtype=np.float64)
-            data = SpectrumData(
-                intensity=intensity,
-                wavelengths=wavelengths,
-                exposure_us=exposure_us,
-                gain=gain,
-            )
+        peak_val = _sensor_peak_10bit(exposure_us, gain)
+        peaks.append(peak_val)
+        intensity = np.full(n_pixels, peak_val, dtype=np.float64)
+        data = SpectrumData(
+            intensity=intensity,
+            wavelengths=wavelengths,
+            exposure_us=exposure_us,
+            gain=gain,
+        )
 
-            exposure_adjusted = auto_exposure.adjust(
-                data, get_exposure, set_exposure, set_display_exposure
-            )
-            if not exposure_adjusted:
-                auto_gain.adjust(data, get_gain, set_gain, set_display_gain)
+        exposure_adjusted = auto_exposure.adjust(
+            data, get_exposure, set_exposure, set_display_exposure
+        )
+        if not exposure_adjusted:
+            auto_gain.adjust(data, get_gain, set_gain, set_display_gain)
 
-            if converged_at is None and TARGET_LOW <= peak_val <= TARGET_HIGH:
-                converged_at = step
+        if converged_at is None and TARGET_LOW <= peak_val <= TARGET_HIGH:
+            converged_at = step
 
     assert converged_at is not None, (
         f"Did not converge from overexposed within {CONVERGE_STEPS} steps. Last 10 peaks: {peaks[-10:]}"

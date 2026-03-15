@@ -1,72 +1,85 @@
-"""Auto gain and auto exposure: never overexpose; expose correctly.
+"""Auto gain and auto exposure: keep spectrum peak in 0.80–0.95, never overexpose.
 
-Simple rules:
-- Peak > 0.95: overexposed → reduce exposure (never increase). Reduce gain if needed.
-- Peak < 0.90: underexposed → increase exposure, try to decrease gain (prefer exposure over gain).
-- 0.90 <= peak <= 0.95: in band → no change.
+Uses golden-ratio bracket search for fast convergence. Peak is smoothed with
+exponential averaging at ~10 Hz to filter mains and avoid jumping/pulsing.
 """
 
 from collections.abc import Callable
-import time
+import math
+from typing import Literal
 
 import numpy as np
 
 from ..core.spectrum import SpectrumData
 
-# Thresholds: never overexpose; correct when underexposed.
-PEAK_OVER = 0.95   # Above this: only reduce exposure, never increase. Reduce gain.
-PEAK_UNDER = 0.90  # Below this: increase exposure, try to decrease gain.
+# Target band: peak in [0.80, 0.95]. Never exceed 0.95; aim for 0.8–0.9.
+TARGET_HIGH_FRAC = 0.95
+TARGET_LOW_FRAC = 0.80
 
-# Multiplicative step: aim for this when adjusting (so we land in band, not overshoot).
-TARGET_PEAK = 0.92
+# Smoothing: ~10 Hz so alpha = frame_period / tau, tau = 0.1 s
+PEAK_SMOOTHING_TAU_SEC = 0.1
 
-# Step caps (per update)
-MAX_EXPOSURE_UP_RATIO = 1.2
-MAX_EXPOSURE_DOWN_RATIO = 0.88
-MAX_GAIN_UP_RATIO = 1.2
-MAX_GAIN_DOWN_RATIO = 0.85
+# Golden ratio for bracket search: one evaluation per step, O(log(range)) convergence.
+_GOLDEN = (math.sqrt(5) - 1) / 2  # ~0.618
+_INV_GOLDEN = 1.0 - _GOLDEN  # ~0.382
 
-# Consecutive out-of-band frames before acting (avoids reacting to one noisy frame).
-_SUSTAIN = 2
-
-_MIN_PEAK = 1e-6
 _DEFAULT_FRAME_PERIOD_SEC = 0.033
+
+
+def _peak_vs_target(
+    current_max: float,
+    max_intensity: float = 1.0,
+    target_high_frac: float = TARGET_HIGH_FRAC,
+    target_low_frac: float = TARGET_LOW_FRAC,
+) -> Literal["low", "high", "ok"]:
+    """Classify spectrum peak vs target band. Used by bracket search."""
+    if current_max < max_intensity * 0.02:
+        return "low"
+    if current_max > max_intensity * target_high_frac:
+        return "high"
+    if current_max < max_intensity * target_low_frac:
+        return "low"
+    return "ok"
 
 
 def _smooth_peak(
     raw_peak: float,
     frame_period_sec: float,
-    smoothing_period_sec: float,
+    tau_sec: float,
     smoothed: float | None,
 ) -> float:
-    """Exponential moving average of peak."""
-    alpha = min(1.0, frame_period_sec / smoothing_period_sec)
+    """Exponential moving average: x = alpha*raw + (1-alpha)*x, alpha = dt/tau (~10 Hz)."""
+    alpha = min(1.0, frame_period_sec / tau_sec)
     if smoothed is None:
         return raw_peak
     return alpha * raw_peak + (1.0 - alpha) * smoothed
 
 
 class AutoGainController:
-    """Adjust gain: reduce when overexposed; when underexposed try to decrease gain (exposure takes priority)."""
+    """Adjusts camera gain to keep spectrum peak in target range (80–95%).
+
+    Uses golden-ratio bracket search. Peak is smoothed at ~10 Hz to filter mains.
+    """
 
     def __init__(
         self,
         gain_min: float = 1.0,
         gain_max: float = 16.0,
-        peak_smoothing_period_sec: float = 0.04,
-        max_adjust_rate_hz: float = 10.0,
+        gain_step_threshold: float = 0.2,
+        peak_smoothing_period_sec: float = PEAK_SMOOTHING_TAU_SEC,
+        max_adjust_rate_hz: float = 20.0,
         verbose: bool = True,
     ):
         self.gain_min = gain_min
         self.gain_max = gain_max
+        self.gain_step_threshold = gain_step_threshold
         self.peak_smoothing_period_sec = peak_smoothing_period_sec
-        self.max_adjust_rate_hz = max_adjust_rate_hz
+        self._max_adjust_rate_hz = max_adjust_rate_hz
         self.verbose = verbose
-        self._consecutive_high = 0
-        self._consecutive_low = 0
-        self._skip_next_frame = False
+        self._search_low: float | None = None
+        self._search_high: float | None = None
+        self._search_last_gain: float | None = None
         self._smoothed_peak: float | None = None
-        self._last_adjust_time: float = 0.0
 
     def adjust(
         self,
@@ -77,9 +90,6 @@ class AutoGainController:
     ) -> bool:
         if data is None or len(data.intensity) == 0:
             return False
-        if self._skip_next_frame:
-            self._skip_next_frame = False
-            return False
 
         raw_peak = float(np.max(data.intensity))
         frame_period = (
@@ -88,93 +98,90 @@ class AutoGainController:
         self._smoothed_peak = _smooth_peak(
             raw_peak, frame_period, self.peak_smoothing_period_sec, self._smoothed_peak
         )
-        peak = self._smoothed_peak
+        current_max = self._smoothed_peak
         current_gain = get_gain()
+        kind = _peak_vs_target(current_max, 1.0)
 
-        if peak > PEAK_OVER:
-            self._consecutive_low = 0
-            self._consecutive_high += 1
-            if self._consecutive_high < _SUSTAIN:
+        if (
+            self._search_last_gain is not None
+            and self._search_high is not None
+            and self._search_low is not None
+        ):
+            last_ok = _peak_vs_target(current_max, 1.0)
+            if last_ok == "ok":
+                self._search_low = self._search_high = self._search_last_gain = None
                 return False
-            if current_gain <= self.gain_min:
-                return False
-            now = time.monotonic()
-            if self.max_adjust_rate_hz > 0 and (now - self._last_adjust_time) < 1.0 / self.max_adjust_rate_hz:
-                return False
-            ratio = TARGET_PEAK / max(peak, _MIN_PEAK)
-            ratio = max(ratio, MAX_GAIN_DOWN_RATIO)
-            new_gain = max(self.gain_min, min(self.gain_max, current_gain * ratio))
-            set_gain(new_gain)
-            set_display_gain(new_gain)
-            self._skip_next_frame = True
-            self._last_adjust_time = now
-            if self.verbose:
-                print(f"[AG] Gain: {new_gain:.1f} (peak: {peak:.3f})")
-            return True
-
-        if peak < PEAK_UNDER:
-            self._consecutive_high = 0
-            self._consecutive_low += 1
-            if self._consecutive_low < _SUSTAIN:
-                return False
-            # Try to decrease gain (prefer exposure). Only increase gain if at max exposure and still underexposed.
-            if current_gain > self.gain_min:
-                now = time.monotonic()
-                if self.max_adjust_rate_hz > 0 and (now - self._last_adjust_time) < 1.0 / self.max_adjust_rate_hz:
-                    return False
-                ratio = TARGET_PEAK / max(peak, _MIN_PEAK)
-                ratio = min(ratio, MAX_GAIN_DOWN_RATIO)
-                new_gain = max(self.gain_min, current_gain * ratio)
+            if last_ok == "low":
+                self._search_low = self._search_last_gain
+            else:
+                self._search_high = self._search_last_gain
+            if self._search_high - self._search_low <= self.gain_step_threshold:
+                new_gain = (self._search_low + self._search_high) / 2.0
+                new_gain = max(self.gain_min, min(self.gain_max, new_gain))
                 set_gain(new_gain)
                 set_display_gain(new_gain)
-                self._skip_next_frame = True
-                self._last_adjust_time = now
+                self._search_low = self._search_high = self._search_last_gain = None
                 if self.verbose:
-                    print(f"[AG] Gain: {new_gain:.1f} (peak: {peak:.3f}, prefer exposure)")
+                    print(f"[AG] Gain: {new_gain:.1f} (converged, peak: {current_max:.3f})")
                 return True
-            if current_gain >= self.gain_max:
-                return False
-            now = time.monotonic()
-            if self.max_adjust_rate_hz > 0 and (now - self._last_adjust_time) < 1.0 / self.max_adjust_rate_hz:
-                return False
-            ratio = TARGET_PEAK / max(peak, _MIN_PEAK)
-            ratio = min(ratio, MAX_GAIN_UP_RATIO)
-            new_gain = min(self.gain_max, current_gain * ratio)
-            set_gain(new_gain)
-            set_display_gain(new_gain)
-            self._skip_next_frame = True
-            self._last_adjust_time = now
+            next_gain = self._search_low + (self._search_high - self._search_low) * _INV_GOLDEN
+            next_gain = max(self.gain_min, min(self.gain_max, next_gain))
+            set_gain(next_gain)
+            set_display_gain(next_gain)
+            self._search_last_gain = next_gain
             if self.verbose:
-                print(f"[AG] Gain: {new_gain:.1f} (peak: {peak:.3f})")
+                print(
+                    f"[AG] Gain: {next_gain:.1f} (bracket [{self._search_low:.1f},{self._search_high:.1f}], peak: {current_max:.3f})"
+                )
             return True
 
-        self._consecutive_high = self._consecutive_low = 0
-        return False
+        if kind == "ok":
+            return False
+
+        if kind == "low":
+            self._search_low = current_gain
+            self._search_high = self.gain_max
+        else:
+            self._search_low = self.gain_min
+            self._search_high = current_gain
+        next_gain = self._search_low + (self._search_high - self._search_low) * _INV_GOLDEN
+        next_gain = max(self.gain_min, min(self.gain_max, next_gain))
+        set_gain(next_gain)
+        set_display_gain(next_gain)
+        self._search_last_gain = next_gain
+        if self.verbose:
+            print(f"[AG] Gain: {next_gain:.1f} (seek start, peak: {current_max:.3f})")
+        return True
 
 
 class AutoExposureController:
-    """Adjust exposure: never increase when peak > 0.95; when peak < 0.90 increase exposure."""
+    """Adjusts camera exposure to keep spectrum peak in target range (80–95%).
+
+    Uses golden-ratio bracket search. Never increases exposure when peak > 0.95.
+    Peak is smoothed at ~10 Hz to filter mains.
+    """
 
     def __init__(
         self,
         exposure_min_us: int = 100,
         exposure_max_us: int = 1_000_000,
-        exposure_preferred_max_us: int = 500_000,
-        peak_smoothing_period_sec: float = 0.04,
-        max_adjust_rate_hz: float = 10.0,
+        exposure_preferred_max_us: int | None = 500_000,
+        exposure_step_min: int = 50,
+        peak_smoothing_period_sec: float = PEAK_SMOOTHING_TAU_SEC,
+        max_adjust_rate_hz: float = 20.0,
         verbose: bool = True,
     ):
         self.exposure_min_us = exposure_min_us
         self.exposure_max_us = exposure_max_us
         self.exposure_preferred_max_us = exposure_preferred_max_us
+        self.exposure_step_min = exposure_step_min
         self.peak_smoothing_period_sec = peak_smoothing_period_sec
-        self.verbose = verbose
         self._max_adjust_rate_hz = max_adjust_rate_hz
-        self._consecutive_high = 0
-        self._consecutive_low = 0
-        self._skip_next_frame = False
+        self.verbose = verbose
+        self._search_low_us: int | None = None
+        self._search_high_us: int | None = None
+        self._search_last_exposure_us: int | None = None
         self._smoothed_peak: float | None = None
-        self._last_adjust_time: float = 0.0
 
     def adjust(
         self,
@@ -185,9 +192,6 @@ class AutoExposureController:
     ) -> bool:
         if data is None or len(data.intensity) == 0:
             return False
-        if self._skip_next_frame:
-            self._skip_next_frame = False
-            return False
 
         raw_peak = float(np.max(data.intensity))
         frame_period = (
@@ -196,62 +200,78 @@ class AutoExposureController:
         self._smoothed_peak = _smooth_peak(
             raw_peak, frame_period, self.peak_smoothing_period_sec, self._smoothed_peak
         )
-        peak = self._smoothed_peak
+        current_max = self._smoothed_peak
         current_exposure = get_exposure()
+        kind = _peak_vs_target(current_max, 1.0)
 
-        # Overexposed: only reduce exposure. NEVER increase when peak > 0.95.
-        if peak > PEAK_OVER:
-            self._consecutive_low = 0
-            self._consecutive_high += 1
-            if self._consecutive_high < _SUSTAIN:
+        if (
+            self._search_last_exposure_us is not None
+            and self._search_high_us is not None
+            and self._search_low_us is not None
+        ):
+            last_ok = _peak_vs_target(current_max, 1.0)
+            if last_ok == "ok":
+                self._search_low_us = self._search_high_us = None
+                self._search_last_exposure_us = None
                 return False
-            if current_exposure <= self.exposure_min_us:
-                return False
-            now = time.monotonic()
-            if self._max_adjust_rate_hz > 0 and (now - self._last_adjust_time) < 1.0 / self._max_adjust_rate_hz:
-                return False
-            ratio = TARGET_PEAK / max(peak, _MIN_PEAK)
-            ratio = max(ratio, MAX_EXPOSURE_DOWN_RATIO)
-            new_exposure = int(current_exposure * ratio)
-            new_exposure = max(self.exposure_min_us, new_exposure)
-            set_exposure(new_exposure)
-            set_display_exposure(new_exposure)
-            self._skip_next_frame = True
-            self._last_adjust_time = now
+            if last_ok == "low":
+                self._search_low_us = self._search_last_exposure_us
+            else:
+                self._search_high_us = self._search_last_exposure_us
+            if self._search_high_us - self._search_low_us <= self.exposure_step_min:
+                new_exposure = (self._search_low_us + self._search_high_us) // 2
+                new_exposure = max(
+                    self.exposure_min_us,
+                    min(self.exposure_max_us, new_exposure),
+                )
+                set_exposure(new_exposure)
+                set_display_exposure(new_exposure)
+                self._search_low_us = self._search_high_us = None
+                self._search_last_exposure_us = None
+                if self.verbose:
+                    print(f"[AE] Exposure: {new_exposure} us (converged, peak: {current_max:.3f})")
+                return True
+            span = self._search_high_us - self._search_low_us
+            next_exposure = self._search_low_us + int(span * _INV_GOLDEN)
+            next_exposure = max(
+                self.exposure_min_us,
+                min(self.exposure_max_us, next_exposure),
+            )
+            set_exposure(next_exposure)
+            set_display_exposure(next_exposure)
+            self._search_last_exposure_us = next_exposure
             if self.verbose:
-                print(f"[AE] Exposure: {new_exposure} us (peak: {peak:.3f})")
+                print(
+                    f"[AE] Exposure: {next_exposure} us (bracket "
+                    f"[{self._search_low_us},{self._search_high_us}], peak: {current_max:.3f})"
+                )
             return True
 
-        # Underexposed: increase exposure (prefer exposure over gain).
-        if peak < PEAK_UNDER:
-            self._consecutive_high = 0
-            self._consecutive_low += 1
-            if self._consecutive_low < _SUSTAIN:
-                return False
-            if current_exposure >= self.exposure_max_us:
-                return False
-            now = time.monotonic()
-            if self._max_adjust_rate_hz > 0 and (now - self._last_adjust_time) < 1.0 / self._max_adjust_rate_hz:
-                return False
-            ratio = TARGET_PEAK / max(peak, _MIN_PEAK)
-            ratio = min(ratio, MAX_EXPOSURE_UP_RATIO)
-            new_exposure = int(current_exposure * ratio)
-            high_cap = (
-                self.exposure_preferred_max_us
-                if current_exposure < self.exposure_preferred_max_us
+        if kind == "ok":
+            return False
+
+        if kind == "low":
+            self._search_low_us = current_exposure
+            self._search_high_us = (
+                min(self.exposure_max_us, self.exposure_preferred_max_us)
+                if self.exposure_preferred_max_us is not None
                 else self.exposure_max_us
             )
-            new_exposure = max(self.exposure_min_us, min(high_cap, new_exposure))
-            set_exposure(new_exposure)
-            set_display_exposure(new_exposure)
-            self._skip_next_frame = True
-            self._last_adjust_time = now
-            if self.verbose:
-                print(f"[AE] Exposure: {new_exposure} us (peak: {peak:.3f})")
-            return True
-
-        self._consecutive_high = self._consecutive_low = 0
-        return False
+        else:
+            self._search_low_us = self.exposure_min_us
+            self._search_high_us = current_exposure
+        span = self._search_high_us - self._search_low_us
+        next_exposure = self._search_low_us + int(span * _INV_GOLDEN)
+        next_exposure = max(
+            self.exposure_min_us,
+            min(self.exposure_max_us, next_exposure),
+        )
+        set_exposure(next_exposure)
+        set_display_exposure(next_exposure)
+        self._search_last_exposure_us = next_exposure
+        if self.verbose:
+            print(f"[AE] Exposure: {next_exposure} us (seek start, peak: {current_max:.3f})")
+        return True
 
 
 def run_auto_gain_exposure_frame(
@@ -268,7 +288,7 @@ def run_auto_gain_exposure_frame(
     set_gain_display: Callable[[float], None],
     gain_cooldown_remaining: int,
 ) -> int:
-    """Run one frame: exposure first (never increase if peak > 0.95); then gain with cooldown after exposure change."""
+    """Run one frame: exposure first, then gain with cooldown after exposure change."""
     if not auto_exposure_enabled and not auto_gain_enabled:
         return gain_cooldown_remaining
 
