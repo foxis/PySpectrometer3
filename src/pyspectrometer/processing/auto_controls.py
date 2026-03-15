@@ -18,6 +18,9 @@ _CONVERGE_BIAS_LOW = 0.25
 # Require this many consecutive out-of-band frames before starting a new search (avoids restart on one noisy frame).
 _SUSTAIN_COUNT = 2
 
+# Default frame period when exposure_us is unknown (for smoothing alpha).
+_DEFAULT_FRAME_PERIOD_SEC = 0.033
+
 
 def _peak_vs_target(
     current_max: float,
@@ -53,11 +56,13 @@ class AutoGainController:
         gain_min: float = 1.0,
         gain_max: float = 16.0,
         gain_step_threshold: float = 0.2,
+        peak_smoothing_period_sec: float = 0.04,
         verbose: bool = True,
     ):
         self.gain_min = gain_min
         self.gain_max = gain_max
         self.gain_step_threshold = gain_step_threshold
+        self.peak_smoothing_period_sec = peak_smoothing_period_sec
         self.verbose = verbose
         self._search_low: float | None = None
         self._search_high: float | None = None
@@ -65,6 +70,7 @@ class AutoGainController:
         self._consecutive_high: int = 0
         self._consecutive_low: int = 0
         self._skip_next_frame: bool = False  # Skip one frame after changing gain (avoids mid-frame artifacts).
+        self._smoothed_peak: float | None = None
 
     def adjust(
         self,
@@ -90,7 +96,14 @@ class AutoGainController:
             self._skip_next_frame = False
             return False
 
-        current_max = float(np.max(data.intensity))
+        raw_peak = float(np.max(data.intensity))
+        frame_period_sec = data.exposure_us / 1e6 if data.exposure_us is not None else _DEFAULT_FRAME_PERIOD_SEC
+        alpha = min(1.0, frame_period_sec / self.peak_smoothing_period_sec)
+        if self._smoothed_peak is None:
+            self._smoothed_peak = raw_peak
+        else:
+            self._smoothed_peak = alpha * raw_peak + (1.0 - alpha) * self._smoothed_peak
+        current_max = self._smoothed_peak
         current_gain = get_gain()
         kind = _peak_vs_target(current_max, 1.0)
 
@@ -113,6 +126,7 @@ class AutoGainController:
                 self._search_low = self._search_high = self._search_last_gain = None
                 self._consecutive_high = self._consecutive_low = 0
                 self._skip_next_frame = True
+                self._smoothed_peak = None  # Reset so filter re-inits from next frame (no stale state after jump).
                 if self.verbose:
                     print(f"[AG] Gain: {new_gain:.1f} (converged, peak: {current_max:.3f})")
                 return True
@@ -122,6 +136,7 @@ class AutoGainController:
             set_display_gain(next_gain)
             self._search_last_gain = next_gain
             self._skip_next_frame = True
+            self._smoothed_peak = None
             if self.verbose:
                 print(f"[AG] Gain: {next_gain:.1f} (bracket [{self._search_low:.1f},{self._search_high:.1f}], peak: {current_max:.3f})")
             return True
@@ -160,6 +175,7 @@ class AutoGainController:
         set_display_gain(next_gain)
         self._search_last_gain = next_gain
         self._skip_next_frame = True
+        self._smoothed_peak = None
         if self.verbose:
             print(f"[AG] Gain: {next_gain:.1f} (seek start, peak: {current_max:.3f})")
         return True
@@ -181,12 +197,14 @@ class AutoExposureController:
         exposure_max_us: int = 1_000_000,  # 1 s max for auto (manual can use capturer up to driver limit)
         exposure_preferred_max_us: int = 500_000,  # Prefer exposure ≤ this to allow lower gain (less noise)
         exposure_step_min: int = 50,
+        peak_smoothing_period_sec: float = 0.04,
         verbose: bool = True,
     ):
         self.exposure_min_us = exposure_min_us
         self.exposure_max_us = exposure_max_us
         self.exposure_preferred_max_us = exposure_preferred_max_us
         self.exposure_step_min = exposure_step_min
+        self.peak_smoothing_period_sec = peak_smoothing_period_sec
         self.verbose = verbose
         self._search_low_us: int | None = None
         self._search_high_us: int | None = None
@@ -194,6 +212,7 @@ class AutoExposureController:
         self._consecutive_high: int = 0
         self._consecutive_low: int = 0
         self._skip_next_frame: bool = False  # Skip one frame after changing exposure (avoids mid-frame artifacts).
+        self._smoothed_peak: float | None = None
 
     def adjust(
         self,
@@ -219,7 +238,14 @@ class AutoExposureController:
             self._skip_next_frame = False
             return False
 
-        current_max = float(np.max(data.intensity))
+        raw_peak = float(np.max(data.intensity))
+        frame_period_sec = data.exposure_us / 1e6 if data.exposure_us is not None else _DEFAULT_FRAME_PERIOD_SEC
+        alpha = min(1.0, frame_period_sec / self.peak_smoothing_period_sec)
+        if self._smoothed_peak is None:
+            self._smoothed_peak = raw_peak
+        else:
+            self._smoothed_peak = alpha * raw_peak + (1.0 - alpha) * self._smoothed_peak
+        current_max = self._smoothed_peak
         current_exposure = get_exposure()
         kind = _peak_vs_target(current_max, 1.0)
 
@@ -251,6 +277,7 @@ class AutoExposureController:
                 self._search_last_exposure_us = None
                 self._consecutive_high = self._consecutive_low = 0
                 self._skip_next_frame = True
+                self._smoothed_peak = None
                 if self.verbose:
                     print(f"[AE] Exposure: {new_exposure} us (converged, peak: {current_max:.3f})")
                 return True
@@ -264,6 +291,7 @@ class AutoExposureController:
             set_display_exposure(next_exposure)
             self._search_last_exposure_us = next_exposure
             self._skip_next_frame = True
+            self._smoothed_peak = None
             if self.verbose:
                 print(
                     f"[AE] Exposure: {next_exposure} us (bracket "
@@ -311,6 +339,7 @@ class AutoExposureController:
         set_display_exposure(next_exposure)
         self._search_last_exposure_us = next_exposure
         self._skip_next_frame = True
+        self._smoothed_peak = None
         if self.verbose:
             print(f"[AE] Exposure: {next_exposure} us (seek start, peak: {current_max:.3f})")
         return True

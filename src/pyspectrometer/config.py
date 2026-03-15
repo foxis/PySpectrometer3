@@ -131,6 +131,9 @@ def _config_to_dict(config: "Config") -> dict:
             "spectrum_y_center": config.extraction.spectrum_y_center,
             "background_percentile": config.extraction.background_percentile,
         },
+        "auto": {
+            "peak_smoothing_period_sec": config.auto.peak_smoothing_period_sec,
+        },
     }
 
 
@@ -181,6 +184,8 @@ def _apply_config(config: "Config", data: dict) -> None:
         apply(config.waterfall, data["waterfall"])
     if "extraction" in data:
         apply(config.extraction, data["extraction"])
+    if "auto" in data:
+        apply(config.auto, data["auto"])
 
 
 @dataclass
@@ -307,6 +312,15 @@ class WaterfallConfig:
 
 
 @dataclass
+class AutoConfig:
+    """Auto gain / auto exposure configuration."""
+
+    # Exponential smoothing of spectrum peak (seconds). Shorter exposure → longer effective window.
+    # Target ~25 Hz: 0.04 s so filter settles faster after a jump while still filtering 50/60 Hz flicker.
+    peak_smoothing_period_sec: float = 0.04
+
+
+@dataclass
 class ExtractionConfig:
     """Spectrum extraction configuration."""
 
@@ -334,6 +348,7 @@ class Config:
     export: ExportConfig = field(default_factory=ExportConfig)
     waterfall: WaterfallConfig = field(default_factory=WaterfallConfig)
     extraction: ExtractionConfig = field(default_factory=ExtractionConfig)
+    auto: AutoConfig = field(default_factory=AutoConfig)
 
     # Window titles
     spectrograph_title: str = "PySpectrometer 3 - Spectrograph"

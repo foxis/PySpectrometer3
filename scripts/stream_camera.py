@@ -155,8 +155,9 @@ def _capture_loop(
         bit_depth=config.camera.bit_depth,
     )
 
-    auto_gain_ctrl = AutoGainController(verbose=True) if auto_gain else None
-    auto_exposure_ctrl = AutoExposureController(verbose=True) if auto_exposure else None
+    smoothing = config.auto.peak_smoothing_period_sec
+    auto_gain_ctrl = AutoGainController(peak_smoothing_period_sec=smoothing, verbose=True) if auto_gain else None
+    auto_exposure_ctrl = AutoExposureController(peak_smoothing_period_sec=smoothing, verbose=True) if auto_exposure else None
     extractor: SpectrumExtractor | None = None
     if auto_gain or auto_exposure:
         extractor = SpectrumExtractor(
@@ -192,6 +193,8 @@ def _capture_loop(
                     wavelengths=np.linspace(0.0, 1.0, n),
                     raw_frame=frame,
                     cropped_frame=extraction.cropped_frame,
+                    exposure_us=getattr(camera, "exposure", None),
+                    gain=getattr(camera, "gain", None),
                 )
                 if auto_exposure_ctrl:
                     auto_exposure_ctrl.adjust(

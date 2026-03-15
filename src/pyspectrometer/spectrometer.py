@@ -113,8 +113,9 @@ class Spectrometer:
         )
         self._pipeline = ProcessingPipeline([self._savgol_filter, self._peak_detector])
 
-        self._auto_gain = AutoGainController()
-        self._auto_exposure = AutoExposureController()
+        smoothing = self.config.auto.peak_smoothing_period_sec
+        self._auto_gain = AutoGainController(peak_smoothing_period_sec=smoothing)
+        self._auto_exposure = AutoExposureController(peak_smoothing_period_sec=smoothing)
         from .data.reference_loader import set_reference_dirs
 
         set_reference_dirs(self.config.export.reference_dirs)
