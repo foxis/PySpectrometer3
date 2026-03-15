@@ -161,11 +161,18 @@ def _capture_loop(
 
     smoothing = config.auto.peak_smoothing_period_sec
     rate_hz = getattr(config.auto, "max_adjust_rate_hz", 20.0)
+    bit_depth = getattr(config.camera, "bit_depth", 10)
     auto_gain_ctrl = AutoGainController(
-        peak_smoothing_period_sec=smoothing, max_adjust_rate_hz=rate_hz, verbose=True
+        peak_smoothing_period_sec=smoothing,
+        max_adjust_rate_hz=rate_hz,
+        verbose=True,
+        bit_depth=bit_depth,
     )
     auto_exposure_ctrl = AutoExposureController(
-        peak_smoothing_period_sec=smoothing, max_adjust_rate_hz=rate_hz, verbose=True
+        peak_smoothing_period_sec=smoothing,
+        max_adjust_rate_hz=rate_hz,
+        verbose=True,
+        bit_depth=bit_depth,
     )
     extractor = SpectrumExtractor(
         frame_width=width,

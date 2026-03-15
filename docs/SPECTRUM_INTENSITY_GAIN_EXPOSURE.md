@@ -39,6 +39,8 @@ So **intensity is already gain/exposure dependent**: raw counts scale with gain 
 - **Normalization**: Peak used for AE/AG is **raw pixel max / max_val**, with `max_val` from bit depth: 255 for 8-bit, **1023** for 10-bit (`(1 << bit_depth) - 1`). Saturated sensor → peak 1.0.
 - **Spectrum vs full frame**: Peak was taken only from the **spectrum ROI** (strip). If the full preview has bright regions (slit, reflections) outside that strip, the image can look overexposed while the spectrum-strip peak stays &lt; 1. The **stream** uses **max(spectrum ROI max, full-frame max)** as the peak for AE so that when any part of the image is saturated we reduce exposure.
 
+- **Counts and flux proxy** (`processing.sensor_units`: `peak_to_counts`, `counts_to_flux_proxy`): Debug helpers, not in main pipeline yet. From normalized peak (0–1), **counts** = peak × (2^bit_depth − 1) gives the raw ADC value (e.g. 0–1023 for 10-bit). **flux_proxy** = counts / (exposure_sec × gain) is proportional to scene intensity; for the same illumination it should stay roughly constant as E×G changes.
+
 ## Linearity and standardization
 
 - **Exposure**: Typically linear (double exposure → double counts). Unit: microseconds.

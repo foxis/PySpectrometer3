@@ -7,8 +7,11 @@ Skip 2 frames after each change for camera/filter lag.
 """
 
 from collections.abc import Callable
+
 import numpy as np
+
 from ..core.spectrum import SpectrumData
+from .sensor_units import counts_to_flux_proxy, peak_to_counts
 
 # Default target band: configurable per-instance.
 TARGET_LOW = 0.80
@@ -65,6 +68,7 @@ class AutoExposureController:
         target_high: float = TARGET_HIGH,
         smoothing_tau: float = 0.05,
         verbose: bool = True,
+        bit_depth: int = 10,
         # Legacy params: accepted for caller compatibility, mapped or ignored.
         exposure_preferred_max_us: int | None = None,
         peak_smoothing_period_sec: float = 0.05,
@@ -78,9 +82,17 @@ class AutoExposureController:
         self.target_mid = (target_low + target_high) / 2.0
         self.tau = smoothing_tau or peak_smoothing_period_sec
         self.verbose = verbose
+        self.bit_depth = bit_depth
         self._ema: float | None = None
         self._skip_remaining: int = 0  # frames to skip after a change (camera/filter lag)
         self.at_max: bool = False
+
+    def _peak_counts_suffix(self, peak: float, data: SpectrumData) -> str:
+        counts = peak_to_counts(peak, self.bit_depth)
+        flux = counts_to_flux_proxy(counts, data.exposure_us, data.gain)
+        if flux is not None:
+            return f" counts {counts:.0f} flux_proxy {flux:.1f}"
+        return f" counts {counts:.0f}"
 
     @property
     def smoothed_peak(self) -> float | None:
@@ -115,7 +127,7 @@ class AutoExposureController:
             set_display(new)
             self._skip_remaining = _SKIP_FRAMES_AFTER_CHANGE
             if self.verbose:
-                print(f"[AE] {new} us (peak {peak:.3f}↓)")
+                print(f"[AE] {new} us (peak {peak:.3f}↓{self._peak_counts_suffix(peak, data)})")
             return True
 
         if peak < self.target_low:
@@ -135,7 +147,7 @@ class AutoExposureController:
             set_display(new)
             self._skip_remaining = _SKIP_FRAMES_AFTER_CHANGE
             if self.verbose:
-                print(f"[AE] {new} us (peak {peak:.3f}↑ pred)")
+                print(f"[AE] {new} us (peak {peak:.3f}↑ pred{self._peak_counts_suffix(peak, data)})")
             return True
 
         self.at_max = False
@@ -164,6 +176,7 @@ class AutoGainController:
         smoothing_tau: float = 0.05,
         prefer_exposure_below_us: int = PREFER_EXPOSURE_BELOW_US,
         verbose: bool = True,
+        bit_depth: int = 10,
         # Legacy params: accepted for caller compatibility, ignored.
         gain_step_threshold: float = 0.2,
         peak_smoothing_period_sec: float = 0.05,
@@ -177,8 +190,16 @@ class AutoGainController:
         self.tau = smoothing_tau or peak_smoothing_period_sec
         self.prefer_exposure_below_us = prefer_exposure_below_us
         self.verbose = verbose
+        self.bit_depth = bit_depth
         self._ema: float | None = None
         self._skip_remaining: int = 0
+
+    def _peak_counts_suffix(self, peak: float, data: SpectrumData) -> str:
+        counts = peak_to_counts(peak, self.bit_depth)
+        flux = counts_to_flux_proxy(counts, data.exposure_us, data.gain)
+        if flux is not None:
+            return f" counts {counts:.0f} flux_proxy {flux:.1f}"
+        return f" counts {counts:.0f}"
 
     @property
     def smoothed_peak(self) -> float | None:
@@ -213,7 +234,7 @@ class AutoGainController:
             set_display(new)
             self._skip_remaining = _SKIP_FRAMES_AFTER_CHANGE
             if self.verbose:
-                print(f"[AG] {new:.2f}x (peak {peak:.3f}↓)")
+                print(f"[AG] {new:.2f}x (peak {peak:.3f}↓{self._peak_counts_suffix(peak, data)})")
             return True
 
         if peak < self.target_low:
@@ -229,7 +250,7 @@ class AutoGainController:
             set_display(new)
             self._skip_remaining = _SKIP_FRAMES_AFTER_CHANGE
             if self.verbose:
-                print(f"[AG] {new:.2f}x (peak {peak:.3f}↑ pred)")
+                print(f"[AG] {new:.2f}x (peak {peak:.3f}↑ pred{self._peak_counts_suffix(peak, data)})")
             return True
 
         if (
@@ -243,7 +264,7 @@ class AutoGainController:
                 set_display(new)
                 self._skip_remaining = _SKIP_FRAMES_AFTER_CHANGE
                 if self.verbose:
-                    print(f"[AG] {new:.2f}x (prefer exposure, peak {peak:.3f})")
+                    print(f"[AG] {new:.2f}x (prefer exposure, peak {peak:.3f}{self._peak_counts_suffix(peak, data)})")
                 return True
 
         return False
