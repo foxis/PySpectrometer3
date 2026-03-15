@@ -17,9 +17,14 @@ def _peak_vs_target(
     current_max: float,
     max_intensity: float = 1.0,
     target_high_frac: float = 0.95,
-    target_low_frac: float = 0.50,
+    target_low_frac: float = 0.80,
 ) -> Literal["low", "high", "ok"]:
-    """Classify spectrum peak vs target band. Used by bracket search."""
+    """Classify spectrum peak vs target band. Hysteresis: only correct outside [low, high].
+
+    - peak > target_high_frac → oversaturated, correct (reduce)
+    - peak < target_low_frac → undersaturated, correct (increase)
+    - target_low_frac ≤ peak ≤ target_high_frac → ok, no correction (avoids noise-driven nudges)
+    """
     if current_max < max_intensity * 0.02:
         return "low"
     if current_max > max_intensity * target_high_frac:
@@ -30,10 +35,11 @@ def _peak_vs_target(
 
 
 class AutoGainController:
-    """Adjusts camera gain to keep spectrum peak in target range (50-95%).
+    """Adjusts camera gain to keep spectrum peak in target range (80-95%).
 
-    Uses golden-ratio bracket search (Fibonacci-style) so each step halves the
-    uncertainty; settles in O(log(range)) steps instead of fixed ratio steps.
+    Hysteresis: correct only when peak < 0.8 (undersaturated) or > 0.95 (oversaturated);
+    in 0.8-0.95 no correction to avoid noise-driven oscillation.
+    Uses golden-ratio bracket search for fast convergence.
     """
 
     def __init__(
@@ -107,6 +113,12 @@ class AutoGainController:
         if kind == "ok":
             return False
 
+        # Do not start a new search if already at limit (avoids endless restart when e.g. max exposure still too dark)
+        if kind == "low" and current_gain >= self.gain_max:
+            return False
+        if kind == "high" and current_gain <= self.gain_min:
+            return False
+
         if kind == "low":
             self._search_low = current_gain
             self._search_high = self.gain_max
@@ -124,10 +136,11 @@ class AutoGainController:
 
 
 class AutoExposureController:
-    """Adjusts camera exposure to keep spectrum peak in target range (50-95%).
+    """Adjusts camera exposure to keep spectrum peak in target range (80-95%).
 
-    Uses golden-ratio bracket search (Fibonacci-style) so each step halves the
-    uncertainty; settles in O(log(range)) steps instead of fixed ratio steps.
+    Hysteresis: correct only when peak < 0.8 (undersaturated) or > 0.95 (oversaturated);
+    in 0.8-0.95 no correction to avoid noise-driven oscillation.
+    Uses golden-ratio bracket search for fast convergence.
     """
 
     def __init__(
@@ -214,6 +227,12 @@ class AutoExposureController:
             return True
 
         if kind == "ok":
+            return False
+
+        # Do not start a new search if already at limit (avoids endless restart when e.g. max exposure still too dark)
+        if kind == "low" and current_exposure >= self.exposure_max_us:
+            return False
+        if kind == "high" and current_exposure <= self.exposure_min_us:
             return False
 
         if kind == "low":
