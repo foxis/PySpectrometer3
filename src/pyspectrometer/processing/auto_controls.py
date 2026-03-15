@@ -22,15 +22,12 @@ _SATURATED_RATIO = 0.8
 _SATURATED = 0.99
 
 _DEFAULT_DT = 1.0 / 30.0
+_EXPOSURE_EMA_THRESHOLD_US = 33_333  # 1/30 s; only apply EMA when exposure is shorter
 _MIN_PEAK = 1e-6
 
 
 def _ema(raw: float, prev: float | None, dt: float, tau: float) -> float:
-    """Exponential moving average. alpha = dt/tau, clamped to [0, 1].
-
-    dt should be the actual inter-frame time (not exposure_us alone), so the
-    filter cutoff stays consistent regardless of exposure setting.
-    """
+    """Exponential moving average. alpha = dt/tau, clamped to [0, 1]."""
     alpha = min(1.0, dt / tau)
     return raw if prev is None else alpha * raw + (1.0 - alpha) * prev
 
@@ -40,6 +37,13 @@ def _frame_dt(exposure_us: int | None) -> float:
     if not exposure_us:
         return _DEFAULT_DT
     return max(_DEFAULT_DT, exposure_us / 1e6)
+
+
+def _filtered_peak(raw: float, exposure_us: int | None, prev: float | None, tau: float) -> float:
+    """Apply EMA only when exposure < 1/30 s; otherwise use raw (long exposure already averages)."""
+    if exposure_us is not None and exposure_us >= _EXPOSURE_EMA_THRESHOLD_US:
+        return raw
+    return _ema(raw, prev, _frame_dt(exposure_us), tau)
 
 
 class AutoExposureController:
@@ -87,7 +91,7 @@ class AutoExposureController:
         set_display: Callable[[int], None],
     ) -> bool:
         raw = float(np.max(data.intensity))
-        self._ema = _ema(raw, self._ema, _frame_dt(data.exposure_us), self.tau)
+        self._ema = _filtered_peak(raw, data.exposure_us, self._ema, self.tau)
 
         if self._skip_remaining > 0:
             self._skip_remaining -= 1
@@ -185,7 +189,7 @@ class AutoGainController:
         set_display: Callable[[float], None],
     ) -> bool:
         raw = float(np.max(data.intensity))
-        self._ema = _ema(raw, self._ema, _frame_dt(data.exposure_us), self.tau)
+        self._ema = _filtered_peak(raw, data.exposure_us, self._ema, self.tau)
 
         if self._skip_remaining > 0:
             self._skip_remaining -= 1
