@@ -1,12 +1,9 @@
 """Auto-exposure and auto-gain: keep spectrum peak in [target_low, target_high].
 
-Proportional control: new_setting = current_setting * (target_mid / peak), clamped per step.
-When saturated (peak ~1.0): halve the setting immediately for fast recovery.
-EMA filter uses dt = max(exposure_sec, 1/30s) so long exposures (which self-average mains)
-get full weight, while short exposures are smoothed across frames.
-
-AE (exposure) is the primary actuator. AG (gain) runs only when AE is in-band or at its limit.
-One skip frame after each setting change so the camera can settle.
+Peak is proportional to E×G (exposure × gain). When underexposed we predict the E (or G)
+that would hit target_mid and step there (with a safety factor); we prefer increasing E
+over G to keep gain small (better noise). When overexposed we step conservatively.
+Skip 2 frames after each change for camera/filter lag.
 """
 
 from collections.abc import Callable
@@ -17,11 +14,11 @@ from ..core.spectrum import SpectrumData
 TARGET_LOW = 0.80
 TARGET_HIGH = 0.90
 
-# Maximum ratio change per step.
-_MAX_UP = 2.0    # never more than 2× increase
-_MAX_DOWN = 0.5  # never more than 2× decrease (i.e. ratio >= 0.5)
-
-# Saturated: halve immediately instead of gentle proportional step.
+# Underexposed: predicted ratio = target_mid/peak (linear E×G model). Apply safety and cap.
+_PREDICT_SAFETY = 0.96   # aim slightly under target; must land in [target_low, target_high]
+_MAX_UP_RATIO = 3.0      # cap predicted step so we don't 10× in one frame with lag
+_MAX_DOWN = 0.5
+_SATURATED_RATIO = 0.8
 _SATURATED = 0.99
 
 _DEFAULT_DT = 1.0 / 30.0
@@ -75,8 +72,8 @@ class AutoExposureController:
         self.tau = smoothing_tau or peak_smoothing_period_sec
         self.verbose = verbose
         self._ema: float | None = None
-        self._skip: bool = False
-        self.at_max: bool = False  # exposure is at max and peak still low; AG must help
+        self._skip_remaining: int = 0  # frames to skip after a change (camera/filter lag)
+        self.at_max: bool = False
 
     @property
     def smoothed_peak(self) -> float | None:
@@ -92,9 +89,9 @@ class AutoExposureController:
         raw = float(np.max(data.intensity))
         self._ema = _ema(raw, self._ema, _frame_dt(data.exposure_us), self.tau)
 
-        if self._skip:
-            self._skip = False
-            return True  # still busy: camera hasn't settled, block AG
+        if self._skip_remaining > 0:
+            self._skip_remaining -= 1
+            return True
 
         peak = self._ema
         current = get_exposure()
@@ -102,45 +99,53 @@ class AutoExposureController:
         if peak > self.target_high:
             self.at_max = False
             if current <= self.exposure_min_us:
-                return False  # at floor; AG must reduce gain
-            ratio = _MAX_DOWN if peak >= _SATURATED else max(_MAX_DOWN, self.target_mid / peak)
+                return False
+            ratio = _SATURATED_RATIO if peak >= _SATURATED else max(_MAX_DOWN, self.target_mid / peak)
             new = max(self.exposure_min_us, int(current * ratio))
             if new >= current:
                 return False
             set_exposure(new)
             set_display(new)
-            self._skip = True
+            self._skip_remaining = 2
             if self.verbose:
                 print(f"[AE] {new} us (peak {peak:.3f}↓)")
             return True
 
         if peak < self.target_low:
             if self.at_max:
-                return False  # exposure can't help; AG must increase gain
+                return False
             if current >= self.exposure_max_us:
                 self.at_max = True
                 return False
-            ratio = min(_MAX_UP, self.target_mid / max(peak, _MIN_PEAK))
+            # Predict: peak ∝ E×G, so E_new = E_current * (target_mid/peak) hits target. Prefer E over G.
+            ratio = (self.target_mid / max(peak, _MIN_PEAK)) * _PREDICT_SAFETY
+            ratio = min(ratio, _MAX_UP_RATIO)
             new = min(self.exposure_max_us, int(current * ratio))
             if new <= current:
                 self.at_max = True
                 return False
             set_exposure(new)
             set_display(new)
-            self._skip = True
+            self._skip_remaining = 2
             if self.verbose:
-                print(f"[AE] {new} us (peak {peak:.3f}↑)")
+                print(f"[AE] {new} us (peak {peak:.3f}↑ pred)")
             return True
 
-        # In band.
         self.at_max = False
         return False
+
+
+# When exposure is below this, AG will try to reduce gain (and let AE increase exposure) for better SNR.
+PREFER_EXPOSURE_BELOW_US = 500_000
+_PREFER_GAIN_DOWN_RATIO = 0.95
 
 
 class AutoGainController:
     """Proportional AG: scales gain so peak converges to target_mid.
 
     Secondary actuator: only runs when AE is in-band or at its exposure limit.
+    When in band and exposure < prefer_exposure_below_us, reduces gain so AE can
+    increase exposure (lower gain → better noise).
     """
 
     def __init__(
@@ -150,6 +155,7 @@ class AutoGainController:
         target_low: float = TARGET_LOW,
         target_high: float = TARGET_HIGH,
         smoothing_tau: float = 0.05,
+        prefer_exposure_below_us: int = PREFER_EXPOSURE_BELOW_US,
         verbose: bool = True,
         # Legacy params: accepted for caller compatibility, ignored.
         gain_step_threshold: float = 0.2,
@@ -162,9 +168,10 @@ class AutoGainController:
         self.target_high = target_high
         self.target_mid = (target_low + target_high) / 2.0
         self.tau = smoothing_tau or peak_smoothing_period_sec
+        self.prefer_exposure_below_us = prefer_exposure_below_us
         self.verbose = verbose
         self._ema: float | None = None
-        self._skip: bool = False
+        self._skip_remaining: int = 0
 
     @property
     def smoothed_peak(self) -> float | None:
@@ -180,23 +187,24 @@ class AutoGainController:
         raw = float(np.max(data.intensity))
         self._ema = _ema(raw, self._ema, _frame_dt(data.exposure_us), self.tau)
 
-        if self._skip:
-            self._skip = False
+        if self._skip_remaining > 0:
+            self._skip_remaining -= 1
             return False
 
         peak = self._ema
         current = get_gain()
+        exposure_us = data.exposure_us or 0
 
         if peak > self.target_high:
             if current <= self.gain_min:
                 return False
-            ratio = _MAX_DOWN if peak >= _SATURATED else max(_MAX_DOWN, self.target_mid / peak)
+            ratio = _SATURATED_RATIO if peak >= _SATURATED else max(_MAX_DOWN, self.target_mid / peak)
             new = max(self.gain_min, current * ratio)
             if new >= current - 0.01:
                 return False
             set_gain(new)
             set_display(new)
-            self._skip = True
+            self._skip_remaining = 2
             if self.verbose:
                 print(f"[AG] {new:.2f}x (peak {peak:.3f}↓)")
             return True
@@ -204,16 +212,32 @@ class AutoGainController:
         if peak < self.target_low:
             if current >= self.gain_max:
                 return False
-            ratio = min(_MAX_UP, self.target_mid / max(peak, _MIN_PEAK))
+            # Predict: peak ∝ E×G. Only increase G when E is at max (strive to keep G small).
+            ratio = (self.target_mid / max(peak, _MIN_PEAK)) * _PREDICT_SAFETY
+            ratio = min(ratio, _MAX_UP_RATIO)
             new = min(self.gain_max, current * ratio)
             if new <= current + 0.01:
                 return False
             set_gain(new)
             set_display(new)
-            self._skip = True
+            self._skip_remaining = 2
             if self.verbose:
-                print(f"[AG] {new:.2f}x (peak {peak:.3f}↑)")
+                print(f"[AG] {new:.2f}x (peak {peak:.3f}↑ pred)")
             return True
+
+        if (
+            exposure_us > 0
+            and exposure_us < self.prefer_exposure_below_us
+            and current > self.gain_min
+        ):
+            new = max(self.gain_min, current * _PREFER_GAIN_DOWN_RATIO)
+            if new < current - 0.01:
+                set_gain(new)
+                set_display(new)
+                self._skip_remaining = 2
+                if self.verbose:
+                    print(f"[AG] {new:.2f}x (prefer exposure, peak {peak:.3f})")
+                return True
 
         return False
 
