@@ -12,6 +12,9 @@ from ..core.spectrum import SpectrumData
 _GOLDEN = (math.sqrt(5) - 1) / 2  # ~0.618
 _INV_GOLDEN = 1.0 - _GOLDEN  # ~0.382
 
+# When bracket collapses, bias toward underexposed/low-gain side to avoid blowing highlights.
+_CONVERGE_BIAS_LOW = 0.25
+
 
 def _peak_vs_target(
     current_max: float,
@@ -93,7 +96,7 @@ class AutoGainController:
             else:
                 self._search_high = self._search_last_gain
             if self._search_high - self._search_low <= self.gain_step_threshold:
-                new_gain = (self._search_low + self._search_high) / 2.0
+                new_gain = self._search_low + (self._search_high - self._search_low) * _CONVERGE_BIAS_LOW
                 new_gain = max(self.gain_min, min(self.gain_max, new_gain))
                 set_gain(new_gain)
                 set_display_gain(new_gain)
@@ -149,11 +152,13 @@ class AutoExposureController:
         self,
         exposure_min_us: int = 100,
         exposure_max_us: int = 1_000_000,  # 1 s max for auto (manual can use capturer up to driver limit)
+        exposure_preferred_max_us: int = 500_000,  # Prefer exposure ≤ this to allow lower gain (less noise)
         exposure_step_min: int = 50,
         verbose: bool = True,
     ):
         self.exposure_min_us = exposure_min_us
         self.exposure_max_us = exposure_max_us
+        self.exposure_preferred_max_us = exposure_preferred_max_us
         self.exposure_step_min = exposure_step_min
         self.verbose = verbose
         self._search_low_us: int | None = None
@@ -200,7 +205,8 @@ class AutoExposureController:
             else:
                 self._search_high_us = self._search_last_exposure_us
             if self._search_high_us - self._search_low_us <= self.exposure_step_min:
-                new_exposure = (self._search_low_us + self._search_high_us) // 2
+                span = self._search_high_us - self._search_low_us
+                new_exposure = self._search_low_us + int(span * _CONVERGE_BIAS_LOW)
                 new_exposure = max(
                     self.exposure_min_us,
                     min(self.exposure_max_us, new_exposure),
@@ -239,7 +245,9 @@ class AutoExposureController:
 
         if kind == "low":
             self._search_low_us = current_exposure
-            self._search_high_us = self.exposure_max_us
+            # Prefer exposure ≤ preferred_max first (lower gain, less noise); then allow up to full max.
+            high_cap = self.exposure_preferred_max_us if current_exposure < self.exposure_preferred_max_us else self.exposure_max_us
+            self._search_high_us = min(self.exposure_max_us, high_cap)
         else:
             self._search_low_us = self.exposure_min_us
             self._search_high_us = current_exposure
