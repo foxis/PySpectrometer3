@@ -18,6 +18,9 @@ TARGET_PEAK = 0.875
 # Damp the multiplicative step so we don't overshoot (ratio^step_damping). 1.0 = full step, 0.4 = conservative.
 STEP_DAMPING = 0.4
 
+# Cap upward step so smoothing lag cannot cause a single big overshoot (e.g. "into range then up much higher").
+MAX_UP_RATIO = 1.2
+
 # Require this many consecutive out-of-band frames before acting (avoids one noisy frame).
 _SUSTAIN_COUNT = 2
 
@@ -137,6 +140,8 @@ class AutoGainController:
 
         ratio = TARGET_PEAK / max(current_max, _MIN_PEAK)
         effective_ratio = ratio ** STEP_DAMPING
+        if effective_ratio > 1.0:
+            effective_ratio = min(effective_ratio, MAX_UP_RATIO)
         new_gain = current_gain * effective_ratio
         new_gain = max(self.gain_min, min(self.gain_max, new_gain))
         set_gain(new_gain)
@@ -231,6 +236,8 @@ class AutoExposureController:
 
         ratio = TARGET_PEAK / max(current_max, _MIN_PEAK)
         effective_ratio = ratio ** STEP_DAMPING
+        if effective_ratio > 1.0:
+            effective_ratio = min(effective_ratio, MAX_UP_RATIO)
         new_exposure = int(current_exposure * effective_ratio)
         # Prefer exposure ≤ preferred_max when underexposed; only allow higher once we're there.
         if kind == "low" and current_exposure < self.exposure_preferred_max_us:

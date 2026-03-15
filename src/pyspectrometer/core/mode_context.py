@@ -76,12 +76,18 @@ class ModeContext:
     last_auto_calibrate_time: float = 0.0
     auto_calibrate_debounce_sec: float = 1.5
 
+    # After an exposure adjustment, skip gain for this many frames so we see the new exposure before changing gain (avoids alternating E-down then G-down and overshoot).
+    gain_cooldown_frames_remaining: int = 0
+
     def handle_auto_gain_exposure(self, data: SpectrumData) -> None:
         """Run auto-gain and auto-exposure adjustment (orchestrator calls each frame)."""
         if not self.auto_gain_enabled and not self.auto_exposure_enabled:
             return
         if self.frozen_spectrum:
             return
+
+        if self.gain_cooldown_frames_remaining > 0:
+            self.gain_cooldown_frames_remaining -= 1
 
         def get_gain() -> float:
             return self.camera.gain
@@ -96,7 +102,7 @@ class ModeContext:
             if hasattr(self.camera, "exposure"):
                 self.camera.exposure = v
 
-        # Adjust at most one per frame so exposure and gain do not fight.
+        # Adjust at most one per frame; after exposure change, cooldown gain so we don't alternate E-down then G-down and overshoot.
         if self.auto_exposure_enabled:
             if self.auto_exposure.adjust(
                 data,
@@ -104,8 +110,9 @@ class ModeContext:
                 set_exposure,
                 self.display.set_exposure_value,
             ):
+                self.gain_cooldown_frames_remaining = 3
                 return
-        if self.auto_gain_enabled:
+        if self.auto_gain_enabled and self.gain_cooldown_frames_remaining <= 0:
             self.auto_gain.adjust(
                 data,
                 get_gain,

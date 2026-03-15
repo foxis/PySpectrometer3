@@ -180,11 +180,17 @@ def _capture_loop(
     def noop(_: float | int) -> None:
         pass
 
+    # After an exposure adjustment, skip gain for this many frames so we see the new exposure before changing gain (avoids alternating E-down then G-down and overshoot).
+    gain_cooldown_remaining = 0
+
     try:
         while True:
             frame = camera.capture()
 
             if (auto_gain or auto_exposure) and extractor is not None:
+                if gain_cooldown_remaining > 0:
+                    gain_cooldown_remaining -= 1
+
                 extraction = extractor.extract(frame, max_val=max_val)
                 intensity = extraction.intensity.astype("float32")
                 n = len(intensity)
@@ -196,14 +202,18 @@ def _capture_loop(
                     exposure_us=getattr(camera, "exposure", None),
                     gain=getattr(camera, "gain", None),
                 )
+                # At most one of AE or AG per frame; after exposure change, cooldown gain so we don't alternate E-down then G-down.
+                exposure_adjusted = False
                 if auto_exposure_ctrl:
-                    auto_exposure_ctrl.adjust(
+                    exposure_adjusted = auto_exposure_ctrl.adjust(
                         data,
                         lambda: camera.exposure,
                         lambda v: setattr(camera, "exposure", v),
                         noop,
                     )
-                if auto_gain_ctrl:
+                    if exposure_adjusted:
+                        gain_cooldown_remaining = 3
+                if auto_gain_ctrl and not exposure_adjusted and gain_cooldown_remaining <= 0:
                     auto_gain_ctrl.adjust(
                         data,
                         lambda: camera.gain,
