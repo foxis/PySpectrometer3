@@ -18,8 +18,8 @@ TARGET_PEAK = 0.875
 # Only treat as overexposed ("high") when peak exceeds this. Slightly above 0.95 to avoid pulsing at the boundary.
 TARGET_HIGH_HYSTERESIS = 0.96
 
-# When coming down from overexposed, treat this as "ok" low bound so we don't overshoot and then increase again.
-TARGET_LOW_AFTER_HIGH = 0.70
+# When coming down from overexposed, treat this as "ok" low bound so we don't overshoot and oscillate.
+TARGET_LOW_AFTER_HIGH = 0.62
 
 # Damp the multiplicative step so we don't overshoot (ratio^damping). 1.0 = full step, 0.4 = conservative.
 STEP_DAMPING = 0.4
@@ -31,9 +31,11 @@ _RATIO_FAR_UP = 1.15     # ratio above this (underexposed) → use STEP_DAMPING_
 
 # Cap upward step so smoothing lag cannot cause a single big overshoot (e.g. "into range then up much higher").
 MAX_UP_RATIO = 1.2
+# Cap downward step when overexposed (peak clipped at 1.0) so we don't overshoot into underexposed and oscillate.
+MAX_DOWN_RATIO = 0.88
 
-# Consecutive out-of-band frames before acting (avoids one noisy frame).
-_SUSTAIN_COUNT = 2
+# Consecutive out-of-band frames before acting (avoids one noisy frame and reduces oscillation).
+_SUSTAIN_COUNT = 3
 
 # Minimum meaningful peak to avoid division by zero.
 _MIN_PEAK = 1e-6
@@ -266,6 +268,8 @@ class AutoExposureController:
         effective_ratio = ratio ** damping
         if effective_ratio > 1.0:
             effective_ratio = min(effective_ratio, MAX_UP_RATIO)
+        else:
+            effective_ratio = max(effective_ratio, MAX_DOWN_RATIO)
         new_exposure = int(current_exposure * effective_ratio)
         # Prefer exposure ≤ preferred_max when underexposed; only allow higher once we're there.
         if kind == "low" and current_exposure < self.exposure_preferred_max_us:

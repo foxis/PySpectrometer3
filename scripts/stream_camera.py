@@ -181,8 +181,6 @@ def _capture_loop(
     extractor.set_dimensions(actual_w, actual_h)
     extractor.set_spectrum_y_center(actual_h // 2)
 
-    max_val = float((1 << camera.bit_depth) - 1)
-
     def noop(_: float | int) -> None:
         pass
 
@@ -191,6 +189,12 @@ def _capture_loop(
     try:
         while True:
             frame = camera.capture()
+
+            # max_val from buffer bit depth (dtype), not from image content. uint8 → 255, uint16 → 1023/65535.
+            if frame.dtype == np.uint8:
+                max_val = 255.0
+            else:
+                max_val = float((1 << camera.bit_depth) - 1)
 
             if auto_gain or auto_exposure:
                 extraction = extractor.extract(frame, max_val=max_val)
