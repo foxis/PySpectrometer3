@@ -116,8 +116,10 @@ class Capture(CameraInterface):
             bit_depth = mode.get("bit_depth", "?")
             print(f"  [{i}] {fmt} {size[0]}x{size[1]} {bit_depth}-bit")
 
-        frame_duration = 1_000_000 // self._fps
-        video_config = self._configure(frame_duration)
+        # Min frame time from fps; max 10 s so exposure can go up to 10 s (driver limit).
+        frame_duration_min = 1_000_000 // self._fps
+        frame_duration_max = 10_000_000  # 10 s (manual); auto caps at 1 s in AutoExposureController
+        video_config = self._configure(frame_duration_min, frame_duration_max)
 
         self._camera.configure(video_config)
 
@@ -138,18 +140,21 @@ class Capture(CameraInterface):
 
         self._running = True
 
-    def _configure(self, frame_duration: int) -> dict:
-        """Configure based on requested mode and available formats."""
+    def _configure(self, frame_duration_min: int, frame_duration_max: int) -> dict:
+        """Configure based on requested mode and available formats.
+
+        frame_duration_min/max: FrameDurationLimits (µs). Exposure cannot exceed frame duration.
+        """
         if not self._monochrome:
-            return self._config_color(frame_duration)
+            return self._config_color(frame_duration_min, frame_duration_max)
         sensor_modes = self._camera.sensor_modes
         best_mode = self._find_best_monochrome_mode(sensor_modes)
         if best_mode and best_mode.get("bit_depth", 8) >= 10:
-            return self._config_raw(best_mode, frame_duration)
-        result = self._try_monochrome_formats(frame_duration)
+            return self._config_raw(best_mode, frame_duration_min, frame_duration_max)
+        result = self._try_monochrome_formats(frame_duration_min, frame_duration_max)
         if result is not None:
             return result
-        return self._config_color(frame_duration)
+        return self._config_color(frame_duration_min, frame_duration_max)
 
     def _find_best_monochrome_mode(self, sensor_modes: list) -> dict | None:
         """Find best monochrome mode: sufficient bit depth, best match to requested size.
@@ -171,7 +176,9 @@ class Capture(CameraInterface):
 
         return min(candidates, key=score)
 
-    def _config_raw(self, best_mode: dict, frame_duration: int) -> dict:
+    def _config_raw(
+        self, best_mode: dict, frame_duration_min: int, frame_duration_max: int
+    ) -> dict:
         """Create config for raw capture (10+ bit)."""
         raw_format = best_mode.get("format")
         raw_size = best_mode.get("size", (self._width, self._height))
@@ -183,16 +190,22 @@ class Capture(CameraInterface):
         return self._camera.create_video_configuration(
             main={"format": "YUV420", "size": (self._width, self._height)},
             raw={"format": raw_format, "size": raw_size},
-            controls={"FrameDurationLimits": (frame_duration, frame_duration)},
+            controls={
+                "FrameDurationLimits": (frame_duration_min, frame_duration_max),
+            },
         )
 
-    def _try_monochrome_formats(self, frame_duration: int) -> dict | None:
+    def _try_monochrome_formats(
+        self, frame_duration_min: int, frame_duration_max: int
+    ) -> dict | None:
         """Try Y16, Y10, Y8, YUV420; return config or None."""
         for fmt in ["Y16", "Y10", "Y8", "YUV420"]:
             try:
                 config = self._camera.create_video_configuration(
                     main={"format": fmt, "size": (self._width, self._height)},
-                    controls={"FrameDurationLimits": (frame_duration, frame_duration)},
+                    controls={
+                        "FrameDurationLimits": (frame_duration_min, frame_duration_max),
+                    },
                 )
                 match fmt:
                     case "Y16":
@@ -207,14 +220,18 @@ class Capture(CameraInterface):
                 continue
         return None
 
-    def _config_color(self, frame_duration: int) -> dict:
+    def _config_color(
+        self, frame_duration_min: int, frame_duration_max: int
+    ) -> dict:
         """Create config for RGB888 color (8-bit)."""
         self._actual_bit_depth = 8
         self._monochrome = False
         print("Using RGB888 (8-bit color)")
         return self._camera.create_video_configuration(
             main={"format": "RGB888", "size": (self._width, self._height)},
-            controls={"FrameDurationLimits": (frame_duration, frame_duration)},
+            controls={
+                "FrameDurationLimits": (frame_duration_min, frame_duration_max),
+            },
         )
 
     def stop(self) -> None:
