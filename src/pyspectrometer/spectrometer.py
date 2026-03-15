@@ -114,8 +114,15 @@ class Spectrometer:
         self._pipeline = ProcessingPipeline([self._savgol_filter, self._peak_detector])
 
         smoothing = self.config.auto.peak_smoothing_period_sec
-        self._auto_gain = AutoGainController(peak_smoothing_period_sec=smoothing)
-        self._auto_exposure = AutoExposureController(peak_smoothing_period_sec=smoothing)
+        rate_hz = self.config.auto.max_adjust_rate_hz
+        self._auto_gain = AutoGainController(
+            peak_smoothing_period_sec=smoothing,
+            max_adjust_rate_hz=rate_hz,
+        )
+        self._auto_exposure = AutoExposureController(
+            peak_smoothing_period_sec=smoothing,
+            max_adjust_rate_hz=rate_hz,
+        )
         from .data.reference_loader import set_reference_dirs
 
         set_reference_dirs(self.config.export.reference_dirs)
@@ -197,6 +204,7 @@ class Spectrometer:
         extraction_result = self._extractor.extract(frame, max_val=max_val)
         cropped = extraction_result.cropped_frame
         intensity = extraction_result.intensity.astype(np.float32)
+        self._ctx.last_raw_extraction_max = float(extraction_result.max_in_roi)
 
         if self._calibration_mode is not None and self._ctx.frozen_spectrum:
             if self._ctx.frozen_intensity is not None:
@@ -400,7 +408,14 @@ class Spectrometer:
                     processed = self._mode_instance.transform_spectrum_data(processed)
                     processed = self._expand_peaks_with_regions(processed)
                     self._ctx.last_data = processed
-                    self._ctx.handle_auto_gain_exposure(processed)
+                    # Use raw extraction max for AE/AG so saturated shows as 1.0 (not white-ref ~0.8).
+                    ae_data = SpectrumData(
+                        intensity=np.array([self._ctx.last_raw_extraction_max], dtype=np.float32),
+                        wavelengths=np.array([0.0]),
+                        exposure_us=processed.exposure_us,
+                        gain=processed.gain,
+                    )
+                    self._ctx.handle_auto_gain_exposure(ae_data)
                     last_frame_received_at = time.time()
                     last_duration_sec = (
                         (processed.exposure_us / 1e6)

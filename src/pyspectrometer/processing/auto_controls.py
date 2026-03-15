@@ -15,13 +15,18 @@ from ..core.spectrum import SpectrumData
 # Target peak (center of 0.80–0.95 band). Multiplicative update drives toward this.
 TARGET_PEAK = 0.875
 
-# Damp the multiplicative step so we don't overshoot (ratio^step_damping). 1.0 = full step, 0.4 = conservative.
+# Damp the multiplicative step so we don't overshoot (ratio^damping). 1.0 = full step, 0.4 = conservative.
 STEP_DAMPING = 0.4
+
+# When far from target, use larger steps (less damping) so we don't take forever to reach proper exposure.
+STEP_DAMPING_WHEN_FAR = 0.75  # ratio far from 1.0 → bigger steps
+_RATIO_FAR_DOWN = 0.92   # ratio below this (overexposed) → use STEP_DAMPING_WHEN_FAR
+_RATIO_FAR_UP = 1.15     # ratio above this (underexposed) → use STEP_DAMPING_WHEN_FAR
 
 # Cap upward step so smoothing lag cannot cause a single big overshoot (e.g. "into range then up much higher").
 MAX_UP_RATIO = 1.2
 
-# Require this many consecutive out-of-band frames before acting (avoids one noisy frame).
+# Consecutive out-of-band frames before acting (avoids one noisy frame).
 _SUSTAIN_COUNT = 2
 
 # Minimum meaningful peak to avoid division by zero.
@@ -58,6 +63,13 @@ def _smooth_peak(
     if smoothed is None:
         return raw_peak
     return alpha * raw_peak + (1.0 - alpha) * smoothed
+
+
+def _effective_damping(ratio: float) -> float:
+    """Use larger steps when far from target so we reach proper exposure in reasonable time."""
+    if ratio < _RATIO_FAR_DOWN or ratio > _RATIO_FAR_UP:
+        return STEP_DAMPING_WHEN_FAR
+    return STEP_DAMPING
 
 
 class AutoGainController:
@@ -139,7 +151,8 @@ class AutoGainController:
             return False
 
         ratio = TARGET_PEAK / max(current_max, _MIN_PEAK)
-        effective_ratio = ratio ** STEP_DAMPING
+        damping = _effective_damping(ratio)
+        effective_ratio = ratio ** damping
         if effective_ratio > 1.0:
             effective_ratio = min(effective_ratio, MAX_UP_RATIO)
         new_gain = current_gain * effective_ratio
@@ -235,7 +248,8 @@ class AutoExposureController:
             return False
 
         ratio = TARGET_PEAK / max(current_max, _MIN_PEAK)
-        effective_ratio = ratio ** STEP_DAMPING
+        damping = _effective_damping(ratio)
+        effective_ratio = ratio ** damping
         if effective_ratio > 1.0:
             effective_ratio = min(effective_ratio, MAX_UP_RATIO)
         new_exposure = int(current_exposure * effective_ratio)

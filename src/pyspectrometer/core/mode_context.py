@@ -60,6 +60,7 @@ class ModeContext:
     last_frame: np.ndarray | None = None
     last_intensity_pre_sensitivity: np.ndarray | None = None
     last_raw_intensity: np.ndarray | None = None  # Pre-process_spectrum for dark capture
+    last_raw_extraction_max: float = 0.0  # Max pixel in extraction ROI (0-1) for AE/AG
 
     # Mutable state (modes read/write; orchestrator reads for loop logic)
     running: bool = True

@@ -133,6 +133,7 @@ def _config_to_dict(config: "Config") -> dict:
         },
         "auto": {
             "peak_smoothing_period_sec": config.auto.peak_smoothing_period_sec,
+            "max_adjust_rate_hz": config.auto.max_adjust_rate_hz,
         },
     }
 
@@ -315,9 +316,10 @@ class WaterfallConfig:
 class AutoConfig:
     """Auto gain / auto exposure configuration."""
 
-    # Exponential smoothing of spectrum peak (seconds). Shorter exposure → longer effective window.
-    # Target ~25 Hz: 0.04 s so filter settles faster after a jump while still filtering 50/60 Hz flicker.
-    peak_smoothing_period_sec: float = 0.04
+    # Exponential smoothing of spectrum peak (seconds). Shorter = faster reaction to over/underexposure.
+    peak_smoothing_period_sec: float = 0.02
+    # Max adjustments per second (rate limit). Higher = faster convergence, more risk of overshoot.
+    max_adjust_rate_hz: float = 20.0
 
 
 @dataclass

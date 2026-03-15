@@ -156,8 +156,9 @@ def _capture_loop(
     )
 
     smoothing = config.auto.peak_smoothing_period_sec
-    auto_gain_ctrl = AutoGainController(peak_smoothing_period_sec=smoothing, verbose=True) if auto_gain else None
-    auto_exposure_ctrl = AutoExposureController(peak_smoothing_period_sec=smoothing, verbose=True) if auto_exposure else None
+    rate_hz = getattr(config.auto, "max_adjust_rate_hz", 20.0)
+    auto_gain_ctrl = AutoGainController(peak_smoothing_period_sec=smoothing, max_adjust_rate_hz=rate_hz, verbose=True) if auto_gain else None
+    auto_exposure_ctrl = AutoExposureController(peak_smoothing_period_sec=smoothing, max_adjust_rate_hz=rate_hz, verbose=True) if auto_exposure else None
     extractor: SpectrumExtractor | None = None
     if auto_gain or auto_exposure:
         extractor = SpectrumExtractor(
@@ -194,9 +195,11 @@ def _capture_loop(
                 extraction = extractor.extract(frame, max_val=max_val)
                 intensity = extraction.intensity.astype("float32")
                 n = len(intensity)
+                # Use true max pixel in extraction ROI for AE/AG so saturated shows as 1.0 (not median ~0.8).
+                peak_for_ae = float(extraction.max_in_roi)
                 data = SpectrumData(
-                    intensity=intensity,
-                    wavelengths=np.linspace(0.0, 1.0, n),
+                    intensity=np.array([peak_for_ae], dtype=np.float32),
+                    wavelengths=np.array([0.0]),
                     raw_frame=frame,
                     cropped_frame=extraction.cropped_frame,
                     exposure_us=getattr(camera, "exposure", None),
