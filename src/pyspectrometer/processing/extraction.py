@@ -143,15 +143,19 @@ class SpectrumExtractor:
 
         intensity = self._extract_with_method(gray)
 
-        # Fixed divisor from bit depth: raw / max_val → 0-1. For 10-bit, max_val=1023. Does not change per frame.
+        # Divisor: raw / divisor → 0-1. Use max_val from bit depth (1023 for 10-bit). If frame range is
+        # actually lower (e.g. 8-bit data but driver reports 10-bit), use observed max so AE sees saturation.
         max_val_used = max_val if max_val is not None and max_val > 0 else 1023.0
-        intensity = (intensity.astype(np.float32) / max_val_used).astype(np.float32)
-
-        # Max pixel in extraction ROI so AE/AG see true saturation (1.0 when clipped).
         half_perp = self.perpendicular_width // 2
         y_start = max(0, self.spectrum_y_center - half_perp)
         y_end = min(gray.shape[0], self.spectrum_y_center + half_perp + 1)
         roi = gray[y_start:y_end, :]
+        actual_max = float(np.max(roi))
+        if actual_max > 0 and actual_max < max_val_used * 0.5:
+            max_val_used = max(actual_max, 1.0)
+        intensity = (intensity.astype(np.float32) / max_val_used).astype(np.float32)
+
+        # Max pixel in ROI so AE/AG see true saturation (1.0 when clipped).
         max_in_roi = np.float32(np.max(roi) / max_val_used)
 
         # Use rotated frame for preview so lines appear straight
