@@ -15,6 +15,9 @@ _INV_GOLDEN = 1.0 - _GOLDEN  # ~0.382
 # When bracket collapses, bias toward underexposed/low-gain side to avoid blowing highlights.
 _CONVERGE_BIAS_LOW = 0.25
 
+# Require this many consecutive out-of-band frames before starting a new search (avoids restart on one noisy frame).
+_SUSTAIN_COUNT = 2
+
 
 def _peak_vs_target(
     current_max: float,
@@ -59,6 +62,9 @@ class AutoGainController:
         self._search_low: float | None = None
         self._search_high: float | None = None
         self._search_last_gain: float | None = None
+        self._consecutive_high: int = 0
+        self._consecutive_low: int = 0
+        self._skip_next_frame: bool = False  # Skip one frame after changing gain (avoids mid-frame artifacts).
 
     def adjust(
         self,
@@ -80,6 +86,9 @@ class AutoGainController:
         """
         if data is None or len(data.intensity) == 0:
             return False
+        if self._skip_next_frame:
+            self._skip_next_frame = False
+            return False
 
         current_max = float(np.max(data.intensity))
         current_gain = get_gain()
@@ -90,6 +99,7 @@ class AutoGainController:
             last_ok = _peak_vs_target(peak_at_last, 1.0)
             if last_ok == "ok":
                 self._search_low = self._search_high = self._search_last_gain = None
+                self._consecutive_high = self._consecutive_low = 0
                 return False
             if last_ok == "low":
                 self._search_low = self._search_last_gain
@@ -101,6 +111,8 @@ class AutoGainController:
                 set_gain(new_gain)
                 set_display_gain(new_gain)
                 self._search_low = self._search_high = self._search_last_gain = None
+                self._consecutive_high = self._consecutive_low = 0
+                self._skip_next_frame = True
                 if self.verbose:
                     print(f"[AG] Gain: {new_gain:.1f} (converged, peak: {current_max:.3f})")
                 return True
@@ -109,14 +121,28 @@ class AutoGainController:
             set_gain(next_gain)
             set_display_gain(next_gain)
             self._search_last_gain = next_gain
+            self._skip_next_frame = True
             if self.verbose:
                 print(f"[AG] Gain: {next_gain:.1f} (bracket [{self._search_low:.1f},{self._search_high:.1f}], peak: {current_max:.3f})")
             return True
 
         if kind == "ok":
+            self._consecutive_high = self._consecutive_low = 0
             return False
 
-        # Do not start a new search if already at limit (avoids endless restart when e.g. max exposure still too dark)
+        # Sustain: only start a new search after consecutive out-of-band (avoids restart on one noisy frame).
+        if kind == "low":
+            self._consecutive_low += 1
+            self._consecutive_high = 0
+            if self._consecutive_low < _SUSTAIN_COUNT:
+                return False
+        else:
+            self._consecutive_high += 1
+            self._consecutive_low = 0
+            if self._consecutive_high < _SUSTAIN_COUNT:
+                return False
+
+        # Do not start a new search if already at limit (never reduce below min or increase above max).
         if kind == "low" and current_gain >= self.gain_max:
             return False
         if kind == "high" and current_gain <= self.gain_min:
@@ -133,6 +159,7 @@ class AutoGainController:
         set_gain(next_gain)
         set_display_gain(next_gain)
         self._search_last_gain = next_gain
+        self._skip_next_frame = True
         if self.verbose:
             print(f"[AG] Gain: {next_gain:.1f} (seek start, peak: {current_max:.3f})")
         return True
@@ -164,6 +191,9 @@ class AutoExposureController:
         self._search_low_us: int | None = None
         self._search_high_us: int | None = None
         self._search_last_exposure_us: int | None = None
+        self._consecutive_high: int = 0
+        self._consecutive_low: int = 0
+        self._skip_next_frame: bool = False  # Skip one frame after changing exposure (avoids mid-frame artifacts).
 
     def adjust(
         self,
@@ -185,6 +215,9 @@ class AutoExposureController:
         """
         if data is None or len(data.intensity) == 0:
             return False
+        if self._skip_next_frame:
+            self._skip_next_frame = False
+            return False
 
         current_max = float(np.max(data.intensity))
         current_exposure = get_exposure()
@@ -199,6 +232,7 @@ class AutoExposureController:
             if last_ok == "ok":
                 self._search_low_us = self._search_high_us = None
                 self._search_last_exposure_us = None
+                self._consecutive_high = self._consecutive_low = 0
                 return False
             if last_ok == "low":
                 self._search_low_us = self._search_last_exposure_us
@@ -215,6 +249,8 @@ class AutoExposureController:
                 set_display_exposure(new_exposure)
                 self._search_low_us = self._search_high_us = None
                 self._search_last_exposure_us = None
+                self._consecutive_high = self._consecutive_low = 0
+                self._skip_next_frame = True
                 if self.verbose:
                     print(f"[AE] Exposure: {new_exposure} us (converged, peak: {current_max:.3f})")
                 return True
@@ -227,6 +263,7 @@ class AutoExposureController:
             set_exposure(next_exposure)
             set_display_exposure(next_exposure)
             self._search_last_exposure_us = next_exposure
+            self._skip_next_frame = True
             if self.verbose:
                 print(
                     f"[AE] Exposure: {next_exposure} us (bracket "
@@ -235,9 +272,22 @@ class AutoExposureController:
             return True
 
         if kind == "ok":
+            self._consecutive_high = self._consecutive_low = 0
             return False
 
-        # Do not start a new search if already at limit (avoids endless restart when e.g. max exposure still too dark)
+        # Sustain: only start a new search after consecutive out-of-band (avoids restart on one noisy frame).
+        if kind == "low":
+            self._consecutive_low += 1
+            self._consecutive_high = 0
+            if self._consecutive_low < _SUSTAIN_COUNT:
+                return False
+        else:
+            self._consecutive_high += 1
+            self._consecutive_low = 0
+            if self._consecutive_high < _SUSTAIN_COUNT:
+                return False
+
+        # Do not start a new search if already at limit (never reduce below min or increase above max).
         if kind == "low" and current_exposure >= self.exposure_max_us:
             return False
         if kind == "high" and current_exposure <= self.exposure_min_us:
@@ -260,6 +310,7 @@ class AutoExposureController:
         set_exposure(next_exposure)
         set_display_exposure(next_exposure)
         self._search_last_exposure_us = next_exposure
+        self._skip_next_frame = True
         if self.verbose:
             print(f"[AE] Exposure: {next_exposure} us (seek start, peak: {current_max:.3f})")
         return True
