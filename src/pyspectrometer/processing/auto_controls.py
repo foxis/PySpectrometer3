@@ -1,53 +1,40 @@
 """Auto gain and auto exposure controllers for spectrum peak leveling."""
 
 from collections.abc import Callable
+import math
+from typing import Literal
 
 import numpy as np
 
 from ..core.spectrum import SpectrumData
 
+# Golden ratio (1-φ) for bracket search: one evaluation per step, O(log(range)) convergence.
+_GOLDEN = (math.sqrt(5) - 1) / 2  # ~0.618
+_INV_GOLDEN = 1.0 - _GOLDEN  # ~0.382
 
-def _compute_adjustment_ratio(
+
+def _peak_vs_target(
     current_max: float,
-    max_intensity: float,
-    threshold_high_frac: float = 0.95,
-    threshold_low_frac: float = 0.50,
-    ratio_min: float = 0.7,
-    ratio_max: float = 1.5,
-) -> float | None:
-    """Compute gain/exposure adjustment ratio from spectrum peak level.
-
-    Returns None if peak is in acceptable range (no adjustment needed).
-
-    Args:
-        current_max: Current maximum intensity (0-1)
-        max_intensity: Maximum possible intensity (typically 1.0)
-        threshold_high_frac: Above this = saturating, reduce
-        threshold_low_frac: Below this = too dark, increase
-        ratio_min: Minimum adjustment ratio per step
-        ratio_max: Maximum adjustment ratio per step
-
-    Returns:
-        Adjustment ratio to apply, or None if no change needed
-    """
-    threshold_high = max_intensity * threshold_high_frac
-    threshold_target = max_intensity * threshold_high_frac
-    threshold_low = max_intensity * threshold_low_frac
-
+    max_intensity: float = 1.0,
+    target_high_frac: float = 0.95,
+    target_low_frac: float = 0.50,
+) -> Literal["low", "high", "ok"]:
+    """Classify spectrum peak vs target band. Used by bracket search."""
     if current_max < max_intensity * 0.02:
-        ratio = 1.5  # No signal - increase significantly
-    elif current_max > threshold_high:
-        ratio = threshold_target / current_max
-    elif current_max < threshold_low:
-        ratio = threshold_target / current_max
-    else:
-        return None
-
-    return max(ratio_min, min(ratio_max, ratio))
+        return "low"
+    if current_max > max_intensity * target_high_frac:
+        return "high"
+    if current_max < max_intensity * target_low_frac:
+        return "low"
+    return "ok"
 
 
 class AutoGainController:
-    """Adjusts camera gain to keep spectrum peak in target range (50-95%)."""
+    """Adjusts camera gain to keep spectrum peak in target range (50-95%).
+
+    Uses golden-ratio bracket search (Fibonacci-style) so each step halves the
+    uncertainty; settles in O(log(range)) steps instead of fixed ratio steps.
+    """
 
     def __init__(
         self,
@@ -60,6 +47,9 @@ class AutoGainController:
         self.gain_max = gain_max
         self.gain_step_threshold = gain_step_threshold
         self.verbose = verbose
+        self._search_low: float | None = None
+        self._search_high: float | None = None
+        self._search_last_gain: float | None = None
 
     def adjust(
         self,
@@ -83,27 +73,62 @@ class AutoGainController:
             return False
 
         current_max = float(np.max(data.intensity))
-        max_intensity = 1.0
-        ratio = _compute_adjustment_ratio(current_max, max_intensity)
-        if ratio is None:
-            return False
-
         current_gain = get_gain()
-        new_gain = current_gain * ratio
-        new_gain = max(self.gain_min, min(self.gain_max, new_gain))
+        kind = _peak_vs_target(current_max, 1.0)
 
-        if abs(new_gain - current_gain) <= self.gain_step_threshold:
+        if self._search_last_gain is not None and self._search_high is not None and self._search_low is not None:
+            peak_at_last = current_max
+            last_ok = _peak_vs_target(peak_at_last, 1.0)
+            if last_ok == "ok":
+                self._search_low = self._search_high = self._search_last_gain = None
+                return False
+            if last_ok == "low":
+                self._search_low = self._search_last_gain
+            else:
+                self._search_high = self._search_last_gain
+            if self._search_high - self._search_low <= self.gain_step_threshold:
+                new_gain = (self._search_low + self._search_high) / 2.0
+                new_gain = max(self.gain_min, min(self.gain_max, new_gain))
+                set_gain(new_gain)
+                set_display_gain(new_gain)
+                self._search_low = self._search_high = self._search_last_gain = None
+                if self.verbose:
+                    print(f"[AG] Gain: {new_gain:.1f} (converged, peak: {current_max:.3f})")
+                return True
+            next_gain = self._search_low + (self._search_high - self._search_low) * _INV_GOLDEN
+            next_gain = max(self.gain_min, min(self.gain_max, next_gain))
+            set_gain(next_gain)
+            set_display_gain(next_gain)
+            self._search_last_gain = next_gain
+            if self.verbose:
+                print(f"[AG] Gain: {next_gain:.1f} (bracket [{self._search_low:.1f},{self._search_high:.1f}], peak: {current_max:.3f})")
+            return True
+
+        if kind == "ok":
             return False
 
-        set_gain(new_gain)
-        set_display_gain(new_gain)
+        if kind == "low":
+            self._search_low = current_gain
+            self._search_high = self.gain_max
+        else:
+            self._search_low = self.gain_min
+            self._search_high = current_gain
+        next_gain = self._search_low + (self._search_high - self._search_low) * _INV_GOLDEN
+        next_gain = max(self.gain_min, min(self.gain_max, next_gain))
+        set_gain(next_gain)
+        set_display_gain(next_gain)
+        self._search_last_gain = next_gain
         if self.verbose:
-            print(f"[AG] Gain: {new_gain:.1f} (peak: {current_max:.3f})")
+            print(f"[AG] Gain: {next_gain:.1f} (seek start, peak: {current_max:.3f})")
         return True
 
 
 class AutoExposureController:
-    """Adjusts camera exposure to keep spectrum peak in target range (50-95%)."""
+    """Adjusts camera exposure to keep spectrum peak in target range (50-95%).
+
+    Uses golden-ratio bracket search (Fibonacci-style) so each step halves the
+    uncertainty; settles in O(log(range)) steps instead of fixed ratio steps.
+    """
 
     def __init__(
         self,
@@ -116,6 +141,9 @@ class AutoExposureController:
         self.exposure_max_us = exposure_max_us
         self.exposure_step_min = exposure_step_min
         self.verbose = verbose
+        self._search_low_us: int | None = None
+        self._search_high_us: int | None = None
+        self._search_last_exposure_us: int | None = None
 
     def adjust(
         self,
@@ -139,23 +167,70 @@ class AutoExposureController:
             return False
 
         current_max = float(np.max(data.intensity))
-        max_intensity = 1.0
-        ratio = _compute_adjustment_ratio(current_max, max_intensity)
-        if ratio is None:
-            return False
-
         current_exposure = get_exposure()
-        new_exposure = int(current_exposure * ratio)
-        new_exposure = max(
-            self.exposure_min_us,
-            min(self.exposure_max_us, new_exposure),
-        )
+        kind = _peak_vs_target(current_max, 1.0)
 
-        if abs(new_exposure - current_exposure) <= self.exposure_step_min:
+        if (
+            self._search_last_exposure_us is not None
+            and self._search_high_us is not None
+            and self._search_low_us is not None
+        ):
+            last_ok = _peak_vs_target(current_max, 1.0)
+            if last_ok == "ok":
+                self._search_low_us = self._search_high_us = None
+                self._search_last_exposure_us = None
+                return False
+            if last_ok == "low":
+                self._search_low_us = self._search_last_exposure_us
+            else:
+                self._search_high_us = self._search_last_exposure_us
+            if self._search_high_us - self._search_low_us <= self.exposure_step_min:
+                new_exposure = (self._search_low_us + self._search_high_us) // 2
+                new_exposure = max(
+                    self.exposure_min_us,
+                    min(self.exposure_max_us, new_exposure),
+                )
+                set_exposure(new_exposure)
+                set_display_exposure(new_exposure)
+                self._search_low_us = self._search_high_us = None
+                self._search_last_exposure_us = None
+                if self.verbose:
+                    print(f"[AE] Exposure: {new_exposure} us (converged, peak: {current_max:.3f})")
+                return True
+            span = self._search_high_us - self._search_low_us
+            next_exposure = self._search_low_us + int(span * _INV_GOLDEN)
+            next_exposure = max(
+                self.exposure_min_us,
+                min(self.exposure_max_us, next_exposure),
+            )
+            set_exposure(next_exposure)
+            set_display_exposure(next_exposure)
+            self._search_last_exposure_us = next_exposure
+            if self.verbose:
+                print(
+                    f"[AE] Exposure: {next_exposure} us (bracket "
+                    f"[{self._search_low_us},{self._search_high_us}], peak: {current_max:.3f})"
+                )
+            return True
+
+        if kind == "ok":
             return False
 
-        set_exposure(new_exposure)
-        set_display_exposure(new_exposure)
+        if kind == "low":
+            self._search_low_us = current_exposure
+            self._search_high_us = self.exposure_max_us
+        else:
+            self._search_low_us = self.exposure_min_us
+            self._search_high_us = current_exposure
+        span = self._search_high_us - self._search_low_us
+        next_exposure = self._search_low_us + int(span * _INV_GOLDEN)
+        next_exposure = max(
+            self.exposure_min_us,
+            min(self.exposure_max_us, next_exposure),
+        )
+        set_exposure(next_exposure)
+        set_display_exposure(next_exposure)
+        self._search_last_exposure_us = next_exposure
         if self.verbose:
-            print(f"[AE] Exposure: {new_exposure} us (peak: {current_max:.3f})")
+            print(f"[AE] Exposure: {next_exposure} us (seek start, peak: {current_max:.3f})")
         return True
