@@ -5,6 +5,7 @@ See docs/AUTO_EXPOSURE_ALGORITHM.md.
 """
 
 from collections.abc import Callable
+import time
 from typing import Literal
 
 import numpy as np
@@ -13,6 +14,9 @@ from ..core.spectrum import SpectrumData
 
 # Target peak (center of 0.80–0.95 band). Multiplicative update drives toward this.
 TARGET_PEAK = 0.875
+
+# Damp the multiplicative step so we don't overshoot (ratio^step_damping). 1.0 = full step, 0.4 = conservative.
+STEP_DAMPING = 0.4
 
 # Require this many consecutive out-of-band frames before acting (avoids one noisy frame).
 _SUSTAIN_COUNT = 2
@@ -64,16 +68,19 @@ class AutoGainController:
         gain_min: float = 1.0,
         gain_max: float = 16.0,
         peak_smoothing_period_sec: float = 0.04,
+        max_adjust_rate_hz: float = 10.0,
         verbose: bool = True,
     ):
         self.gain_min = gain_min
         self.gain_max = gain_max
         self.peak_smoothing_period_sec = peak_smoothing_period_sec
+        self.max_adjust_rate_hz = max_adjust_rate_hz
         self.verbose = verbose
         self._consecutive_high: int = 0
         self._consecutive_low: int = 0
         self._skip_next_frame: bool = False
         self._smoothed_peak: float | None = None
+        self._last_gain_adjust_time: float = 0.0
 
     def adjust(
         self,
@@ -122,13 +129,20 @@ class AutoGainController:
         if kind == "high" and current_gain <= self.gain_min:
             return False
 
+        # Rate-limit gain updates (e.g. 10 Hz) so we don't fight exposure and overshoot.
+        now = time.monotonic()
+        min_interval = 1.0 / self.max_adjust_rate_hz if self.max_adjust_rate_hz > 0 else 0.0
+        if min_interval > 0 and (now - self._last_gain_adjust_time) < min_interval:
+            return False
+
         ratio = TARGET_PEAK / max(current_max, _MIN_PEAK)
-        new_gain = current_gain * ratio
+        effective_ratio = ratio ** STEP_DAMPING
+        new_gain = current_gain * effective_ratio
         new_gain = max(self.gain_min, min(self.gain_max, new_gain))
         set_gain(new_gain)
         set_display_gain(new_gain)
         self._skip_next_frame = True
-        self._smoothed_peak = None
+        self._last_gain_adjust_time = now
         if self.verbose:
             print(f"[AG] Gain: {new_gain:.1f} (peak: {current_max:.3f})")
         return True
@@ -147,6 +161,7 @@ class AutoExposureController:
         exposure_max_us: int = 1_000_000,
         exposure_preferred_max_us: int = 500_000,
         peak_smoothing_period_sec: float = 0.04,
+        max_adjust_rate_hz: float = 10.0,
         verbose: bool = True,
     ):
         self.exposure_min_us = exposure_min_us
@@ -154,10 +169,12 @@ class AutoExposureController:
         self.exposure_preferred_max_us = exposure_preferred_max_us
         self.peak_smoothing_period_sec = peak_smoothing_period_sec
         self.verbose = verbose
+        self._max_adjust_rate_hz = max_adjust_rate_hz
         self._consecutive_high: int = 0
         self._consecutive_low: int = 0
         self._skip_next_frame: bool = False
         self._smoothed_peak: float | None = None
+        self._last_exposure_adjust_time: float = 0.0
 
     def adjust(
         self,
@@ -206,8 +223,15 @@ class AutoExposureController:
         if kind == "high" and current_exposure <= self.exposure_min_us:
             return False
 
+        # Rate-limit exposure updates (e.g. 10 Hz) independent of frame rate.
+        now = time.monotonic()
+        min_interval = 1.0 / self._max_adjust_rate_hz if self._max_adjust_rate_hz > 0 else 0.0
+        if min_interval > 0 and (now - self._last_exposure_adjust_time) < min_interval:
+            return False
+
         ratio = TARGET_PEAK / max(current_max, _MIN_PEAK)
-        new_exposure = int(current_exposure * ratio)
+        effective_ratio = ratio ** STEP_DAMPING
+        new_exposure = int(current_exposure * effective_ratio)
         # Prefer exposure ≤ preferred_max when underexposed; only allow higher once we're there.
         if kind == "low" and current_exposure < self.exposure_preferred_max_us:
             high_cap = self.exposure_preferred_max_us
@@ -220,7 +244,7 @@ class AutoExposureController:
         set_exposure(new_exposure)
         set_display_exposure(new_exposure)
         self._skip_next_frame = True
-        self._smoothed_peak = None
+        self._last_exposure_adjust_time = now
         if self.verbose:
             print(f"[AE] Exposure: {new_exposure} us (peak: {current_max:.3f})")
         return True
