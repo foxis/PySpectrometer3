@@ -40,7 +40,8 @@ class ExtractionResult:
     """Result of spectrum extraction.
 
     intensity: float32 array in 0-1 range (normalized by sensor full scale).
-    max_in_roi: Max pixel value in the extraction ROI (0-1), for AE/AG so saturated shows as 1.0.
+    max_in_roi: Max in spectrum strip (0-1), for spectrum-level AE.
+    max_in_frame: Max in full frame (0-1), so AE can avoid overexposed preview image.
     """
 
     intensity: np.ndarray
@@ -49,6 +50,7 @@ class ExtractionResult:
     rotation_angle: float
     perpendicular_width: int
     max_in_roi: float = 0.0
+    max_in_frame: float = 0.0
 
 
 class SpectrumExtractor:
@@ -152,8 +154,9 @@ class SpectrumExtractor:
         y_start = max(0, self.spectrum_y_center - half_perp)
         y_end = min(gray.shape[0], self.spectrum_y_center + half_perp + 1)
         roi = gray[y_start:y_end, :]
-        # Max pixel in ROI so AE/AG see true saturation (1.0 when clipped).
+        # Max in spectrum strip (AE for spectrum); max in full frame (AE for preview).
         max_in_roi = np.float32(np.max(roi) / max_val_used)
+        max_in_frame = np.float32(np.max(gray) / max_val_used)
 
         # Use rotated frame for preview so lines appear straight
         cropped = self._create_cropped_preview(rotated_frame)
@@ -165,6 +168,7 @@ class SpectrumExtractor:
             rotation_angle=self.rotation_angle,
             perpendicular_width=self.perpendicular_width,
             max_in_roi=max_in_roi,
+            max_in_frame=max_in_frame,
         )
 
     def _frame_to_gray(self, frame: np.ndarray) -> np.ndarray:

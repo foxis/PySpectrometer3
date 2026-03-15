@@ -17,7 +17,7 @@ TARGET_HIGH = 0.90
 # Underexposed: predicted ratio = target_mid/peak (linear E×G model). Apply safety and cap.
 _PREDICT_SAFETY = 0.96   # aim slightly under target; must land in [target_low, target_high]
 # Cap up-step so we don't overshoot with Picamera2 pipeline lag (next frame often still old exposure).
-_MAX_UP_RATIO = 1.35    # max 35% increase per step when raising E or G
+_MAX_UP_RATIO = 1.18    # max 18% increase per step when raising E or G (gentler, stays in band)
 _MAX_DOWN = 0.5
 _SATURATED_RATIO = 0.8
 _SATURATED = 0.99

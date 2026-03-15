@@ -198,7 +198,8 @@ def _capture_loop(
 
             if auto_gain or auto_exposure:
                 extraction = extractor.extract(frame, max_val=max_val)
-                peak_for_ae = float(extraction.max_in_roi)
+                # Use full-frame max so overexposed preview (slit, etc.) drives AE; same 0–1 scale (raw/max_val).
+                peak_for_ae = max(float(extraction.max_in_roi), float(extraction.max_in_frame))
                 data = SpectrumData(
                     intensity=np.array([peak_for_ae], dtype=np.float32),
                     wavelengths=np.array([0.0]),

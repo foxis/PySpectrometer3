@@ -26,8 +26,8 @@ from ..processing.auto_controls import (
 _SENSOR_MAX = 1023
 _MIN_FRAME_PERIOD = 1.0 / 30.0
 
-# Slower steps + more skip frames for Picamera2 pipeline lag; allow more steps to converge.
-CONVERGE_STEPS = 120
+# Gentler step (18% max up) + skip frames for pipeline lag; allow more steps to converge.
+CONVERGE_STEPS = 200
 STABILITY_STEPS = 120
 
 PEAK_MAX_OK = 0.93

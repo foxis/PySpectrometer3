@@ -34,6 +34,11 @@ flowchart LR
 
 So **intensity is already gain/exposure dependent**: raw counts scale with gain and exposure; we only divide by a constant `max_val`. Same scene with 2× exposure → ~2× raw → ~2× intensity (until saturation). There is no “standard” scale that is stable across camera settings.
 
+## Auto-exposure peak and bit-depth scaling
+
+- **Normalization**: Peak used for AE/AG is **raw pixel max / max_val**, with `max_val` from bit depth: 255 for 8-bit, **1023** for 10-bit (`(1 << bit_depth) - 1`). Saturated sensor → peak 1.0.
+- **Spectrum vs full frame**: Peak was taken only from the **spectrum ROI** (strip). If the full preview has bright regions (slit, reflections) outside that strip, the image can look overexposed while the spectrum-strip peak stays &lt; 1. The **stream** uses **max(spectrum ROI max, full-frame max)** as the peak for AE so that when any part of the image is saturated we reduce exposure.
+
 ## Linearity and standardization
 
 - **Exposure**: Typically linear (double exposure → double counts). Unit: microseconds.
