@@ -256,7 +256,6 @@ class ColorScienceMode(BaseMode):
 
             case _:
                 # cs_color and any unknown mode: spectrum graph + XYZ/LAB overlay
-                ctx.display.set_graph_info(info_lines)
                 ctx.display.set_graph_override(None)
                 xyz = xyz_lab[0] if xyz_lab else None
                 ctx.display.set_preview_override(

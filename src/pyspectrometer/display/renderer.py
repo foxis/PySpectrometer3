@@ -10,7 +10,7 @@ import numpy as np
 
 from ..config import Config
 from ..core.calibration import Calibration
-from ..core.spectrum import Peak, SpectrumData
+from ..core.spectrum import SpectrumData
 from ..gui.control_bar import ControlBar, ControlBarConfig
 from ..gui.sliders import (
     HorizontalSlider,
@@ -25,11 +25,12 @@ from ..processing.spectrum_transform import (
     params_from_saved,
     transform_bbox_rotated_to_original,
 )
-from ..utils.color import rgb_to_bgr, wavelength_to_rgb
 from ..utils.display import scale_to_uint8
-from ..utils.graph_scale import scale_intensity_to_graph
 from .graticule import GraticuleRenderer
+from .markers import MarkersRenderer
 from .overlay_utils import render_polyline_overlay
+from .peaks import PeaksRenderer, _spectrum_screen_y
+from .spectrum import SpectrogramRenderer
 from .viewport import Viewport
 from .waterfall import WaterfallDisplay
 
@@ -131,6 +132,15 @@ class DisplayManager:
         self.mode = mode
 
         self._graticule = GraticuleRenderer(
+            font=config.display.graph_label_font,
+            font_scale=config.display.graph_label_font_scale,
+        )
+        self._spectrogram = SpectrogramRenderer()
+        self._peaks_renderer = PeaksRenderer(
+            font=config.display.graph_label_font,
+            font_scale=config.display.graph_label_font_scale,
+        )
+        self._markers_renderer = MarkersRenderer(
             font=config.display.graph_label_font,
             font_scale=config.display.graph_label_font_scale,
         )
@@ -517,38 +527,6 @@ class DisplayManager:
         self._dragging_marker_idx = None
         self._drag_is_existing = False
 
-    def _render_marker_lines(
-        self,
-        frame: np.ndarray,
-        y_offset: int,
-        wavelengths: np.ndarray,
-    ) -> None:
-        """Render vertical marker lines with wavelength labels on the waterfall area."""
-        width = frame.shape[1]
-        height = frame.shape[0]
-        n = len(wavelengths)
-        font = self._graph_font
-        font_scale = self._graph_font_scale
-
-        for i, data_idx in enumerate(self.state.marker_lines):
-            if data_idx < 0 or data_idx >= n:
-                continue
-            sx = self._viewport.data_x_to_screen(float(data_idx), width)
-            if not (0 <= sx < width):
-                continue
-
-            is_dragging = self._dragging_marker_idx == i
-            color = (0, 200, 255) if is_dragging else (0, 255, 255)
-
-            cv2.line(frame, (sx, y_offset), (sx, height - 1), color, 1, cv2.LINE_AA)
-
-            label = f"{wavelengths[data_idx]:.0f}"
-            (tw, th), _ = cv2.getTextSize(label, font, font_scale, 1)
-            lx = max(0, min(sx + 2, width - tw - 2))
-            ly = y_offset + th + 4
-            cv2.putText(frame, label, (lx + 1, ly + 1), font, font_scale, (0, 0, 0), 2, cv2.LINE_AA)
-            cv2.putText(frame, label, (lx, ly), font, font_scale, color, 1, cv2.LINE_AA)
-
     def toggle_snap_to_peaks(self) -> bool:
         """Toggle peak snapping for marker line placement. Returns new state."""
         self.state.snap_to_peaks = not self.state.snap_to_peaks
@@ -620,20 +598,22 @@ class DisplayManager:
             self._graticule.render_horizontal_lines(graph)
 
             self._render_reference_spectrum(graph, data)
-            self._render_spectrum(graph, data)
+            self._spectrogram.filled = self.state.spectrum_bars_visible
+            self._spectrogram.selected_index = self.state.selected_spectrum_index
+            self._spectrogram.render(graph, data, self._viewport)
             self._render_mode_overlay(graph)
             self._render_sensitivity_overlay(graph)
-            spectrum_screen_y = self._build_spectrum_screen_y(data, graph_height, width)
             if self.state.peaks_visible:
-                self._render_peaks(graph, data, spectrum_screen_y)
+                self._peaks_renderer.render(graph, data, self._viewport)
 
-            # Labels drawn last so they stay visible; overlap-aware placement
+            # Graticule labels drawn last; need peak screen-x positions for spacing
             peak_screen_x = [
                 self._viewport.data_x_to_screen(float(p.index), width)
                 for p in data.peaks
                 if self._viewport.x_start <= p.index <= self._viewport.x_end
                 and self._viewport.y_min <= p.intensity <= self._viewport.y_max
             ]
+            spectrum_screen_y = _spectrum_screen_y(data, self._viewport, width, graph_height)
             self._graticule.render_labels_on_graph(
                 graph,
                 graticule,
@@ -698,7 +678,8 @@ class DisplayManager:
                 spectrum_vertical = np.vstack((messages, cropped, graph))
             case "spectrum":
                 # Wavelength-colored spectrum bar replacing the camera preview strip
-                spec_bar = self._render_spectrum_bar(data, width, preview_height)
+                spec_bar = np.zeros((preview_height, width, 3), dtype=np.uint8)
+                self._spectrogram.render_bar(spec_bar, data, self._viewport)
                 self._draw_status_overlay(spec_bar, status_segments)
                 spectrum_vertical = np.vstack((messages, spec_bar, graph))
             case "full":
@@ -789,8 +770,13 @@ class DisplayManager:
             )
             if waterfall_mode:
                 if self.state.marker_lines:
-                    self._render_marker_lines(
-                        waterfall_vertical, graticule_y_offset, data.wavelengths
+                    self._markers_renderer.render(
+                        waterfall_vertical,
+                        self.state.marker_lines,
+                        data.wavelengths,
+                        self._viewport,
+                        y_offset=graticule_y_offset,
+                        dragging_idx=self._dragging_marker_idx,
                     )
                 self._render_overlays(waterfall_vertical)
                 cv2.imshow(self.config.waterfall_title, waterfall_vertical)
@@ -907,27 +893,6 @@ class DisplayManager:
             viewport=self._viewport,
         )
 
-    def _build_spectrum_screen_y(
-        self, data: SpectrumData, graph_height: int, width: int
-    ) -> np.ndarray:
-        """Build array of spectrum y per screen x for overlap-aware label placement."""
-        out = np.full(width, -1.0, dtype=np.float32)
-        n = len(data.intensity)
-        if n == 0:
-            return out
-        for x in range(width):
-            data_x = self._viewport.screen_x_to_data(x, width)
-            idx = int(round(data_x))
-            idx = max(0, min(n - 1, idx))
-            if idx < self._viewport.x_start or idx > self._viewport.x_end:
-                continue
-            intensity = data.intensity[idx]
-            if intensity < self._viewport.y_min or intensity > self._viewport.y_max:
-                continue
-            sy = self._viewport.intensity_to_screen_y(intensity, graph_height)
-            out[x] = float(sy)
-        return out
-
     def _render_reference_spectrum(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render the reference spectrum overlay line. Both measured and reference are 0-1."""
         ref_intensity = self.state.reference_spectrum
@@ -941,256 +906,6 @@ class DisplayManager:
             thickness=1,
             viewport=self._viewport,
         )
-
-    def _render_spectrum_bar(
-        self, data: SpectrumData, width: int, height: int
-    ) -> np.ndarray:
-        """Render a wavelength-colored intensity bar at preview_height.
-
-        Each column is colored by its wavelength and brightness-scaled by intensity,
-        producing a vertical strip that shows the spectrum as a glowing colored bar.
-        """
-        bar = np.zeros((height, width, 3), dtype=np.uint8)
-        n = len(data.intensity)
-        if n == 0:
-            return bar
-
-        for x in range(width):
-            data_x = self._viewport.screen_x_to_data(x, width)
-            idx = int(round(data_x))
-            idx = max(0, min(n - 1, idx))
-            intensity = float(data.intensity[idx])
-            rgb = wavelength_to_rgb(round(data.wavelengths[idx]))
-            bgr = rgb_to_bgr(rgb)
-            scaled = tuple(int(c * intensity) for c in bgr)
-            bar[:, x] = scaled
-
-        return bar
-
-    def _render_spectrum(self, graph: np.ndarray, data: SpectrumData) -> None:
-        """Render the spectrum: black line + optional contiguous colored fill.
-
-        Intensity is float32 0-1. Black line always drawn; contiguous wavelength-colored
-        fill when enabled (one vertical strip per screen column, no gaps).
-        """
-        height = graph.shape[0]
-        width = graph.shape[1]
-        n = len(data.intensity)
-        if n == 0:
-            return
-
-        # Build polyline for black line
-        pts: list[tuple[int, int]] = []
-        for i, intensity in enumerate(data.intensity):
-            if i < self._viewport.x_start or i > self._viewport.x_end:
-                continue
-            sx = self._viewport.data_x_to_screen(float(i), width)
-            sy = self._viewport.intensity_to_screen_y(intensity, height)
-            pts.append((sx, sy))
-
-        if len(pts) >= 2:
-            cv2.polylines(graph, [np.array(pts, dtype=np.int32)], False, (0, 0, 0), 1, cv2.LINE_AA)
-
-        # Contiguous colored fill (when enabled): one strip per screen column
-        if self.state.spectrum_bars_visible:
-            sel_idx = self.state.selected_spectrum_index
-            for x in range(width):
-                data_x = self._viewport.screen_x_to_data(x, width)
-                idx = int(round(data_x))
-                idx = max(0, min(n - 1, idx))
-                if idx < self._viewport.x_start or idx > self._viewport.x_end:
-                    continue
-
-                intensity = data.intensity[idx]
-                rgb = wavelength_to_rgb(round(data.wavelengths[idx]))
-                bgr = rgb_to_bgr(rgb)
-                sy = self._viewport.intensity_to_screen_y(intensity, height)
-
-                cv2.line(graph, (x, height - 1), (x, sy), bgr, 1)
-
-            # Highlight selected wavelength (vertical line)
-            if sel_idx is not None and 0 <= sel_idx < n:
-                sx = self._viewport.data_x_to_screen(float(sel_idx), width)
-                if 0 <= sx < width:
-                    sy = self._viewport.intensity_to_screen_y(
-                        data.intensity[sel_idx], height
-                    )
-                    cv2.line(graph, (sx, height - 1), (sx, sy), (255, 255, 255), 2)
-
-            # Redraw black line on top so it stays visible over fill
-            if len(pts) >= 2:
-                cv2.polylines(graph, [np.array(pts, dtype=np.int32)], False, (0, 0, 0), 1, cv2.LINE_AA)
-
-    def _render_peaks(
-        self,
-        graph: np.ndarray,
-        data: SpectrumData,
-        spectrum_screen_y: np.ndarray,
-    ) -> None:
-        """Render peak labels near peaks with vertical lines, non-overlapping.
-
-        Placement considers only: (1) other peak vertical lines, (2) graph overlap,
-        (3) other labels. No graticule or other elements. Chooses left/right by
-        fewest crossed peak lines, then least graph overlap.
-        """
-        height = graph.shape[0]
-        width = graph.shape[1]
-        font = self._graph_font
-        font_scale = self._graph_font_scale
-        thickness = 1
-        padding = 2
-        label_gap = 2
-        label_alpha = 0.65
-
-        # Collect visible peaks with screen coords, sort left to right
-        visible: list[tuple[int, int, float, Peak]] = []
-        for peak in data.peaks:
-            if peak.index < self._viewport.x_start or peak.index > self._viewport.x_end:
-                continue
-            if peak.intensity < self._viewport.y_min or peak.intensity > self._viewport.y_max:
-                continue
-            sx = self._viewport.data_x_to_screen(float(peak.index), width)
-            peak_y = self._viewport.intensity_to_screen_y(peak.intensity, height)
-            visible.append((sx, peak_y, peak.wavelength, peak))
-        visible.sort(key=lambda t: t[0])
-        other_sx = [osx for osx, _, _, _ in visible]
-
-        def obscures_peak(box_x1: int, box_x2: int, box_y1: int, box_y2: int) -> bool:
-            for osx, opeak_y, _, _ in visible:
-                if box_x1 <= osx <= box_x2 and box_y1 <= opeak_y <= box_y2:
-                    return True
-            return False
-
-        def overlaps_placement(
-            box_x1: int, box_x2: int, box_y1: int, box_y2: int,
-        ) -> bool:
-            for _, px1, px2, py1, py2, _, _ in placements:
-                if box_x2 <= px1 or box_x1 >= px2:
-                    continue
-                if box_y2 + label_gap <= py1 or box_y1 >= py2 + label_gap:
-                    continue
-                return True
-            return False
-
-        def count_crossed_other_lines(
-            x1: int, x2: int, my_sx: int,
-        ) -> int:
-            """Count other peaks' vertical lines crossed by this span."""
-            n = 0
-            for ox in other_sx:
-                if ox != my_sx and x1 <= ox <= x2:
-                    n += 1
-            return n
-
-        def graph_overlap_score(
-            x1: int, x2: int, box_y1: int, box_y2: int,
-        ) -> float:
-            """Lower is better. Count columns where spectrum overlaps label band."""
-            score = 0.0
-            if len(spectrum_screen_y) <= x1:
-                return score
-            for sx in range(max(0, x1), min(len(spectrum_screen_y), x2 + 1)):
-                sy = spectrum_screen_y[sx]
-                if sy >= 0 and box_y1 <= sy <= box_y2:
-                    score += 1.0
-            return score
-
-        placements: list[tuple[int, int, int, int, int, Peak, bool]] = []
-        single_peak = len(visible) == 1
-
-        for sx, peak_y, _, peak in visible:
-            label_text = f"{peak.wavelength:.0f}"
-            (text_w, text_h), _ = cv2.getTextSize(label_text, font, font_scale, thickness)
-            label_h = text_h + padding * 2
-            label_w = text_w + padding * 2
-
-            candidates: list[tuple[int, int, int, int, int, float, bool]] = []
-
-            for attempt in range(100):
-                for above_first in [True, False]:
-                    if above_first:
-                        box_y2 = peak_y - label_gap
-                        box_y1 = box_y2 - label_h
-                    else:
-                        box_y1 = peak_y + label_gap
-                        box_y2 = box_y1 + label_h
-
-                    if attempt > 0:
-                        offset = attempt * (label_h + label_gap)
-                        if above_first:
-                            box_y2 = peak_y - label_gap - offset
-                            box_y1 = box_y2 - label_h
-                        else:
-                            box_y1 = peak_y + label_gap + offset
-                            box_y2 = box_y1 + label_h
-
-                    if box_y1 < 0 or box_y2 > height:
-                        continue
-
-                    for left_aligned in [True, False]:
-                        if left_aligned:
-                            x1, x2 = sx - label_w, sx
-                        else:
-                            x1, x2 = sx, sx + label_w
-
-                        if x1 < 0 or x2 > width:
-                            continue
-                        if obscures_peak(x1, x2, box_y1, box_y2):
-                            continue
-                        if overlaps_placement(x1, x2, box_y1, box_y2):
-                            continue
-
-                        crossed = count_crossed_other_lines(x1, x2, sx)
-                        overlap = graph_overlap_score(x1, x2, box_y1, box_y2)
-                        candidates.append((x1, x2, box_y1, box_y2, crossed, overlap, left_aligned))
-
-            if not candidates:
-                box_y1 = max(0, min(peak_y - label_gap - label_h, height - label_h))
-                box_y2 = box_y1 + label_h
-                x1 = max(0, min(sx, width - label_w))
-                x2 = x1 + label_w
-                if x2 <= width and box_y2 <= height:
-                    placements.append((sx, x1, x2, box_y1, box_y2, peak, True))
-            else:
-                # Pick best: fewest crossed lines, then least graph overlap
-                best = min(
-                    candidates,
-                    key=lambda c: (c[4], c[5]),
-                )
-                x1, x2, box_y1, box_y2, _, _, left_aligned = best
-                placements.append((sx, x1, x2, box_y1, box_y2, peak, left_aligned))
-
-        # Draw: semi-transparent yellow background and text first, then vertical lines
-        for sx, label_x1, label_x2, box_y1, box_y2, peak, left_aligned in placements:
-            label_text = f"{peak.wavelength:.0f}"
-
-            # Semi-transparent yellow background (no border)
-            x1 = max(0, min(label_x1, width - 1))
-            x2 = max(0, min(label_x2, width))
-            if x1 < x2 and box_y1 < box_y2:
-                roi = graph[box_y1:box_y2, x1:x2]
-                overlay = roi.copy()
-                overlay[:] = (0, 255, 255)
-                cv2.addWeighted(overlay, label_alpha, roi, 1 - label_alpha, 0, roi)
-
-            # Text
-            (text_w, _), _ = cv2.getTextSize(label_text, font, font_scale, thickness)
-            text_x = label_x1 + padding if left_aligned else label_x2 - padding - text_w
-            text_x = max(0, min(text_x, width - text_w))
-            cv2.putText(
-                graph,
-                label_text,
-                (text_x, box_y2 - padding - 2),
-                font,
-                font_scale,
-                (0, 0, 0),
-                thickness,
-                cv2.LINE_AA,
-            )
-
-        # Peak vertical lines: black, thickness 2
-        for sx, label_x1, label_x2, box_y1, box_y2, peak, _ in placements:
-            cv2.line(graph, (sx, 0), (sx, height), (0, 0, 0), 2)
 
     def _render_cursor(self, graph: np.ndarray, data: SpectrumData) -> None:
         """Render measurement cursor if active."""
