@@ -138,15 +138,17 @@ class AutoGainController:
 class AutoExposureController:
     """Adjusts camera exposure to keep spectrum peak in target range (80-95%).
 
-    Hysteresis: correct only when peak < 0.8 (undersaturated) or > 0.95 (oversaturated);
-    in 0.8-0.95 no correction to avoid noise-driven oscillation.
+    Auto exposure is limited to exposure_max_us (default 1 s per frame). Manual
+    control via the capturer can set higher values (e.g. up to 10 s); only auto
+    is capped here.
+    Hysteresis: correct only when peak < 0.8 or > 0.95; 0.8-0.95 no correction.
     Uses golden-ratio bracket search for fast convergence.
     """
 
     def __init__(
         self,
         exposure_min_us: int = 100,
-        exposure_max_us: int = 1_000_000,
+        exposure_max_us: int = 1_000_000,  # 1 s max for auto (manual can use capturer up to driver limit)
         exposure_step_min: int = 50,
         verbose: bool = True,
     ):

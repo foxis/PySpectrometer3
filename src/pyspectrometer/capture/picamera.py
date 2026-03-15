@@ -71,8 +71,8 @@ class Capture(CameraInterface):
 
     @exposure.setter
     def exposure(self, value: int) -> None:
-        """Set exposure time in microseconds."""
-        self._exposure = max(100, min(100000, value))
+        """Set exposure time in microseconds. No upper cap here; driver limits apply. Min 100 µs."""
+        self._exposure = max(100, value)
         if self._camera is not None and self._running:
             self._camera.set_controls({"ExposureTime": self._exposure})
 
