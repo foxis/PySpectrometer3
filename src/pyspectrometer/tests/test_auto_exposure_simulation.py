@@ -260,9 +260,14 @@ def test_auto_exposure_gain_from_overexposed_no_overshoot():
         f"Did not converge from overexposed within {CONVERGE_STEPS} steps. Last 10 peaks: {peaks[-10:]}"
     )
 
-    # After convergence: must not go back above PEAK_MAX_OK (no "up much higher" overshoot)
+    # After convergence: must not go back above PEAK_MAX_OK (catches reduce->0.65->increase->1.0 oscillation).
     post = peaks[converged_at:]
     assert max(post) <= PEAK_MAX_OK, (
         f"Overshoot after convergence: max peak {max(post):.3f} > {PEAK_MAX_OK}. "
         f"Peaks after converge: {post[:30]}..."
+    )
+    # No oscillation: must not cross back into overexposure more than once (no reduce/increase/reduce cycle).
+    crossings = sum(1 for i in range(1, len(post)) if post[i] > TARGET_HIGH and post[i - 1] <= TARGET_HIGH)
+    assert crossings <= 1, (
+        f"Oscillation: crossed into overexposure {crossings} times after convergence (max 1). post[:40]={post[:40]}"
     )

@@ -230,12 +230,16 @@ class AutoExposureController:
         )
         current_max = self._smoothed_peak
         current_exposure = get_exposure()
-        # When coming down from overexposed, use wider "ok" band (low_frac=0.70) so we don't overshoot and then increase again.
+        # When coming down from overexposed, use wider "ok" band so we don't increase again and overshoot back to 1.0.
+        # Only clear the flag when solidly in normal band (peak >= 0.78), not on first "ok" at 0.65.
         low_frac = TARGET_LOW_AFTER_HIGH if self._recently_overexposed else 0.80
         kind = _peak_vs_target(
             current_max, 1.0, target_high_frac=TARGET_HIGH_HYSTERESIS, target_low_frac=low_frac
         )
-        self._recently_overexposed = kind == "high"
+        if kind == "high":
+            self._recently_overexposed = True
+        elif current_max >= 0.78:
+            self._recently_overexposed = False
 
         if kind == "ok":
             self._consecutive_high = self._consecutive_low = 0
