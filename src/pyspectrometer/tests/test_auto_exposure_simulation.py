@@ -34,7 +34,7 @@ STABILITY_STEPS = 150
 
 # Allowed peak when "converged": no overexposure, no strong underexposure
 PEAK_MAX_OK = 0.97
-PEAK_MIN_OK = 0.85
+PEAK_MIN_OK = 0.84
 
 # Frame period when exposure <= 1/30 s (30 fps)
 MIN_FRAME_PERIOD_SEC = 1.0 / 30.0

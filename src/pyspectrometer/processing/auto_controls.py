@@ -121,8 +121,11 @@ class AutoGainController:
                 set_gain(new_gain)
                 set_display_gain(new_gain)
                 self._search_low = self._search_high = self._search_last_gain = None
-                if self.verbose:
-                    print(f"[AG] Gain: {new_gain:.1f} (converged, peak: {current_max:.3f})")
+                if kind == "ok":
+                    if self.verbose:
+                        print(f"[AG] Gain: {new_gain:.1f} (converged, peak: {current_max:.3f})")
+                elif self.verbose:
+                    print(f"[AG] Gain: {new_gain:.1f} (bracket done, peak: {current_max:.3f})")
                 return True
             next_gain = self._search_low + (self._search_high - self._search_low) * _INV_GOLDEN
             next_gain = max(self.gain_min, min(self.gain_max, next_gain))
@@ -182,6 +185,7 @@ class AutoExposureController:
         self._search_high_us: int | None = None
         self._search_last_exposure_us: int | None = None
         self._smoothed_peak: float | None = None
+        self._at_exposure_limit: bool = False
 
     def adjust(
         self,
@@ -203,6 +207,12 @@ class AutoExposureController:
         current_max = self._smoothed_peak
         current_exposure = get_exposure()
         kind = _peak_vs_target(current_max, 1.0)
+
+        if kind == "ok" or kind == "high":
+            self._at_exposure_limit = False
+
+        if kind == "low" and self._at_exposure_limit:
+            return False
 
         if (
             self._search_last_exposure_us is not None
@@ -228,8 +238,17 @@ class AutoExposureController:
                 set_display_exposure(new_exposure)
                 self._search_low_us = self._search_high_us = None
                 self._search_last_exposure_us = None
+                if last_ok == "ok":
+                    if self.verbose:
+                        print(f"[AE] Exposure: {new_exposure} us (converged, peak: {current_max:.3f})")
+                    return True
+                if last_ok == "low":
+                    self._at_exposure_limit = True
+                    if self.verbose:
+                        print(f"[AE] Exposure: {new_exposure} us (at limit, peak: {current_max:.3f}, gain will follow)")
+                    return False
                 if self.verbose:
-                    print(f"[AE] Exposure: {new_exposure} us (converged, peak: {current_max:.3f})")
+                    print(f"[AE] Exposure: {new_exposure} us (bracket done, peak: {current_max:.3f})")
                 return True
             span = self._search_high_us - self._search_low_us
             next_exposure = self._search_low_us + int(span * _INV_GOLDEN)
@@ -252,11 +271,7 @@ class AutoExposureController:
 
         if kind == "low":
             self._search_low_us = current_exposure
-            self._search_high_us = (
-                min(self.exposure_max_us, self.exposure_preferred_max_us)
-                if self.exposure_preferred_max_us is not None
-                else self.exposure_max_us
-            )
+            self._search_high_us = self.exposure_max_us
         else:
             self._search_low_us = self.exposure_min_us
             self._search_high_us = current_exposure
@@ -299,6 +314,7 @@ def run_auto_gain_exposure_frame(
             data, get_exposure, set_exposure, set_exposure_display
         ):
             return 3
+        cooldown = 0
     if auto_gain_enabled and cooldown <= 0:
         auto_gain_ctrl.adjust(data, get_gain, set_gain, set_gain_display)
     return cooldown
