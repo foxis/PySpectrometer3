@@ -12,9 +12,7 @@ Connect from desktop:
 Usage:
     poetry run stream              # Port 8000, config resolution
     poetry run stream --port 9000
-    poetry run stream --ag --ae    # Initial AE/AG on (desktop overrides via /control)
-
-Desktop is source of truth for AE/AG: GET /control?ae=1&ag=0 toggles; desktop app syncs on button press.
+    poetry run stream --ag --ae    # Enable auto gain and auto exposure on Pi
 """
 
 import argparse
@@ -62,33 +60,11 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
         if self.path == "/index.html":
             self._serve_index()
             return
-        if self.path.startswith("/control"):
-            self._serve_control()
-            return
         if self.path == "/stream.mjpg":
             self._serve_stream()
             return
         self.send_error(404)
         self.end_headers()
-
-    def _serve_control(self) -> None:
-        """Apply AE/AG on/off from desktop (source of truth). GET /control?ae=1&ag=0."""
-        from urllib.parse import parse_qs, urlparse
-
-        parsed = urlparse(self.path)
-        qs = parse_qs(parsed.query)
-        ae = qs.get("ae", [None])[0]
-        ag = qs.get("ag", [None])[0]
-        if ae is not None:
-            self.server.auto_exposure_enabled = ae in ("1", "true", "yes")
-        if ag is not None:
-            self.server.auto_gain_enabled = ag in ("1", "true", "yes")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
-        self.end_headers()
-        self.wfile.write(
-            f"ae={int(self.server.auto_exposure_enabled)} ag={int(self.server.auto_gain_enabled)}\n".encode()
-        )
 
     def _serve_index(self) -> None:
         port = self.server.stream_port
@@ -138,14 +114,12 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
 
 
 class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
-    """Threaded HTTP server for MJPEG. AE/AG state is updated by GET /control (desktop source of truth)."""
+    """Threaded HTTP server for MJPEG."""
 
     allow_reuse_address = True
     daemon_threads = True
     output: StreamingOutput
     stream_port: int
-    auto_exposure_enabled: bool = False
-    auto_gain_enabled: bool = False
 
 
 # --- Capture loop (all from pyspectrometer) ---
@@ -155,9 +129,10 @@ def _capture_loop(
     output: StreamingOutput,
     config_path: Path | None,
     width: int,
-    control_server: StreamingServer,
+    auto_gain: bool,
+    auto_exposure: bool,
 ) -> None:
-    """Capture camera frames, run AE/AG when enabled (flags from control_server; desktop is source of truth)."""
+    """Capture camera frames, run AE/AG when enabled (--ae / --ag on command line)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
     import numpy as np
@@ -217,9 +192,7 @@ def _capture_loop(
         while True:
             frame = camera.capture()
 
-            ae_enabled = control_server.auto_exposure_enabled
-            ag_enabled = control_server.auto_gain_enabled
-            if ae_enabled or ag_enabled:
+            if auto_gain or auto_exposure:
                 extraction = extractor.extract(frame, max_val=max_val)
                 peak_for_ae = float(extraction.max_in_roi)
                 data = SpectrumData(
@@ -232,8 +205,8 @@ def _capture_loop(
                 )
                 gain_cooldown_remaining = run_auto_gain_exposure_frame(
                     data,
-                    ae_enabled,
-                    ag_enabled,
+                    auto_exposure,
+                    auto_gain,
                     auto_exposure_ctrl,
                     auto_gain_ctrl,
                     lambda: camera.exposure,
@@ -293,12 +266,10 @@ def main() -> int:
     server_instance = StreamingServer(("", args.port), StreamingHandler)
     server_instance.output = output
     server_instance.stream_port = args.port
-    server_instance.auto_exposure_enabled = args.ae
-    server_instance.auto_gain_enabled = args.ag
 
     thread = threading.Thread(
         target=_capture_loop,
-        args=(output, config_path, args.width, server_instance),
+        args=(output, config_path, args.width, args.ag, args.ae),
         daemon=True,
     )
     thread.start()
@@ -318,7 +289,6 @@ def main() -> int:
     logger.info(
         "Connect: python -m pyspectrometer --camera http://%s:%d/stream.mjpg", addr, args.port
     )
-    logger.info("AE/AG control: GET http://%s:%d/control?ae=1&ag=0 (desktop is source of truth)", addr, args.port)
     server_instance.serve_forever()
     return 0
 

@@ -7,7 +7,6 @@ button layout and mode logic to mode classes.
 import queue
 import threading
 import time
-from collections.abc import Callable
 from pathlib import Path
 
 from queue import Empty
@@ -51,12 +50,10 @@ class Spectrometer:
         laser_nm: float = 785.0,
         load_calibration: bool = True,
         config_path: Path | None = None,
-        stream_control_base_url: str | None = None,
     ):
         self.config = config or Config()
         self.mode = mode if mode in self.VALID_MODES else "measurement"
         self.laser_nm = laser_nm
-        self._stream_control_base_url = stream_control_base_url
 
         self._camera = camera or Capture(
             width=self.config.camera.frame_width,
@@ -179,29 +176,7 @@ class Spectrometer:
         ctx.save_snapshot = self._save_snapshot
         ctx.clear_autolevel_overlay = self._clear_autolevel_overlay
         ctx.auto_calibrate_debounce_sec = 1.5
-        ctx.stream_control_base_url = self._stream_control_base_url
-        ctx.sync_auto_controls_to_stream = self._make_sync_auto_controls_to_stream(ctx)
         return ctx
-
-    def _make_sync_auto_controls_to_stream(self, ctx: ModeContext) -> Callable[[], None]:
-        """Return a callback that pushes current AE/AG state to the stream (desktop is source of truth)."""
-        base = self._stream_control_base_url
-        if not base:
-            return lambda: None
-        base = base.rstrip("/")
-
-        def sync() -> None:
-            ae = int(ctx.auto_exposure_enabled)
-            ag = int(ctx.auto_gain_enabled)
-            url = f"{base}/control?ae={ae}&ag={ag}"
-            try:
-                import urllib.request
-                with urllib.request.urlopen(url, timeout=2.0) as _:
-                    pass
-            except Exception:
-                pass  # Stream may be unreachable; ignore
-
-        return sync
 
     def _capture_frame(self) -> np.ndarray:
         """Capture frame and update context (blocking; used when not using threaded capture)."""
@@ -407,7 +382,6 @@ class Spectrometer:
         self._ctx.running = True
         self._ctx.last_data = None
         self._mode_instance.on_start(self._ctx)
-        self._ctx.sync_auto_controls_to_stream()  # Push initial AE/AG state to stream if remote
 
         # Threaded capture so long exposure does not freeze the event loop
         self._frame_queue: queue.Queue = queue.Queue(maxsize=1)

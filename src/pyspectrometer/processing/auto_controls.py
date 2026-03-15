@@ -18,6 +18,9 @@ TARGET_PEAK = 0.875
 # Only treat as overexposed ("high") when peak exceeds this. Slightly above 0.95 to avoid pulsing at the boundary.
 TARGET_HIGH_HYSTERESIS = 0.96
 
+# When coming down from overexposed, treat this as "ok" low bound so we don't overshoot and then increase again.
+TARGET_LOW_AFTER_HIGH = 0.70
+
 # Damp the multiplicative step so we don't overshoot (ratio^damping). 1.0 = full step, 0.4 = conservative.
 STEP_DAMPING = 0.4
 
@@ -198,6 +201,7 @@ class AutoExposureController:
         self._skip_next_frame: bool = False
         self._smoothed_peak: float | None = None
         self._last_exposure_adjust_time: float = 0.0
+        self._recently_overexposed: bool = False
 
     def adjust(
         self,
@@ -224,9 +228,12 @@ class AutoExposureController:
         )
         current_max = self._smoothed_peak
         current_exposure = get_exposure()
+        # When coming down from overexposed, use wider "ok" band (low_frac=0.70) so we don't overshoot and then increase again.
+        low_frac = TARGET_LOW_AFTER_HIGH if self._recently_overexposed else 0.80
         kind = _peak_vs_target(
-            current_max, 1.0, target_high_frac=TARGET_HIGH_HYSTERESIS
+            current_max, 1.0, target_high_frac=TARGET_HIGH_HYSTERESIS, target_low_frac=low_frac
         )
+        self._recently_overexposed = kind == "high"
 
         if kind == "ok":
             self._consecutive_high = self._consecutive_low = 0

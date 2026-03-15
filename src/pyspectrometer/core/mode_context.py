@@ -79,10 +79,6 @@ class ModeContext:
     last_auto_calibrate_time: float = 0.0
     auto_calibrate_debounce_sec: float = 1.5
 
-    # When viewing a remote stream, desktop pushes AE/AG state to Pi (source of truth).
-    stream_control_base_url: Optional[str] = None
-    sync_auto_controls_to_stream: Callable[[], None] = _noop
-
     # After an exposure adjustment, skip gain for this many frames so we see the new exposure before changing gain (avoids alternating E-down then G-down and overshoot).
     gain_cooldown_frames_remaining: int = 0
 
