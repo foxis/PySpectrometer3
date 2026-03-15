@@ -12,7 +12,9 @@ Connect from desktop:
 Usage:
     poetry run stream              # Port 8000, config resolution
     poetry run stream --port 9000
-    poetry run stream --ag --ae    # Auto gain and exposure
+    poetry run stream --ag --ae    # Initial AE/AG on (desktop overrides via /control)
+
+Desktop is source of truth for AE/AG: GET /control?ae=1&ag=0 toggles; desktop app syncs on button press.
 """
 
 import argparse
@@ -60,11 +62,33 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
         if self.path == "/index.html":
             self._serve_index()
             return
+        if self.path.startswith("/control"):
+            self._serve_control()
+            return
         if self.path == "/stream.mjpg":
             self._serve_stream()
             return
         self.send_error(404)
         self.end_headers()
+
+    def _serve_control(self) -> None:
+        """Apply AE/AG on/off from desktop (source of truth). GET /control?ae=1&ag=0."""
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+        ae = qs.get("ae", [None])[0]
+        ag = qs.get("ag", [None])[0]
+        if ae is not None:
+            self.server.auto_exposure_enabled = ae in ("1", "true", "yes")
+        if ag is not None:
+            self.server.auto_gain_enabled = ag in ("1", "true", "yes")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(
+            f"ae={int(self.server.auto_exposure_enabled)} ag={int(self.server.auto_gain_enabled)}\n".encode()
+        )
 
     def _serve_index(self) -> None:
         port = self.server.stream_port
@@ -114,12 +138,14 @@ class StreamingHandler(server.BaseHTTPRequestHandler):
 
 
 class StreamingServer(socketserver.ThreadingMixIn, server.HTTPServer):
-    """Threaded HTTP server for MJPEG."""
+    """Threaded HTTP server for MJPEG. AE/AG state is updated by GET /control (desktop source of truth)."""
 
     allow_reuse_address = True
     daemon_threads = True
     output: StreamingOutput
     stream_port: int
+    auto_exposure_enabled: bool = False
+    auto_gain_enabled: bool = False
 
 
 # --- Capture loop (all from pyspectrometer) ---
@@ -129,10 +155,9 @@ def _capture_loop(
     output: StreamingOutput,
     config_path: Path | None,
     width: int,
-    auto_gain: bool,
-    auto_exposure: bool,
+    control_server: StreamingServer,
 ) -> None:
-    """Capture pure camera frames, optionally run AE/AG, write JPEGs to output."""
+    """Capture camera frames, run AE/AG when enabled (flags from control_server; desktop is source of truth)."""
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
     import numpy as np
@@ -140,7 +165,11 @@ def _capture_loop(
     from pyspectrometer.capture.picamera import Capture
     from pyspectrometer.config import load_config
     from pyspectrometer.core.spectrum import SpectrumData
-    from pyspectrometer.processing.auto_controls import AutoExposureController, AutoGainController
+    from pyspectrometer.processing.auto_controls import (
+        AutoExposureController,
+        AutoGainController,
+        run_auto_gain_exposure_frame,
+    )
     from pyspectrometer.processing.extraction import ExtractionMethod, SpectrumExtractor
     from pyspectrometer.utils.display import scale_to_uint8
 
@@ -157,45 +186,41 @@ def _capture_loop(
 
     smoothing = config.auto.peak_smoothing_period_sec
     rate_hz = getattr(config.auto, "max_adjust_rate_hz", 20.0)
-    auto_gain_ctrl = AutoGainController(peak_smoothing_period_sec=smoothing, max_adjust_rate_hz=rate_hz, verbose=True) if auto_gain else None
-    auto_exposure_ctrl = AutoExposureController(peak_smoothing_period_sec=smoothing, max_adjust_rate_hz=rate_hz, verbose=True) if auto_exposure else None
-    extractor: SpectrumExtractor | None = None
-    if auto_gain or auto_exposure:
-        extractor = SpectrumExtractor(
-            frame_width=width,
-            frame_height=height,
-            method=ExtractionMethod.MEDIAN,
-            rotation_angle=0.0,
-            perpendicular_width=config.extraction.perpendicular_width,
-            spectrum_y_center=height // 2,
-        )
+    auto_gain_ctrl = AutoGainController(
+        peak_smoothing_period_sec=smoothing, max_adjust_rate_hz=rate_hz, verbose=True
+    )
+    auto_exposure_ctrl = AutoExposureController(
+        peak_smoothing_period_sec=smoothing, max_adjust_rate_hz=rate_hz, verbose=True
+    )
+    extractor = SpectrumExtractor(
+        frame_width=width,
+        frame_height=height,
+        method=ExtractionMethod.MEDIAN,
+        rotation_angle=0.0,
+        perpendicular_width=config.extraction.perpendicular_width,
+        spectrum_y_center=height // 2,
+    )
 
     camera.start()
     actual_w, actual_h = camera.width, camera.height
-    if extractor is not None:
-        extractor.set_dimensions(actual_w, actual_h)
-        extractor.set_spectrum_y_center(actual_h // 2)
+    extractor.set_dimensions(actual_w, actual_h)
+    extractor.set_spectrum_y_center(actual_h // 2)
 
     max_val = float((1 << camera.bit_depth) - 1)
 
     def noop(_: float | int) -> None:
         pass
 
-    # After an exposure adjustment, skip gain for this many frames so we see the new exposure before changing gain (avoids alternating E-down then G-down and overshoot).
     gain_cooldown_remaining = 0
 
     try:
         while True:
             frame = camera.capture()
 
-            if (auto_gain or auto_exposure) and extractor is not None:
-                if gain_cooldown_remaining > 0:
-                    gain_cooldown_remaining -= 1
-
+            ae_enabled = control_server.auto_exposure_enabled
+            ag_enabled = control_server.auto_gain_enabled
+            if ae_enabled or ag_enabled:
                 extraction = extractor.extract(frame, max_val=max_val)
-                intensity = extraction.intensity.astype("float32")
-                n = len(intensity)
-                # Use true max pixel in extraction ROI for AE/AG so saturated shows as 1.0 (not median ~0.8).
                 peak_for_ae = float(extraction.max_in_roi)
                 data = SpectrumData(
                     intensity=np.array([peak_for_ae], dtype=np.float32),
@@ -205,24 +230,20 @@ def _capture_loop(
                     exposure_us=getattr(camera, "exposure", None),
                     gain=getattr(camera, "gain", None),
                 )
-                # At most one of AE or AG per frame; after exposure change, cooldown gain so we don't alternate E-down then G-down.
-                exposure_adjusted = False
-                if auto_exposure_ctrl:
-                    exposure_adjusted = auto_exposure_ctrl.adjust(
-                        data,
-                        lambda: camera.exposure,
-                        lambda v: setattr(camera, "exposure", v),
-                        noop,
-                    )
-                    if exposure_adjusted:
-                        gain_cooldown_remaining = 3
-                if auto_gain_ctrl and not exposure_adjusted and gain_cooldown_remaining <= 0:
-                    auto_gain_ctrl.adjust(
-                        data,
-                        lambda: camera.gain,
-                        lambda v: setattr(camera, "gain", v),
-                        noop,
-                    )
+                gain_cooldown_remaining = run_auto_gain_exposure_frame(
+                    data,
+                    ae_enabled,
+                    ag_enabled,
+                    auto_exposure_ctrl,
+                    auto_gain_ctrl,
+                    lambda: camera.exposure,
+                    lambda v: setattr(camera, "exposure", v),
+                    noop,
+                    lambda: camera.gain,
+                    lambda v: setattr(camera, "gain", v),
+                    noop,
+                    gain_cooldown_remaining,
+                )
 
             display = scale_to_uint8(frame, max_val)
             if display.ndim == 2:
@@ -269,16 +290,18 @@ def main() -> int:
     config_path = Path(args.config) if args.config else None
     output = StreamingOutput()
 
-    thread = threading.Thread(
-        target=_capture_loop,
-        args=(output, config_path, args.width, args.ag, args.ae),
-        daemon=True,
-    )
-    thread.start()
-
     server_instance = StreamingServer(("", args.port), StreamingHandler)
     server_instance.output = output
     server_instance.stream_port = args.port
+    server_instance.auto_exposure_enabled = args.ae
+    server_instance.auto_gain_enabled = args.ag
+
+    thread = threading.Thread(
+        target=_capture_loop,
+        args=(output, config_path, args.width, server_instance),
+        daemon=True,
+    )
+    thread.start()
 
     def _lan_ip() -> str:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -295,6 +318,7 @@ def main() -> int:
     logger.info(
         "Connect: python -m pyspectrometer --camera http://%s:%d/stream.mjpg", addr, args.port
     )
+    logger.info("AE/AG control: GET http://%s:%d/control?ae=1&ag=0 (desktop is source of truth)", addr, args.port)
     server_instance.serve_forever()
     return 0
 

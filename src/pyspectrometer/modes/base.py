@@ -272,21 +272,23 @@ class BaseMode(ABC):
         print("[PEAK] Cleared peak include region")
 
     def _on_toggle_auto_gain(self) -> None:
-        """Toggle auto gain."""
+        """Toggle auto gain (desktop is source of truth; sync to stream if viewing remote)."""
         ctx = self._ctx
         if ctx is None:
             return
         ctx.auto_gain_enabled = not ctx.auto_gain_enabled
         ctx.display.set_button_active("auto_gain", ctx.auto_gain_enabled)
+        ctx.sync_auto_controls_to_stream()
         print(f"[AUTO_GAIN] Auto gain: {'ON' if ctx.auto_gain_enabled else 'OFF'}")
 
     def _on_toggle_auto_exposure(self) -> None:
-        """Toggle auto exposure."""
+        """Toggle auto exposure (desktop is source of truth; sync to stream if viewing remote)."""
         ctx = self._ctx
         if ctx is None:
             return
         ctx.auto_exposure_enabled = not ctx.auto_exposure_enabled
         ctx.display.set_button_active("auto_exposure", ctx.auto_exposure_enabled)
+        ctx.sync_auto_controls_to_stream()
         print(f"[AUTO_EXPOSURE] Auto exposure: {'ON' if ctx.auto_exposure_enabled else 'OFF'}")
 
     def register_callback(self, action_name: str, callback: Callable[[], None]) -> None:

@@ -15,6 +15,9 @@ from ..core.spectrum import SpectrumData
 # Target peak (center of 0.80–0.95 band). Multiplicative update drives toward this.
 TARGET_PEAK = 0.875
 
+# Only treat as overexposed ("high") when peak exceeds this. Slightly above 0.95 to avoid pulsing at the boundary.
+TARGET_HIGH_HYSTERESIS = 0.96
+
 # Damp the multiplicative step so we don't overshoot (ratio^damping). 1.0 = full step, 0.4 = conservative.
 STEP_DAMPING = 0.4
 
@@ -122,7 +125,9 @@ class AutoGainController:
         )
         current_max = self._smoothed_peak
         current_gain = get_gain()
-        kind = _peak_vs_target(current_max, 1.0)
+        kind = _peak_vs_target(
+            current_max, 1.0, target_high_frac=TARGET_HIGH_HYSTERESIS
+        )
 
         if kind == "ok":
             self._consecutive_high = self._consecutive_low = 0
@@ -219,7 +224,9 @@ class AutoExposureController:
         )
         current_max = self._smoothed_peak
         current_exposure = get_exposure()
-        kind = _peak_vs_target(current_max, 1.0)
+        kind = _peak_vs_target(
+            current_max, 1.0, target_high_frac=TARGET_HIGH_HYSTERESIS
+        )
 
         if kind == "ok":
             self._consecutive_high = self._consecutive_low = 0
@@ -269,3 +276,47 @@ class AutoExposureController:
         if self.verbose:
             print(f"[AE] Exposure: {new_exposure} us (peak: {current_max:.3f})")
         return True
+
+
+def run_auto_gain_exposure_frame(
+    data: SpectrumData,
+    auto_exposure_enabled: bool,
+    auto_gain_enabled: bool,
+    auto_exposure_ctrl: AutoExposureController,
+    auto_gain_ctrl: AutoGainController,
+    get_exposure: Callable[[], int],
+    set_exposure: Callable[[int], None],
+    set_exposure_display: Callable[[int], None],
+    get_gain: Callable[[], float],
+    set_gain: Callable[[float], None],
+    set_gain_display: Callable[[float], None],
+    gain_cooldown_remaining: int,
+) -> int:
+    """Run one frame of AE/AG. Shared by desktop and stream for identical behavior.
+
+    Returns:
+        New gain_cooldown_remaining (decremented; set to 3 after exposure adjustment).
+    """
+    if not auto_exposure_enabled and not auto_gain_enabled:
+        return gain_cooldown_remaining
+
+    cooldown = gain_cooldown_remaining
+    if cooldown > 0:
+        cooldown -= 1
+
+    if auto_exposure_enabled:
+        if auto_exposure_ctrl.adjust(
+            data,
+            get_exposure,
+            set_exposure,
+            set_exposure_display,
+        ):
+            return 3
+    if auto_gain_enabled and cooldown <= 0:
+        auto_gain_ctrl.adjust(
+            data,
+            get_gain,
+            set_gain,
+            set_gain_display,
+        )
+    return cooldown

@@ -253,7 +253,10 @@ def main() -> int:
         bit_depth=args.bit_depth,
     )
 
+    stream_control_base_url = None
     if args.camera is not None:
+        from urllib.parse import urlparse
+
         from .capture.opencv import Capture
 
         source = _parse_source(args.camera)
@@ -265,6 +268,9 @@ def main() -> int:
             fps=config.camera.fps,
         )
         print(f"Using camera: {args.camera}")
+        if isinstance(source, str) and (source.startswith("http://") or source.startswith("https://")):
+            parsed = urlparse(source)
+            stream_control_base_url = f"{parsed.scheme}://{parsed.netloc}"
     else:
         from .capture.picamera import Capture
 
@@ -299,6 +305,7 @@ def main() -> int:
             laser_nm=args.laser,
             load_calibration=load_calibration,
             config_path=config_loaded,
+            stream_control_base_url=stream_control_base_url,
         )
         spectrometer.run()
         return 0

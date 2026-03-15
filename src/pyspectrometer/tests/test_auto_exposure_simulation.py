@@ -168,6 +168,16 @@ def test_auto_exposure_gain_converges_constant_light():
         f"Underexposed when converged: min peak {min(final_peaks):.3f} < {PEAK_MIN_OK}"
     )
 
+    # No pulsing: after convergence we must not repeatedly cross into overexposure (normal ↔ over).
+    crossings_into_over = 0
+    for i in range(1, len(post_converge)):
+        if post_converge[i] > TARGET_HIGH and post_converge[i - 1] <= TARGET_HIGH:
+            crossings_into_over += 1
+    assert crossings_into_over <= 1, (
+        f"Exposure pulsing: crossed into overexposure (>{TARGET_HIGH}) {crossings_into_over} times "
+        f"after convergence (max 1 allowed). Peaks (first 60): {post_converge[:60]}"
+    )
+
 
 def test_auto_exposure_gain_from_overexposed_no_overshoot():
     """Start overexposed; after converging into band, peak must not jump back up (no overshoot)."""

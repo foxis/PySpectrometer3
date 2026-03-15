@@ -127,8 +127,8 @@ class SpectrumExtractor:
                    - BGR color: (height, width, 3) uint8
                    - Monochrome 8-bit: (height, width) uint8
                    - Monochrome 10/16-bit: (height, width) uint16
-            max_val: Max sensor value for 0-1 normalization (e.g. 1023 for 10-bit).
-                     If None, defaults to 1023 (10-bit sensor).
+            max_val: Divisor for 0-1 normalization: raw / max_val. For 10-bit use 1023, for 8-bit use 255.
+                     If None, defaults to 1023. Caller must pass value that matches frame bit depth.
 
         Returns:
             ExtractionResult with intensity in 0-1 range and cropped frame
@@ -141,16 +141,16 @@ class SpectrumExtractor:
 
         intensity = self._extract_with_method(gray)
 
-        # Normalize to 0-1 using sensor full scale
-        scale = max_val if max_val is not None and max_val > 0 else 1023.0
-        intensity = (intensity.astype(np.float32) / scale).astype(np.float32)
+        # Fixed divisor from bit depth: raw / max_val → 0-1. For 10-bit, max_val=1023. Does not change per frame.
+        max_val_used = max_val if max_val is not None and max_val > 0 else 1023.0
+        intensity = (intensity.astype(np.float32) / max_val_used).astype(np.float32)
 
-        # Max pixel in extraction ROI (middle third vertically) so AE/AG see true saturation.
+        # Max pixel in extraction ROI so AE/AG see true saturation (1.0 when clipped).
         half_perp = self.perpendicular_width // 2
         y_start = max(0, self.spectrum_y_center - half_perp)
         y_end = min(gray.shape[0], self.spectrum_y_center + half_perp + 1)
         roi = gray[y_start:y_end, :]
-        max_in_roi = np.float32(np.max(roi) / scale)
+        max_in_roi = np.float32(np.max(roi) / max_val_used)
 
         # Use rotated frame for preview so lines appear straight
         cropped = self._create_cropped_preview(rotated_frame)

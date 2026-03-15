@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from ..processing.extraction import SpectrumExtractor
     from .calibration import Calibration
 
+from ..processing.auto_controls import run_auto_gain_exposure_frame
+
 
 def _noop() -> None:
     pass
@@ -77,6 +79,10 @@ class ModeContext:
     last_auto_calibrate_time: float = 0.0
     auto_calibrate_debounce_sec: float = 1.5
 
+    # When viewing a remote stream, desktop pushes AE/AG state to Pi (source of truth).
+    stream_control_base_url: Optional[str] = None
+    sync_auto_controls_to_stream: Callable[[], None] = _noop
+
     # After an exposure adjustment, skip gain for this many frames so we see the new exposure before changing gain (avoids alternating E-down then G-down and overshoot).
     gain_cooldown_frames_remaining: int = 0
 
@@ -86,9 +92,6 @@ class ModeContext:
             return
         if self.frozen_spectrum:
             return
-
-        if self.gain_cooldown_frames_remaining > 0:
-            self.gain_cooldown_frames_remaining -= 1
 
         def get_gain() -> float:
             return self.camera.gain
@@ -103,20 +106,17 @@ class ModeContext:
             if hasattr(self.camera, "exposure"):
                 self.camera.exposure = v
 
-        # Adjust at most one per frame; after exposure change, cooldown gain so we don't alternate E-down then G-down and overshoot.
-        if self.auto_exposure_enabled:
-            if self.auto_exposure.adjust(
-                data,
-                get_exposure,
-                set_exposure,
-                self.display.set_exposure_value,
-            ):
-                self.gain_cooldown_frames_remaining = 3
-                return
-        if self.auto_gain_enabled and self.gain_cooldown_frames_remaining <= 0:
-            self.auto_gain.adjust(
-                data,
-                get_gain,
-                set_gain,
-                self.display.set_gain_value,
-            )
+        self.gain_cooldown_frames_remaining = run_auto_gain_exposure_frame(
+            data,
+            self.auto_exposure_enabled,
+            self.auto_gain_enabled,
+            self.auto_exposure,
+            self.auto_gain,
+            get_exposure,
+            set_exposure,
+            self.display.set_exposure_value,
+            get_gain,
+            set_gain,
+            self.display.set_gain_value,
+            self.gain_cooldown_frames_remaining,
+        )
