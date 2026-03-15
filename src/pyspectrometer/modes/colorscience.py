@@ -33,6 +33,7 @@ from ..colorscience.swatches import (
     swatch_index_at,
     xyz_to_display_bgr,
 )
+from ..colorscience.illumination_metrics import cct_from_xyz, cri_from_spectrum
 from ..colorscience.xyz import calculate_XYZ, xyz_to_lab
 from ..core.mode_context import ModeContext
 from ..processing.reference_correction import apply_dark_white_correction
@@ -214,7 +215,18 @@ class ColorScienceMode(BaseMode):
         ctx.display.set_sensitivity_overlay(None)
 
         xyz_lab = self._compute_xyz_lab(processed.intensity, processed.wavelengths)
-        info_lines = _xyz_lab_lines(xyz_lab, white_set=self._is_white_set())
+        cct_duv = None
+        cri_ra = None
+        if self.color_state.measurement_type == ColorMeasurementType.ILLUMINATION and xyz_lab is not None:
+            X, Y, Z = xyz_lab[0]
+            cct_duv = cct_from_xyz(X, Y, Z)
+            cri_ra = cri_from_spectrum(processed.wavelengths, processed.intensity)
+        info_lines = _xyz_lab_lines(
+            xyz_lab,
+            white_set=self._is_white_set(),
+            cct_duv=cct_duv,
+            cri_ra=cri_ra,
+        )
 
         width  = ctx.display.config.display.window_width
         p_height = ctx.display.config.display.preview_height
@@ -419,6 +431,14 @@ class ColorScienceMode(BaseMode):
             s = X + Y + Z
             if s > 0:
                 metadata["xy"] = f"x={X/s:.4f} y={Y/s:.4f}"
+            if is_illum:
+                cct_duv = cct_from_xyz(X, Y, Z)
+                if cct_duv is not None:
+                    metadata["CCT_K"] = f"{cct_duv[0]:.0f}"
+                    metadata["Duv"] = f"{cct_duv[1]:+.4f}"
+                cri_ra = cri_from_spectrum(ctx.last_data.wavelengths, ctx.last_data.intensity)
+                if cri_ra is not None:
+                    metadata["CRI_Ra"] = f"{cri_ra:.1f}"
 
         wl = self.color_state.white_level_xyz
         if wl is not None:
@@ -586,15 +606,23 @@ def _illumination_ref_white(
 def _xyz_lab_lines(
     xyz_lab: tuple[tuple[float, float, float], tuple[float, float, float]] | None,
     white_set: bool = False,
+    cct_duv: tuple[float, float] | None = None,
+    cri_ra: float | None = None,
 ) -> list[str]:
     if xyz_lab is None:
         return []
     (X, Y, Z), (L, a, b) = xyz_lab
     wl_tag = "  [WL]" if white_set else ""
-    return [
+    lines = [
         f"X={X:.1f}  Y={Y:.1f}  Z={Z:.1f}{wl_tag}",
         f"L*={L:.1f}  a*={a:.1f}  b*={b:.1f}",
     ]
+    if cct_duv is not None:
+        cct_k, duv = cct_duv
+        lines.append(f"CCT: {cct_k:.0f} K  Δuv={duv:+.4f}")
+    if cri_ra is not None:
+        lines.append(f"CRI Ra: {cri_ra:.1f}")
+    return lines
 
 
 def _xy_from_xyz(
