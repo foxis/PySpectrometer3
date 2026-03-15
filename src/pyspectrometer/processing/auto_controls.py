@@ -16,10 +16,13 @@ TARGET_HIGH = 0.90
 
 # Underexposed: predicted ratio = target_mid/peak (linear E×G model). Apply safety and cap.
 _PREDICT_SAFETY = 0.96   # aim slightly under target; must land in [target_low, target_high]
-_MAX_UP_RATIO = 3.0      # cap predicted step so we don't 10× in one frame with lag
+# Cap up-step so we don't overshoot with Picamera2 pipeline lag (next frame often still old exposure).
+_MAX_UP_RATIO = 1.35    # max 35% increase per step when raising E or G
 _MAX_DOWN = 0.5
 _SATURATED_RATIO = 0.8
 _SATURATED = 0.99
+# Frames to skip after changing E or G so the camera returns a frame with the new setting.
+_SKIP_FRAMES_AFTER_CHANGE = 4
 
 _DEFAULT_DT = 1.0 / 30.0
 _EXPOSURE_EMA_THRESHOLD_US = 33_333  # 1/30 s; only apply EMA when exposure is shorter
@@ -110,7 +113,7 @@ class AutoExposureController:
                 return False
             set_exposure(new)
             set_display(new)
-            self._skip_remaining = 2
+            self._skip_remaining = _SKIP_FRAMES_AFTER_CHANGE
             if self.verbose:
                 print(f"[AE] {new} us (peak {peak:.3f}↓)")
             return True
@@ -130,7 +133,7 @@ class AutoExposureController:
                 return False
             set_exposure(new)
             set_display(new)
-            self._skip_remaining = 2
+            self._skip_remaining = _SKIP_FRAMES_AFTER_CHANGE
             if self.verbose:
                 print(f"[AE] {new} us (peak {peak:.3f}↑ pred)")
             return True
@@ -208,7 +211,7 @@ class AutoGainController:
                 return False
             set_gain(new)
             set_display(new)
-            self._skip_remaining = 2
+            self._skip_remaining = _SKIP_FRAMES_AFTER_CHANGE
             if self.verbose:
                 print(f"[AG] {new:.2f}x (peak {peak:.3f}↓)")
             return True
@@ -224,7 +227,7 @@ class AutoGainController:
                 return False
             set_gain(new)
             set_display(new)
-            self._skip_remaining = 2
+            self._skip_remaining = _SKIP_FRAMES_AFTER_CHANGE
             if self.verbose:
                 print(f"[AG] {new:.2f}x (peak {peak:.3f}↑ pred)")
             return True
@@ -238,7 +241,7 @@ class AutoGainController:
             if new < current - 0.01:
                 set_gain(new)
                 set_display(new)
-                self._skip_remaining = 2
+                self._skip_remaining = _SKIP_FRAMES_AFTER_CHANGE
                 if self.verbose:
                     print(f"[AG] {new:.2f}x (prefer exposure, peak {peak:.3f})")
                 return True
