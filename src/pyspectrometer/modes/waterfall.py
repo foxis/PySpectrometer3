@@ -68,6 +68,7 @@ class WaterfallMode(MeasurementMode):
             ButtonDefinition("Peak", "capture_peak", is_toggle=True, shortcut="h", row=1),
             ButtonDefinition("SnapPk", "snap_to_peaks", is_toggle=True, row=1),
             ButtonDefinition("ClrMk", "clear_markers", row=1),
+            ButtonDefinition("PkΔ", "show_peak_delta", is_toggle=True, row=1),
             ButtonDefinition("Dark", "set_dark", row=1),
             ButtonDefinition("White", "set_white", row=1),
             ButtonDefinition("ClrRef", "clear_refs", row=1),

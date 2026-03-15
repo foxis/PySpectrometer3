@@ -74,6 +74,26 @@ class MeasurementMode(BaseMode):
         self.register_callback("show_reference", lambda: self._on_toggle_show_reference(ctx))
         self.register_callback("normalize", lambda: self._on_toggle_normalize(ctx))
         self.register_callback("lamp_toggle", lambda: self._on_toggle_light(ctx))
+        self.register_callback("snap_to_peaks", lambda: self._on_toggle_snap_to_peaks(ctx))
+        self.register_callback("clear_markers", lambda: self._on_clear_markers(ctx))
+        self.register_callback("show_peak_delta", lambda: self._on_toggle_peak_delta(ctx))
+
+    def _on_toggle_peak_delta(self, ctx: ModeContext) -> None:
+        """Toggle peak/marker width (FWHM) below wavelength label."""
+        active = ctx.display.toggle_peak_delta_visible()
+        ctx.display.set_button_active("show_peak_delta", active)
+        print(f"[PkΔ] Peak width display: {'ON' if active else 'OFF'}")
+
+    def _on_toggle_snap_to_peaks(self, ctx: ModeContext) -> None:
+        """Toggle snap-to-peaks for marker line placement (when peaks are off)."""
+        active = ctx.display.toggle_snap_to_peaks()
+        ctx.display.set_button_active("snap_to_peaks", active)
+        print(f"[MARKERS] Snap to peaks: {'ON' if active else 'OFF'}")
+
+    def _on_clear_markers(self, ctx: ModeContext) -> None:
+        """Remove all vertical marker lines."""
+        ctx.display.state.marker_lines.clear()
+        print("[MARKERS] All marker lines cleared")
 
     def _on_capture(self, ctx: ModeContext) -> None:
         """Handle capture current spectrum."""
@@ -225,6 +245,9 @@ class MeasurementMode(BaseMode):
             ButtonDefinition("ShowRef", "show_reference", is_toggle=True, row=2),
             ButtonDefinition("Norm", "normalize", is_toggle=True, row=2),
             ButtonDefinition("Peaks", "show_peaks", is_toggle=True, row=2),
+            ButtonDefinition("SnapPk", "snap_to_peaks", is_toggle=True, row=2),
+            ButtonDefinition("ClrMk", "clear_markers", row=2),
+            ButtonDefinition("PkΔ", "show_peak_delta", is_toggle=True, row=2),
             ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=2),
             ButtonDefinition("ClrPeak", "clear_peak_region", shortcut="z", row=2),
             ButtonDefinition("ZX", "show_zoom_x_slider", is_toggle=True, row=2),
