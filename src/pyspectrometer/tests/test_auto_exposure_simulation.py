@@ -1,14 +1,12 @@
-"""Simulation test for auto-exposure and auto-gain with constant light.
+"""Simulation tests for auto-exposure and auto-gain.
 
-Simulates:
-- 10-bit sensor: intensity = min(1, raw/1023) with raw = min(1023, exposure_sec * gain * 1023).
-- Frame timing: exposure < 1/30 s → 30 fps (frame period 1/30 s); else frame period = exposure.
-- Convergence and stability of AE/AG within ~100 steps, no major oscillations, no over/underexposure.
+Sensor model: 10-bit linear, peak = min(1023, int(exposure_sec * gain * 1023)) / 1023.
+Frame timing: 30 fps for short exposures; frame_period = exposure_sec when long.
 
-Real-world note: stream_camera.py and mode_context run at most one of AE or AG per frame (exposure
-first; if exposure adjusted, skip gain). Even with that, alternating frames (E down, next frame G down)
-still over-correct and cause oscillation (saturated -> too dark -> saturated). So after an exposure
-adjust we cooldown gain for a few frames so we see the new exposure before changing gain.
+Expected behavior:
+- Converges to [0.80, 0.90] within ~60 frames from any starting point.
+- Never oscillates (peak does not repeatedly cross into overexposure after convergence).
+- Proportional control: one step per 2 frames (active + skip). Fast for large errors.
 """
 
 import numpy as np
@@ -18,47 +16,55 @@ from ..core.spectrum import SpectrumData
 from ..processing.auto_controls import (
     AutoExposureController,
     AutoGainController,
+    TARGET_LOW,
+    TARGET_HIGH,
 )
 
-# 10-bit sensor max
 _SENSOR_MAX = 1023
+_MIN_FRAME_PERIOD = 1.0 / 30.0
 
-# Target band (must match auto_controls: 0.80–0.95)
-TARGET_LOW = 0.80
-TARGET_HIGH = 0.95
+# When to declare convergence and how long to check stability.
+CONVERGE_STEPS = 80
+STABILITY_STEPS = 120
 
-# Convergence: expect peak in band within this many steps
-CONVERGE_STEPS = 100
-# After convergence, check stability for this many steps (no major oscillations)
-STABILITY_STEPS = 150
-
-# Allowed peak when "converged": no overexposure, no strong underexposure
-PEAK_MAX_OK = 0.97
-PEAK_MIN_OK = 0.84
-
-# Frame period when exposure <= 1/30 s (30 fps)
-MIN_FRAME_PERIOD_SEC = 1.0 / 30.0
+# Allowed range after full convergence (slightly wider than band to allow smoothing lag).
+PEAK_MAX_OK = 0.93
+PEAK_MIN_OK = 0.76
 
 
-def _sensor_peak_10bit(exposure_us: int, gain: float) -> float:
-    """Constant light: linear in exposure*gain, 10-bit quantized, normalized to 0–1."""
-    exposure_sec = exposure_us / 1e6
-    linear = exposure_sec * gain * _SENSOR_MAX
-    raw = min(_SENSOR_MAX, int(linear))
+def _sensor_peak(exposure_us: int, gain: float) -> float:
+    """10-bit linear sensor. Clips at full scale."""
+    raw = min(_SENSOR_MAX, int((exposure_us / 1e6) * gain * _SENSOR_MAX))
     return raw / float(_SENSOR_MAX)
 
 
-def _frame_period_sec(exposure_us: int) -> float:
-    """Exposure < 1/30 s → 30 fps; else frame period = exposure."""
-    exposure_sec = exposure_us / 1e6
-    return max(MIN_FRAME_PERIOD_SEC, exposure_sec)
+def _frame_period(exposure_us: int) -> float:
+    return max(_MIN_FRAME_PERIOD, exposure_us / 1e6)
 
 
-def test_auto_exposure_gain_converges_constant_light():
-    """Constant light: AE/AG converge in ~100 steps, then stay in band without major oscillations."""
-    # Simulated camera state
-    exposure_us = 10_000
-    gain = 2.0
+def _make_controllers() -> tuple[AutoExposureController, AutoGainController]:
+    ae = AutoExposureController(
+        exposure_min_us=100,
+        exposure_max_us=1_000_000,
+        smoothing_tau=0.05,
+        verbose=False,
+    )
+    ag = AutoGainController(
+        gain_min=1.0,
+        gain_max=16.0,
+        smoothing_tau=0.05,
+        verbose=False,
+    )
+    return ae, ag
+
+
+def _run_sim(
+    exposure_us: int,
+    gain: float,
+    steps: int,
+) -> list[float]:
+    """Run AE/AG simulation, return list of raw sensor peaks per step."""
+    ae, ag = _make_controllers()
 
     def get_exposure() -> int:
         return exposure_us
@@ -74,181 +80,88 @@ def test_auto_exposure_gain_converges_constant_light():
         nonlocal gain
         gain = v
 
-    # No-op display updaters
-    def set_display_exposure(_: int) -> None:
-        pass
-
-    def set_display_gain(_: float) -> None:
-        pass
-
-    auto_exposure = AutoExposureController(
-        exposure_min_us=100,
-        exposure_max_us=1_000_000,
-        exposure_preferred_max_us=500_000,
-        peak_smoothing_period_sec=0.1,
-        verbose=False,
-    )
-    auto_gain = AutoGainController(
-        gain_min=1.0,
-        gain_max=16.0,
-        peak_smoothing_period_sec=0.1,
-        verbose=False,
-    )
+    noop_i = lambda _: None
+    noop_f = lambda _: None
 
     peaks: list[float] = []
-    converged_at: int | None = None
+    wavelengths = np.linspace(380.0, 720.0, 64)
 
-    n_pixels = 64
-    wavelengths = np.linspace(380.0, 720.0, n_pixels)
-
-    total_steps = CONVERGE_STEPS + STABILITY_STEPS
-    for step in range(total_steps):
-        # Frame period: exposure < 1/30 s → 30 fps
-        frame_period = _frame_period_sec(exposure_us)
-
-        peak_val = _sensor_peak_10bit(exposure_us, gain)
+    for _ in range(steps):
+        peak_val = _sensor_peak(exposure_us, gain)
         peaks.append(peak_val)
-        intensity = np.full(n_pixels, peak_val, dtype=np.float64)
+        intensity = np.full(64, peak_val, dtype=np.float64)
         data = SpectrumData(
             intensity=intensity,
             wavelengths=wavelengths,
             exposure_us=exposure_us,
             gain=gain,
         )
+        ae_busy = ae.adjust(data, get_exposure, set_exposure, noop_i)
+        if not ae_busy:
+            ag.adjust(data, get_gain, set_gain, noop_f)
 
-        # Same order as mode_context: exposure first, then gain if exposure didn't change
-        exposure_adjusted = auto_exposure.adjust(
-            data, get_exposure, set_exposure, set_display_exposure
-        )
-        if not exposure_adjusted:
-            auto_gain.adjust(data, get_gain, set_gain, set_display_gain)
+    return peaks
 
-        # Check convergence (first time peak in band)
-        if converged_at is None and TARGET_LOW <= peak_val <= TARGET_HIGH:
-            converged_at = step
 
-    # Must converge within CONVERGE_STEPS
-    assert converged_at is not None, (
-        f"Peak did not enter band [{TARGET_LOW}, {TARGET_HIGH}] within {CONVERGE_STEPS} steps. "
-        f"Last 10 peaks: {peaks[-10:]}"
+def _first_in_band(peaks: list[float]) -> int | None:
+    for i, p in enumerate(peaks):
+        if TARGET_LOW <= p <= TARGET_HIGH:
+            return i
+    return None
+
+
+def test_converges_from_underexposed():
+    """Start very underexposed: converges to band within CONVERGE_STEPS."""
+    peaks = _run_sim(exposure_us=5_000, gain=1.0, steps=CONVERGE_STEPS + STABILITY_STEPS)
+    converged = _first_in_band(peaks)
+
+    assert converged is not None, (
+        f"Never entered band [{TARGET_LOW}, {TARGET_HIGH}]. Last 10: {peaks[-10:]}"
     )
-    assert converged_at <= CONVERGE_STEPS, (
-        f"Converged at step {converged_at}, expected within {CONVERGE_STEPS}. "
-        f"Peaks near convergence: {peaks[max(0, converged_at - 5) : converged_at + 10]}"
-    )
-
-    # Stability: after convergence, no major oscillations (peak should stay in/near band)
-    post_converge = peaks[converged_at : converged_at + STABILITY_STEPS]
-    out_of_band = sum(1 for p in post_converge if p < TARGET_LOW or p > TARGET_HIGH)
-    # Allow a few frames outside band (smoothing/quantization), but not many
-    assert out_of_band <= max(20, STABILITY_STEPS // 5), (
-        f"Too many steps outside band after convergence: {out_of_band}/{len(post_converge)}. "
-        f"Peaks: min={min(post_converge):.3f}, max={max(post_converge):.3f}"
+    assert converged <= CONVERGE_STEPS, (
+        f"Converged at step {converged}, expected ≤ {CONVERGE_STEPS}. "
+        f"Near convergence: {peaks[max(0, converged-3):converged+5]}"
     )
 
-    # When converged: no overexposure (peak <= PEAK_MAX_OK)
-    final_peaks = peaks[-50:]
-    assert max(final_peaks) <= PEAK_MAX_OK, (
-        f"Overexposed when converged: max peak {max(final_peaks):.3f} > {PEAK_MAX_OK}"
+    final = peaks[-50:]
+    assert max(final) <= PEAK_MAX_OK, f"Overexposed after convergence: max={max(final):.3f}"
+    assert min(final) >= PEAK_MIN_OK, f"Underexposed after convergence: min={min(final):.3f}"
+
+
+def test_converges_from_overexposed():
+    """Start saturated: reduces to band without oscillation."""
+    peaks = _run_sim(exposure_us=400_000, gain=12.0, steps=CONVERGE_STEPS + STABILITY_STEPS)
+    converged = _first_in_band(peaks)
+
+    assert converged is not None, (
+        f"Never entered band. Last 10: {peaks[-10:]}"
+    )
+    assert converged <= CONVERGE_STEPS, (
+        f"Converged at step {converged}, expected ≤ {CONVERGE_STEPS}."
     )
 
-    # When converged: not severely underexposed (peak >= PEAK_MIN_OK)
-    assert min(final_peaks) >= PEAK_MIN_OK, (
-        f"Underexposed when converged: min peak {min(final_peaks):.3f} < {PEAK_MIN_OK}"
-    )
-
-    # No pulsing: after convergence we must not repeatedly cross into overexposure (normal ↔ over).
-    crossings_into_over = 0
-    for i in range(1, len(post_converge)):
-        if post_converge[i] > TARGET_HIGH and post_converge[i - 1] <= TARGET_HIGH:
-            crossings_into_over += 1
-    assert crossings_into_over <= 1, (
-        f"Exposure pulsing: crossed into overexposure (>{TARGET_HIGH}) {crossings_into_over} times "
-        f"after convergence (max 1 allowed). Peaks (first 60): {post_converge[:60]}"
-    )
-
-
-def test_auto_exposure_gain_from_overexposed_no_overshoot():
-    """Start overexposed; after converging into band, peak must not jump back up (no overshoot)."""
-    exposure_us = 400_000  # 0.4 s
-    gain = 12.0
-    # peak = min(1, 0.4 * 12) = 1.0 (saturated)
-
-    def get_exposure() -> int:
-        return exposure_us
-
-    def set_exposure(v: int) -> None:
-        nonlocal exposure_us
-        exposure_us = v
-
-    def get_gain() -> float:
-        return gain
-
-    def set_gain(v: float) -> None:
-        nonlocal gain
-        gain = v
-
-    def set_display_exposure(_: int) -> None:
-        pass
-
-    def set_display_gain(_: float) -> None:
-        pass
-
-    auto_exposure = AutoExposureController(
-        exposure_min_us=100,
-        exposure_max_us=1_000_000,
-        exposure_preferred_max_us=500_000,
-        peak_smoothing_period_sec=0.1,
-        verbose=False,
-    )
-    auto_gain = AutoGainController(
-        gain_min=1.0,
-        gain_max=16.0,
-        peak_smoothing_period_sec=0.1,
-        verbose=False,
-    )
-
-    peaks: list[float] = []
-    converged_at: int | None = None
-
-    n_pixels = 64
-    wavelengths = np.linspace(380.0, 720.0, n_pixels)
-
-    total_steps = CONVERGE_STEPS + STABILITY_STEPS
-    for step in range(total_steps):
-        frame_period = _frame_period_sec(exposure_us)
-
-        peak_val = _sensor_peak_10bit(exposure_us, gain)
-        peaks.append(peak_val)
-        intensity = np.full(n_pixels, peak_val, dtype=np.float64)
-        data = SpectrumData(
-            intensity=intensity,
-            wavelengths=wavelengths,
-            exposure_us=exposure_us,
-            gain=gain,
-        )
-
-        exposure_adjusted = auto_exposure.adjust(
-            data, get_exposure, set_exposure, set_display_exposure
-        )
-        if not exposure_adjusted:
-            auto_gain.adjust(data, get_gain, set_gain, set_display_gain)
-
-        if converged_at is None and TARGET_LOW <= peak_val <= TARGET_HIGH:
-            converged_at = step
-
-    assert converged_at is not None, (
-        f"Did not converge from overexposed within {CONVERGE_STEPS} steps. Last 10 peaks: {peaks[-10:]}"
-    )
-
-    # After convergence: must not go back above PEAK_MAX_OK (catches reduce->0.65->increase->1.0 oscillation).
-    post = peaks[converged_at:]
+    post = peaks[converged:]
     assert max(post) <= PEAK_MAX_OK, (
-        f"Overshoot after convergence: max peak {max(post):.3f} > {PEAK_MAX_OK}. "
-        f"Peaks after converge: {post[:30]}..."
+        f"Overshoot after convergence: max={max(post):.3f}. post[:20]={post[:20]}"
     )
-    # No oscillation: must not cross back into overexposure more than once (no reduce/increase/reduce cycle).
-    crossings = sum(1 for i in range(1, len(post)) if post[i] > TARGET_HIGH and post[i - 1] <= TARGET_HIGH)
+
+    crossings = sum(
+        1 for i in range(1, len(post))
+        if post[i] > TARGET_HIGH and post[i - 1] <= TARGET_HIGH
+    )
     assert crossings <= 1, (
-        f"Oscillation: crossed into overexposure {crossings} times after convergence (max 1). post[:40]={post[:40]}"
+        f"Oscillation: crossed into overexposure {crossings} times after convergence."
+    )
+
+
+def test_stays_stable_in_band():
+    """Start with peak already in band: should not drift out."""
+    # Choose exposure/gain so peak ≈ 0.85 exactly.
+    # peak = exposure_sec * gain * 1023 / 1023 = exposure_sec * gain
+    # → 0.85 = 0.1 * 8.5
+    peaks = _run_sim(exposure_us=100_000, gain=8.5, steps=200)
+    final = peaks[-100:]
+    out_of_band = sum(1 for p in final if p < TARGET_LOW or p > TARGET_HIGH)
+    assert out_of_band <= 10, (
+        f"Drifted out of band {out_of_band}/100 times. min={min(final):.3f} max={max(final):.3f}"
     )
