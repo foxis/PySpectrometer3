@@ -20,11 +20,13 @@ import cv2
 import numpy as np
 
 from ..core.spectrum import Peak, SpectrumData
+from .peak_width import fwhm_nm
 from .viewport import Viewport
 
 _GAP = 2        # px gap between peak tip and label box
 _PAD = 2        # inner padding inside label box
 _ALPHA = 0.65   # label background opacity
+_DELTA_SCALE = 0.75  # font scale for delta line relative to main label
 
 
 @dataclass
@@ -37,6 +39,8 @@ class PeaksRenderer:
         Draw wavelength text labels near each peak.
     show_lines:
         Draw a vertical line through each peak from the bottom of the graph.
+    show_width:
+        When True, show FWHM (peak width in nm) below the wavelength label.
     font:
         OpenCV font face.
     font_scale:
@@ -45,6 +49,7 @@ class PeaksRenderer:
 
     show_labels: bool = True
     show_lines: bool = True
+    show_width: bool = False
     font: int = cv2.FONT_HERSHEY_SIMPLEX
     font_scale: float = 0.45
 
@@ -54,9 +59,14 @@ class PeaksRenderer:
             return image
         height, width = image.shape[:2]
         spectrum_y = _spectrum_screen_y(data, viewport, width, height)
-        placements = _place_all(data.peaks, viewport, width, height, spectrum_y, self.font, self.font_scale)
+        placements = _place_all(
+            data.peaks, viewport, width, height, spectrum_y,
+            self.font, self.font_scale, self.show_width,
+        )
         if self.show_labels:
-            _draw_labels(image, placements, self.font, self.font_scale)
+            _draw_labels(
+                image, placements, data, self.font, self.font_scale, self.show_width,
+            )
         if self.show_lines:
             _draw_lines(image, placements)
         return image
@@ -99,14 +109,21 @@ def _place_all(
     spectrum_y: np.ndarray,
     font: int,
     font_scale: float,
+    show_width: bool = False,
 ) -> list[_Placement]:
     visible = _visible_peaks(peaks, viewport, width, height)
     other_sx = [sx for sx, _, _, _ in visible]
     placements: list[_Placement] = []
+    delta_scale = font_scale * _DELTA_SCALE if show_width else font_scale
 
     for sx, peak_y, _, peak in visible:
         (tw, th), _ = cv2.getTextSize(f"{peak.wavelength:.0f}", font, font_scale, 1)
-        box_w, box_h = tw + _PAD * 2, th + _PAD * 2
+        box_w = tw + _PAD * 2
+        if show_width:
+            (_, th2), _ = cv2.getTextSize("Δ99.9nm", font, delta_scale, 1)
+            box_h = th + th2 + 4 + _PAD * 2
+        else:
+            box_h = th + _PAD * 2
         result = _best_position(sx, peak_y, box_w, box_h, width, height,
                                 visible, other_sx, placements, spectrum_y)
         if result is not None:
@@ -210,9 +227,15 @@ def _curve_overlap(x1: int, x2: int, y1: int, y2: int, spectrum_y: np.ndarray) -
 # ---------------------------------------------------------------------------
 
 def _draw_labels(
-    image: np.ndarray, placements: list[_Placement], font: int, font_scale: float
+    image: np.ndarray,
+    placements: list[_Placement],
+    data: SpectrumData,
+    font: int,
+    font_scale: float,
+    show_width: bool = False,
 ) -> None:
     width = image.shape[1]
+    delta_scale = font_scale * _DELTA_SCALE
     for sx, x1, x2, y1, y2, peak, left in placements:
         label = f"{peak.wavelength:.0f}"
         rx1, rx2 = max(0, x1), min(x2, width)
@@ -221,10 +244,23 @@ def _draw_labels(
             bg = roi.copy()
             bg[:] = (0, 255, 255)
             cv2.addWeighted(bg, _ALPHA, roi, 1 - _ALPHA, 0, roi)
-        (tw, _), _ = cv2.getTextSize(label, font, font_scale, 1)
+        (tw, th), _ = cv2.getTextSize(label, font, font_scale, 1)
         tx = x1 + _PAD if left else x2 - _PAD - tw
         tx = max(0, min(tx, width - tw))
-        cv2.putText(image, label, (tx, y2 - _PAD - 2), font, font_scale, (0, 0, 0), 1, cv2.LINE_AA)
+        # Main label (wavelength) at top of box; delta immediately below when show_width
+        wl_baseline = y1 + _PAD + th
+        cv2.putText(image, label, (tx, wl_baseline), font, font_scale, (0, 0, 0), 1, cv2.LINE_AA)
+        if show_width:
+            fwhm = fwhm_nm(peak.index, data.intensity, data.wavelengths)
+            if fwhm is not None:
+                delta_label = f"Δ{fwhm:.1f}nm"
+                (dw, dh), _ = cv2.getTextSize(delta_label, font, delta_scale, 1)
+                dx = x1 + _PAD if left else x2 - _PAD - dw
+                dx = max(0, min(dx, width - dw))
+                cv2.putText(
+                    image, delta_label, (dx, wl_baseline + 2 + dh),
+                    font, delta_scale, (0, 0, 0), 1, cv2.LINE_AA,
+                )
 
 
 def _draw_lines(image: np.ndarray, placements: list[_Placement]) -> None:

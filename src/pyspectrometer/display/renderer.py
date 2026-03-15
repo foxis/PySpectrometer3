@@ -97,6 +97,8 @@ class DisplayState:
     # Vertical marker lines: list of data indices (max 10)
     marker_lines: list[int] = field(default_factory=list)
     snap_to_peaks: bool = False
+    # Show peak/dip width (FWHM) below wavelength on peaks and markers when on a peak
+    peak_delta_visible: bool = False
 
     def __post_init__(self):
         if self.cursor is None:
@@ -427,7 +429,9 @@ class DisplayManager:
                     self._panning = True
                     self._pan_last_x = x
                     self._pan_last_y = graph_rel_y
-                elif self.mode == "waterfall":
+                elif self.mode == "waterfall" or (
+                    self.mode == "measurement" and not self.state.peaks_visible
+                ):
                     self._start_marker_interaction(x, width)
                 elif self.state.spectrum_bars_visible and self._last_data_width > 0:
                     data_x = self._viewport.screen_x_to_data(x, width)
@@ -532,6 +536,11 @@ class DisplayManager:
         self.state.snap_to_peaks = not self.state.snap_to_peaks
         return self.state.snap_to_peaks
 
+    def toggle_peak_delta_visible(self) -> bool:
+        """Toggle peak/marker width (FWHM) below wavelength label. Returns new state."""
+        self.state.peak_delta_visible = not self.state.peak_delta_visible
+        return self.state.peak_delta_visible
+
     def render(
         self,
         data: SpectrumData,
@@ -576,6 +585,18 @@ class DisplayManager:
         else:
             self.set_status("Sel", "-")
 
+        if len(self.state.marker_lines) >= 2 and data_width > 0:
+            i1, i2 = sorted(self.state.marker_lines[:2])
+            i1 = max(0, min(i1, data_width - 1))
+            i2 = max(0, min(i2, data_width - 1))
+            wl1 = data.wavelengths[i1]
+            wl2 = data.wavelengths[i2]
+            d_wl = abs(wl2 - wl1)
+            d_i = abs(float(data.intensity[i2]) - float(data.intensity[i1]))
+            self.set_status("Δ", f"Δλ={d_wl:.1f}nm ΔI={d_i:.2f}")
+        else:
+            self.set_status("Δ", "-")
+
         self._viewport.init_if_needed(data_width)
         self._viewport.clamp_x(data_width)
 
@@ -604,6 +625,7 @@ class DisplayManager:
             self._render_mode_overlay(graph)
             self._render_sensitivity_overlay(graph)
             if self.state.peaks_visible:
+                self._peaks_renderer.show_width = self.state.peak_delta_visible
                 self._peaks_renderer.render(graph, data, self._viewport)
 
             # Graticule labels drawn last; need peak screen-x positions for spacing
@@ -622,6 +644,17 @@ class DisplayManager:
                 spectrum_screen_y=spectrum_screen_y,
             )
             self._render_cursor(graph, data)
+            if self.mode == "measurement" and self.state.marker_lines:
+                self._markers_renderer.show_width = self.state.peak_delta_visible
+                self._markers_renderer.render(
+                    graph,
+                    self.state.marker_lines,
+                    data.wavelengths,
+                    self._viewport,
+                    y_offset=0,
+                    dragging_idx=self._dragging_marker_idx,
+                    intensity=data.intensity,
+                )
 
         if self._graph_info:
             self._render_graph_info(graph)
@@ -770,6 +803,7 @@ class DisplayManager:
             )
             if waterfall_mode:
                 if self.state.marker_lines:
+                    self._markers_renderer.show_width = self.state.peak_delta_visible
                     self._markers_renderer.render(
                         waterfall_vertical,
                         self.state.marker_lines,
@@ -777,6 +811,7 @@ class DisplayManager:
                         self._viewport,
                         y_offset=graticule_y_offset,
                         dragging_idx=self._dragging_marker_idx,
+                        intensity=data.intensity,
                     )
                 self._render_overlays(waterfall_vertical)
                 cv2.imshow(self.config.waterfall_title, waterfall_vertical)
