@@ -211,6 +211,7 @@ class ColorScienceMode(BaseMode):
         graph_height: int,
     ) -> None:
         """Update graph and preview strip according to current PREV view."""
+        ctx.display.state.graph_click_behavior = "default"
         ctx.display.set_mode_overlay(None)
         ctx.display.set_sensitivity_overlay(None)
 

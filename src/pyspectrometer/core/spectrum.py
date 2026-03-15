@@ -41,15 +41,18 @@ class SpectrumData:
     """Container for spectrum measurement data.
 
     This class holds all data associated with a single spectrum capture,
-    including raw intensity values, calibrated wavelengths, and detected peaks.
+    including intensity (0-1), calibrated wavelengths, and detected peaks.
+    Optional gain/exposure allow standardized intensity (comparable across settings).
 
     Attributes:
-        intensity: Array of intensity values (0-255) for each pixel
+        intensity: Array of intensity values (0-1) for each pixel
         wavelengths: Array of wavelength values (nm) for each pixel
         timestamp: Unix timestamp of when the spectrum was captured
         peaks: List of detected peaks in the spectrum
         raw_frame: Optional raw camera frame for display purposes
         cropped_frame: Optional cropped region used for spectrum extraction
+        gain: Camera gain at capture (None if unknown or N/A)
+        exposure_us: Camera exposure in µs at capture (None if unknown or N/A)
     """
 
     intensity: np.ndarray
@@ -59,6 +62,8 @@ class SpectrumData:
     raw_frame: np.ndarray | None = field(default=None, repr=False)
     cropped_frame: np.ndarray | None = field(default=None, repr=False)
     x_axis_label: str = "Wavelength (nm)"
+    gain: float | None = field(default=None, repr=False)
+    exposure_us: int | None = field(default=None, repr=False)
 
     @property
     def width(self) -> int:
@@ -92,6 +97,24 @@ class SpectrumData:
             return int(self.intensity[pixel])
         raise IndexError(f"Pixel index {pixel} out of range [0, {len(self.intensity)})")
 
+    def standardized_intensity(
+        self,
+        reference_gain: float = 1.0,
+        reference_exposure_us: float = 1.0,
+    ) -> np.ndarray | None:
+        """Intensity scaled so the same irradiance gives the same value across gain/exposure.
+
+        Returns intensity * (reference_gain * reference_exposure_us) / (gain * exposure_us),
+        or None if gain or exposure_us is missing. Use for export/comparison across settings.
+        """
+        if self.gain is None or self.exposure_us is None:
+            return None
+        g, e = float(self.gain), float(self.exposure_us)
+        if g < 1e-12 or e < 1e-12:
+            return None
+        scale = (reference_gain * reference_exposure_us) / (g * e)
+        return (self.intensity.astype(np.float64) * scale).astype(np.float32)
+
     def with_intensity(self, intensity: np.ndarray) -> "SpectrumData":
         """Return a new SpectrumData with updated intensity values."""
         return SpectrumData(
@@ -102,6 +125,8 @@ class SpectrumData:
             raw_frame=self.raw_frame,
             cropped_frame=self.cropped_frame,
             x_axis_label=self.x_axis_label,
+            gain=self.gain,
+            exposure_us=self.exposure_us,
         )
 
     def with_peaks(self, peaks: list[Peak]) -> "SpectrumData":
@@ -114,6 +139,8 @@ class SpectrumData:
             raw_frame=self.raw_frame,
             cropped_frame=self.cropped_frame,
             x_axis_label=self.x_axis_label,
+            gain=self.gain,
+            exposure_us=self.exposure_us,
         )
 
     def to_csv_rows(self) -> list[tuple[float, float]]:

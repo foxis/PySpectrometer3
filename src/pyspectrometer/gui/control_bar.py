@@ -89,6 +89,8 @@ class ControlBar:
         self._status_values: dict[str, str] = {}
         self._calibrate_red: bool = False
         self._button_style: ButtonStyle | None = None
+        self._capture_progress_frac: float | None = None
+        self._capture_duration_sec: float = 0.0
 
         self._setup_buttons(buttons)
 
@@ -222,6 +224,13 @@ class ControlBar:
         """Set whether 'Calibrate' label should be drawn in red (non-calibration modes)."""
         self._calibrate_red = red
 
+    def set_capture_progress(
+        self, progress_frac: float | None, duration_sec: float
+    ) -> None:
+        """Set capture progress for playback icon (pie when exposure > 100ms)."""
+        self._capture_progress_frac = progress_frac
+        self._capture_duration_sec = duration_sec
+
     def get_status_segments(
         self,
         default_color: tuple[int, int, int] = (0, 255, 255),
@@ -255,10 +264,14 @@ class ControlBar:
         image = np.zeros([cfg.height, self.width, 3], dtype=np.uint8)
         image[:] = cfg.bg_color
 
-        if self._row1 is not None:
-            self._row1.render(image)
-        if self._row2 is not None:
-            self._row2.render(image)
+        for bar in (self._row1, self._row2):
+            if bar is None:
+                continue
+            for btn in bar.buttons:
+                if getattr(btn, "icon_type", "") == "playback":
+                    btn.capture_progress_frac = self._capture_progress_frac
+                    btn.capture_duration_sec = self._capture_duration_sec
+            bar.render(image)
 
         return image
 

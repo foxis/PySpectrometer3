@@ -1,10 +1,7 @@
 """Vertical marker-line renderer for waterfall and spectrum graphs.
 
-Markers are user-placed vertical lines identified by a data-array index.
-Each line is annotated with its wavelength value; when show_width is True and
-the marker is on a peak (local maximum), FWHM is shown below.
-
-Composable: renders onto any BGR image that shares the same Viewport.
+Markers are user-placed vertical lines. They use the same rendering as peaks:
+intelligent label placement, yellow box labels, thick black vertical lines.
 """
 
 from dataclasses import dataclass
@@ -12,32 +9,37 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
+from ..core.spectrum import Peak
 from .peak_width import fwhm_nm, is_local_max
+from .peaks import compute_placements, draw_labels, draw_lines
 from .viewport import Viewport
 
-_DELTA_SCALE = 0.75
+
+def _marker_peaks(
+    lines: list[int],
+    wavelengths: np.ndarray,
+    intensity: np.ndarray,
+    n_wl: int,
+) -> list[Peak]:
+    """Build Peak-like objects for marker indices (for placement and drawing)."""
+    out = []
+    for data_idx in lines:
+        if not (0 <= data_idx < n_wl):
+            continue
+        out.append(
+            Peak(
+                index=data_idx,
+                wavelength=float(wavelengths[data_idx]),
+                intensity=float(intensity[data_idx]),
+            )
+        )
+    return out
 
 
 @dataclass
 class MarkersRenderer:
-    """Renders vertical marker lines with wavelength labels.
+    """Renders marker lines using the same placement and drawing as peaks."""
 
-    Attributes
-    ----------
-    color:
-        BGR colour for idle marker lines and labels.
-    drag_color:
-        BGR colour used for the line currently being dragged.
-    show_width:
-        When True, show FWHM below the wavelength if the marker is on a peak.
-    font:
-        OpenCV font face.
-    font_scale:
-        Font scale factor.
-    """
-
-    color: tuple[int, int, int] = (0, 255, 255)
-    drag_color: tuple[int, int, int] = (0, 200, 255)
     show_width: bool = False
     font: int = cv2.FONT_HERSHEY_SIMPLEX
     font_scale: float = 0.45
@@ -51,73 +53,61 @@ class MarkersRenderer:
         y_offset: int = 0,
         dragging_idx: int | None = None,
         intensity: np.ndarray | None = None,
+        spectrum_screen_y: np.ndarray | None = None,
+        graph_height: int | None = None,
     ) -> np.ndarray:
-        """Render marker lines onto *image* in-place.  Returns image for chaining.
-
-        Parameters
-        ----------
-        image:
-            Target BGR image (the full composed frame).
-        lines:
-            Data indices of active marker lines.
-        wavelengths:
-            Wavelength array matching the spectrum data (nm or cm⁻¹).
-        viewport:
-            Current zoom/pan state used to map data indices to screen x.
-        y_offset:
-            Top y-coordinate where lines begin (e.g. top of the waterfall strip
-            within a larger composed frame).
-        dragging_idx:
-            Index into *lines* of the line currently being dragged, or None.
-        intensity:
-            Spectrum intensity (0–1). Required for show_width; used to detect
-            peak and compute FWHM. Delta is only drawn when marker is on a peak.
-        """
+        """Render marker lines in-place. Same style as peaks: yellow box, thick black lines."""
         width = image.shape[1]
         height = image.shape[0]
         n_wl = len(wavelengths)
+        use_placement = (
+            spectrum_screen_y is not None
+            and graph_height is not None
+            and intensity is not None
+            and len(spectrum_screen_y) == width
+        )
 
-        for i, data_idx in enumerate(lines):
-            if not (0 <= data_idx < n_wl):
-                continue
-            sx = viewport.data_x_to_screen(float(data_idx), width)
-            if not (0 <= sx < width):
-                continue
-            color = self.drag_color if i == dragging_idx else self.color
-            cv2.line(image, (sx, y_offset), (sx, height - 1), color, 1, cv2.LINE_AA)
-            fwhm: float | None = None
-            if self.show_width and intensity is not None and is_local_max(data_idx, intensity):
-                fwhm = fwhm_nm(data_idx, intensity, wavelengths)
-            _draw_label(
-                image, sx, y_offset, wavelengths[data_idx], color, width,
-                self.font, self.font_scale, fwhm,
+        marker_peaks = _marker_peaks(lines, wavelengths, intensity, n_wl)
+        if not marker_peaks:
+            return image
+
+        if use_placement:
+            placements = compute_placements(
+                marker_peaks,
+                viewport,
+                width,
+                graph_height,
+                spectrum_screen_y,
+                self.font,
+                self.font_scale,
+                self.show_width,
             )
+            # Placements are in graph coordinates; offset for composed frame (e.g. waterfall)
+            adjusted = [
+                (sx, x1, x2, y1 + y_offset, y2 + y_offset, peak, left)
+                for sx, x1, x2, y1, y2, peak, left in placements
+            ]
+            get_fwhm = self._fwhm_getter(intensity, wavelengths)
+            draw_labels(image, adjusted, self.font, self.font_scale, get_fwhm)
+            draw_lines(image, adjusted, y_start=y_offset, y_end=height - 1)
+        else:
+            # Lines only (no placement data): same thick black line style
+            minimal = [
+                (viewport.data_x_to_screen(float(p.index), width), 0, 0, 0, 0, p, False)
+                for p in marker_peaks
+                if 0 <= viewport.data_x_to_screen(float(p.index), width) < width
+            ]
+            draw_lines(image, minimal, y_start=y_offset, y_end=height - 1)
 
         return image
 
+    def _fwhm_getter(self, intensity: np.ndarray, wavelengths: np.ndarray):
+        """Return get_fwhm(peak) for draw_labels: FWHM when show_width and on local max."""
+        show = self.show_width
 
-def _draw_label(
-    image: np.ndarray,
-    sx: int,
-    y_offset: int,
-    wavelength: float,
-    color: tuple[int, int, int],
-    width: int,
-    font: int,
-    font_scale: float,
-    fwhm: float | None = None,
-) -> None:
-    label = f"{wavelength:.0f}"
-    (tw, th), _ = cv2.getTextSize(label, font, font_scale, 1)
-    lx = max(0, min(sx + 2, width - tw - 2))
-    ly = y_offset + th + 4
-    cv2.putText(image, label, (lx + 1, ly + 1), font, font_scale, (0, 0, 0), 2, cv2.LINE_AA)
-    cv2.putText(image, label, (lx, ly), font, font_scale, color, 1, cv2.LINE_AA)
-    if fwhm is not None:
-        delta_scale = font_scale * _DELTA_SCALE
-        delta_label = f"Δ{fwhm:.1f}nm"
-        (dw, dh), _ = cv2.getTextSize(delta_label, font, delta_scale, 1)
-        dx = max(0, min(lx, width - dw - 2))
-        dy = ly + dh + 2
-        cv2.putText(image, delta_label, (dx + 1, dy + 1), font, delta_scale, (0, 0, 0), 2, cv2.LINE_AA)
-        cv2.putText(image, delta_label, (dx, dy), font, delta_scale, color, 1, cv2.LINE_AA)
+        def get_fwhm(p: Peak) -> float | None:
+            if not show or not is_local_max(p.index, intensity):
+                return None
+            return fwhm_nm(p.index, intensity, wavelengths)
+
+        return get_fwhm

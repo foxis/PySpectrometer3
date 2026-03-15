@@ -96,13 +96,15 @@ class ModeContext:
             if hasattr(self.camera, "exposure"):
                 self.camera.exposure = v
 
+        # Adjust at most one per frame so exposure and gain do not fight.
         if self.auto_exposure_enabled:
-            self.auto_exposure.adjust(
+            if self.auto_exposure.adjust(
                 data,
                 get_exposure,
                 set_exposure,
                 self.display.set_exposure_value,
-            )
+            ):
+                return
         if self.auto_gain_enabled:
             self.auto_gain.adjust(
                 data,

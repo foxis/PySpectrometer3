@@ -4,8 +4,12 @@ Thin orchestrator: creates components, builds ModeContext, delegates
 button layout and mode logic to mode classes.
 """
 
+import queue
+import threading
 import time
 from pathlib import Path
+
+from queue import Empty
 
 import cv2
 import numpy as np
@@ -166,10 +170,24 @@ class Spectrometer:
         return ctx
 
     def _capture_frame(self) -> np.ndarray:
-        """Capture frame and update context."""
+        """Capture frame and update context (blocking; used when not using threaded capture)."""
         frame = self._camera.capture()
         self._ctx.last_frame = frame
         return frame
+
+    def _capture_loop(self) -> None:
+        """Run in thread: capture frames and put on queue so main loop does not block on long exposure."""
+        while self._ctx.running and self._camera.is_running:
+            try:
+                frame = self._camera.capture()
+                try:
+                    self._frame_queue.put_nowait(frame)
+                except queue.Full:
+                    self._frame_queue.get_nowait()
+                    self._frame_queue.put_nowait(frame)
+            except Exception:
+                if not self._ctx.running:
+                    break
 
     def _process_intensity(self, frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Extract intensity, apply freeze/hold, mode processing, sensitivity correction. Returns (intensity, cropped)."""
@@ -219,11 +237,15 @@ class Spectrometer:
         """Build SpectrumData and run processing pipeline."""
         n = min(len(self._calibration.wavelengths), len(intensity))
         wl = self._calibration.wavelengths[:n]
+        gain = getattr(self._camera, "gain", None)
+        exposure_us = getattr(self._camera, "exposure", None)
         data = SpectrumData(
             intensity=intensity[:n],
             wavelengths=wl,
             raw_frame=frame,
             cropped_frame=cropped,
+            gain=float(gain) if gain is not None else None,
+            exposure_us=int(exposure_us) if exposure_us is not None else None,
         )
         return self._pipeline.run(data)
 
@@ -351,25 +373,63 @@ class Spectrometer:
         self._ctx.last_data = None
         self._mode_instance.on_start(self._ctx)
 
+        # Threaded capture so long exposure does not freeze the event loop
+        self._frame_queue: queue.Queue = queue.Queue(maxsize=1)
+        last_frame_received_at: float | None = None
+        last_duration_sec: float = 1.0 / 30.0
+        capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+        capture_thread.start()
+
         try:
             while self._ctx.running:
-                frame = self._capture_frame()
-                intensity, cropped = self._process_intensity(frame)
-                processed = self._run_pipeline(frame, intensity, cropped)
-                processed = self._mode_instance.transform_spectrum_data(processed)
-                processed = self._expand_peaks_with_regions(processed)
-                self._ctx.last_data = processed
-                self._ctx.handle_auto_gain_exposure(processed)
-                self._mode_instance.update_display(
-                    self._ctx, processed, self.config.display.graph_height
-                )
-                self._render_frame(processed)
+                frame = None
+                if self._ctx.auto_gain_enabled or self._ctx.auto_exposure_enabled:
+                    # Blocking capture so the frame we react to matches the exposure/gain we set.
+                    frame = self._capture_frame()
+                else:
+                    try:
+                        frame = self._frame_queue.get_nowait()
+                    except Empty:
+                        pass
+
+                if frame is not None:
+                    self._ctx.last_frame = frame
+                    intensity, cropped = self._process_intensity(frame)
+                    processed = self._run_pipeline(frame, intensity, cropped)
+                    processed = self._mode_instance.transform_spectrum_data(processed)
+                    processed = self._expand_peaks_with_regions(processed)
+                    self._ctx.last_data = processed
+                    self._ctx.handle_auto_gain_exposure(processed)
+                    last_frame_received_at = time.time()
+                    last_duration_sec = (
+                        (processed.exposure_us / 1e6)
+                        if (processed.exposure_us is not None and processed.exposure_us > 0)
+                        else (1.0 / 30.0)
+                    )
+
+                processed = self._ctx.last_data
+                progress = 0.0
+                if last_frame_received_at is not None and last_duration_sec > 0:
+                    elapsed = time.time() - last_frame_received_at
+                    progress = min(1.0, max(0.0, elapsed / last_duration_sec))
+                self._display.set_capture_progress(progress, last_duration_sec)
+
+                if processed is not None:
+                    self._mode_instance.update_display(
+                        self._ctx, processed, self.config.display.graph_height
+                    )
+                    self._render_frame(processed)  # Redraw every iteration so pie updates
+
                 key = cv2.waitKey(1)
                 if key != -1:
                     self._display.handle_key(chr(key & 0xFF))
                 self._check_window_closed()
         finally:
             self._camera.stop()
+            try:
+                capture_thread.join(timeout=2.0)
+            except Exception:
+                pass
             self._display.destroy()
             print("PySpectrometer 3 stopped.")
 

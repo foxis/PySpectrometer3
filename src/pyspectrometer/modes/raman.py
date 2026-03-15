@@ -171,6 +171,8 @@ class RamanMode(BaseMode):
             raw_frame=data.raw_frame,
             cropped_frame=data.cropped_frame,
             x_axis_label="Raman shift (cm⁻¹)",
+            gain=data.gain,
+            exposure_us=data.exposure_us,
         )
 
     def get_graticule(self, data: "SpectrumData") -> GraticuleData | None:
@@ -201,6 +203,7 @@ class RamanMode(BaseMode):
         graph_height: int,
     ) -> None:
         """Update Raman overlay and status."""
+        ctx.display.state.graph_click_behavior = "default"
         overlay = self.get_overlay(processed.wavelengths, graph_height)
         ctx.display.set_mode_overlay(overlay)
         ctx.display.set_sensitivity_overlay(None)

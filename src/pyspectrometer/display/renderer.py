@@ -99,6 +99,9 @@ class DisplayState:
     snap_to_peaks: bool = False
     # Show peak/dip width (FWHM) below wavelength on peaks and markers when on a peak
     peak_delta_visible: bool = False
+    # Graph click behavior: set by mode. "marker" | "peak_region" | "spectrum_select" | "default"
+    # default = pan (only when zoom sliders enabled and zoomed), else spectrum_select or peak_region
+    graph_click_behavior: str = "default"
 
     def __post_init__(self):
         if self.cursor is None:
@@ -425,23 +428,38 @@ class DisplayManager:
             elif in_graph:
                 if self._on_graph_click is not None:
                     self._on_graph_click(x, graph_rel_y)
-                elif self._is_zoomed():
-                    self._panning = True
-                    self._pan_last_x = x
-                    self._pan_last_y = graph_rel_y
-                elif self.mode == "waterfall" or (
-                    self.mode == "measurement" and not self.state.peaks_visible
-                ):
-                    self._start_marker_interaction(x, width)
-                elif self.state.spectrum_bars_visible and self._last_data_width > 0:
-                    data_x = self._viewport.screen_x_to_data(x, width)
-                    idx = int(round(data_x))
-                    idx = max(0, min(self._last_data_width - 1, idx))
-                    self.state.selected_spectrum_index = idx
                 else:
-                    self._click_for_region = True
-                    self._click_down_x = x
-                    self._click_down_y = y
+                    zoom_enabled = self._zoom_horizontal.visible or self._zoom_vertical.visible
+                    if zoom_enabled and self._is_zoomed():
+                        # Zoom bars visible and zoomed: always pan; no marker/peak_region
+                        self._panning = True
+                        self._pan_last_x = x
+                        self._pan_last_y = graph_rel_y
+                    elif self.state.graph_click_behavior == "marker":
+                        self._start_marker_interaction(x, width)
+                    elif self.state.graph_click_behavior == "peak_region":
+                        self._click_for_region = True
+                        self._click_down_x = x
+                        self._click_down_y = y
+                    elif self.state.graph_click_behavior == "spectrum_select" and self._last_data_width > 0:
+                        data_x = self._viewport.screen_x_to_data(x, width)
+                        idx = int(round(data_x))
+                        idx = max(0, min(self._last_data_width - 1, idx))
+                        self.state.selected_spectrum_index = idx
+                    elif self.state.graph_click_behavior == "default":
+                        if self.state.spectrum_bars_visible and self._last_data_width > 0:
+                            data_x = self._viewport.screen_x_to_data(x, width)
+                            idx = int(round(data_x))
+                            idx = max(0, min(self._last_data_width - 1, idx))
+                            self.state.selected_spectrum_index = idx
+                        else:
+                            self._click_for_region = True
+                            self._click_down_x = x
+                            self._click_down_y = y
+                    else:
+                        self._click_for_region = True
+                        self._click_down_x = x
+                        self._click_down_y = y
 
         elif event == cv2.EVENT_LBUTTONUP:
             if self._click_for_region and not self._panning:
@@ -654,6 +672,8 @@ class DisplayManager:
                     y_offset=0,
                     dragging_idx=self._dragging_marker_idx,
                     intensity=data.intensity,
+                    spectrum_screen_y=spectrum_screen_y,
+                    graph_height=graph_height,
                 )
 
         if self._graph_info:
@@ -804,6 +824,8 @@ class DisplayManager:
             if waterfall_mode:
                 if self.state.marker_lines:
                     self._markers_renderer.show_width = self.state.peak_delta_visible
+                    wfh = waterfall_img.shape[0]
+                    spectrum_screen_y_w = _spectrum_screen_y(data, self._viewport, width, wfh)
                     self._markers_renderer.render(
                         waterfall_vertical,
                         self.state.marker_lines,
@@ -812,6 +834,8 @@ class DisplayManager:
                         y_offset=graticule_y_offset,
                         dragging_idx=self._dragging_marker_idx,
                         intensity=data.intensity,
+                        spectrum_screen_y=spectrum_screen_y_w,
+                        graph_height=wfh,
                     )
                 self._render_overlays(waterfall_vertical)
                 cv2.imshow(self.config.waterfall_title, waterfall_vertical)
@@ -1147,6 +1171,12 @@ class DisplayManager:
             value: Value to display
         """
         self._control_bar.set_status(key, value)
+
+    def set_capture_progress(
+        self, progress_frac: float | None, duration_sec: float
+    ) -> None:
+        """Set capture progress for recording indicator (pie when exposure > 100ms)."""
+        self._control_bar.set_capture_progress(progress_frac, duration_sec)
 
     def _update_control_bar_status(
         self,

@@ -124,6 +124,7 @@ class CalibrationMode(BaseMode):
         graph_height: int,
     ) -> None:
         """Update calibration overlay and status."""
+        ctx.display.state.graph_click_behavior = "default"
         self._sync_button_status(ctx)
         overlay = self.get_overlay(processed.wavelengths, graph_height)
         ctx.display.set_mode_overlay(overlay)

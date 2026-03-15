@@ -29,6 +29,7 @@ class WaterfallMode(MeasurementMode):
         super().setup(ctx)
         ctx.display.show_spectrum_bars(True)
         ctx.display.state.peaks_visible = False
+        ctx.display.state.graph_click_behavior = "marker"
         ctx.display.set_button_active("show_peaks", False)
         self.register_callback("snap_to_peaks", lambda: self._on_toggle_snap_to_peaks())
         self.register_callback("clear_markers", lambda: self._on_clear_markers())

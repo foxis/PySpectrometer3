@@ -14,6 +14,7 @@ The best surviving candidate is selected.  When no valid position exists the
 label is clamped to the nearest image edge.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import cv2
@@ -29,22 +30,31 @@ _ALPHA = 0.65   # label background opacity
 _DELTA_SCALE = 0.75  # font scale for delta line relative to main label
 
 
+def compute_placements(
+    peaks: list[Peak],
+    viewport: Viewport,
+    width: int,
+    height: int,
+    spectrum_y: np.ndarray,
+    font: int,
+    font_scale: float,
+    show_width: bool = False,
+) -> list["_Placement"]:
+    """Compute non-overlapping label placements for a list of peaks (or peak-like points).
+
+    Used by both PeaksRenderer and MarkersRenderer for intelligent label placement.
+    """
+    return _place_all(
+        peaks, viewport, width, height, spectrum_y,
+        font, font_scale, show_width,
+    )
+
+
 @dataclass
 class PeaksRenderer:
     """Renders peak wavelength labels and vertical indicator lines.
 
-    Attributes
-    ----------
-    show_labels:
-        Draw wavelength text labels near each peak.
-    show_lines:
-        Draw a vertical line through each peak from the bottom of the graph.
-    show_width:
-        When True, show FWHM (peak width in nm) below the wavelength label.
-    font:
-        OpenCV font face.
-    font_scale:
-        Font scale factor.
+    Non-overlapping label placement; yellow box + black text; thick vertical lines.
     """
 
     show_labels: bool = True
@@ -63,12 +73,12 @@ class PeaksRenderer:
             data.peaks, viewport, width, height, spectrum_y,
             self.font, self.font_scale, self.show_width,
         )
+        def get_fwhm(p: Peak) -> float | None:
+            return fwhm_nm(p.index, data.intensity, data.wavelengths) if self.show_width else None
         if self.show_labels:
-            _draw_labels(
-                image, placements, data, self.font, self.font_scale, self.show_width,
-            )
+            draw_labels(image, placements, self.font, self.font_scale, get_fwhm)
         if self.show_lines:
-            _draw_lines(image, placements)
+            draw_lines(image, placements)
         return image
 
 
@@ -223,17 +233,20 @@ def _curve_overlap(x1: int, x2: int, y1: int, y2: int, spectrum_y: np.ndarray) -
 
 
 # ---------------------------------------------------------------------------
-# Drawing
+# Drawing (shared by peaks and markers: yellow box labels, thick vertical lines)
 # ---------------------------------------------------------------------------
 
-def _draw_labels(
+def draw_labels(
     image: np.ndarray,
     placements: list[_Placement],
-    data: SpectrumData,
     font: int,
     font_scale: float,
-    show_width: bool = False,
+    get_fwhm: Callable[[Peak], float | None],
 ) -> None:
+    """Draw wavelength labels (yellow box + black text) and optional FWHM line.
+
+    get_fwhm(peak) returns FWHM in nm or None to skip delta line.
+    """
     width = image.shape[1]
     delta_scale = font_scale * _DELTA_SCALE
     for sx, x1, x2, y1, y2, peak, left in placements:
@@ -247,23 +260,31 @@ def _draw_labels(
         (tw, th), _ = cv2.getTextSize(label, font, font_scale, 1)
         tx = x1 + _PAD if left else x2 - _PAD - tw
         tx = max(0, min(tx, width - tw))
-        # Main label (wavelength) at top of box; delta immediately below when show_width
         wl_baseline = y1 + _PAD + th
         cv2.putText(image, label, (tx, wl_baseline), font, font_scale, (0, 0, 0), 1, cv2.LINE_AA)
-        if show_width:
-            fwhm = fwhm_nm(peak.index, data.intensity, data.wavelengths)
-            if fwhm is not None:
-                delta_label = f"Δ{fwhm:.1f}nm"
-                (dw, dh), _ = cv2.getTextSize(delta_label, font, delta_scale, 1)
-                dx = x1 + _PAD if left else x2 - _PAD - dw
-                dx = max(0, min(dx, width - dw))
-                cv2.putText(
-                    image, delta_label, (dx, wl_baseline + 2 + dh),
-                    font, delta_scale, (0, 0, 0), 1, cv2.LINE_AA,
-                )
+        fwhm = get_fwhm(peak)
+        if fwhm is not None:
+            delta_label = f"Δ{fwhm:.1f}nm"
+            (dw, dh), _ = cv2.getTextSize(delta_label, font, delta_scale, 1)
+            dx = x1 + _PAD if left else x2 - _PAD - dw
+            dx = max(0, min(dx, width - dw))
+            cv2.putText(
+                image, delta_label, (dx, wl_baseline + 2 + dh),
+                font, delta_scale, (0, 0, 0), 1, cv2.LINE_AA,
+            )
 
 
-def _draw_lines(image: np.ndarray, placements: list[_Placement]) -> None:
+def draw_lines(
+    image: np.ndarray,
+    placements: list[_Placement],
+    y_start: int = 0,
+    y_end: int | None = None,
+) -> None:
+    """Draw thick black vertical lines at each placement screen-x.
+
+    y_start/y_end: vertical range (default 0 to image height). Used by markers on waterfall.
+    """
     height = image.shape[0]
+    end = height if y_end is None else y_end
     for sx, *_ in placements:
-        cv2.line(image, (sx, 0), (sx, height), (0, 0, 0), 2)
+        cv2.line(image, (sx, y_start), (sx, end), (0, 0, 0), 2)

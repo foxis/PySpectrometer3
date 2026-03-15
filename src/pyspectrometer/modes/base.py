@@ -157,6 +157,7 @@ class BaseMode(ABC):
         graph_height: int,
     ) -> None:
         """Update overlay and status. Override in subclasses. Default: clear overlays, legacy ref if available."""
+        ctx.display.state.graph_click_behavior = "default"
         ctx.display.set_mode_overlay(None)
         ctx.display.set_sensitivity_overlay(None)
         if ctx.reference_manager is not None:

@@ -68,6 +68,9 @@ class Button:
     shortcut: str = ""
     # Icon type: "playback" = red circle when active, gray square when stopped
     icon_type: str = ""
+    # For playback icon with long exposure: 0..1 progress, duration_sec for pie (only if > 0.1 s)
+    capture_progress_frac: float | None = None
+    capture_duration_sec: float = 0.0
 
     def contains(self, px: int, py: int) -> bool:
         """Check if point is inside button bounds."""
@@ -111,12 +114,23 @@ class Button:
         cv2.rectangle(image, (x1, y1), (x2, y2), border, style.border_width)
 
         if self.icon_type == "playback":
-            # Red circle when active (recording), gray square when stopped
             cx = x1 + self.width // 2
             cy = y1 + self.height // 2
             r = min(self.width, self.height) // 4
             if self.is_toggle and self.is_active:
-                cv2.circle(image, (cx, cy), max(2, r), (0, 0, 255), -1)
+                # Long exposure (>100ms): show red pie of elapsed progress; else solid circle
+                duration_sec = self.capture_duration_sec or 0.0
+                progress = self.capture_progress_frac
+                if duration_sec > 0.1 and progress is not None and 0 <= progress <= 1:
+                    # Pie: filled arc from 0° to progress*360° (clockwise from right)
+                    cv2.ellipse(
+                        image, (cx, cy), (max(2, r), max(2, r)), 0, 0, 360 * progress,
+                        (0, 0, 255), -1,
+                    )
+                    # Outline circle so the rest is visible
+                    cv2.circle(image, (cx, cy), max(2, r), (80, 80, 80), 1)
+                else:
+                    cv2.circle(image, (cx, cy), max(2, r), (0, 0, 255), -1)
             else:
                 sz = max(2, r - 1)
                 cv2.rectangle(

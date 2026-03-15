@@ -215,7 +215,10 @@ class MeasurementMode(BaseMode):
         processed: "SpectrumData",
         graph_height: int,
     ) -> None:
-        """Update measurement overlay and status."""
+        """Update measurement overlay and status. Control graph click from mode: markers when peaks off, else default (pan/peak_region/spectrum_select)."""
+        ctx.display.state.graph_click_behavior = (
+            "marker" if not ctx.display.state.peaks_visible else "default"
+        )
         overlay = self.get_overlay(processed.wavelengths, graph_height)
         ctx.display.set_mode_overlay(overlay)
         ctx.display.set_sensitivity_overlay(None)
@@ -233,8 +236,8 @@ class MeasurementMode(BaseMode):
     def get_buttons(self) -> list[ButtonDefinition]:
         """Get measurement mode buttons."""
         return [
-            # Row 1: Capture and references
-            ButtonDefinition("Capture", "capture", row=1),
+            # Row 1: Record (capture + progress indicator) and references
+            ButtonDefinition("Rec", "capture", row=1, icon_type="playback"),
             ButtonDefinition("Peak", "capture_peak", is_toggle=True, shortcut="h", row=1),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=1),
             ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=1),
