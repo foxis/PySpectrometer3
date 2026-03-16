@@ -382,24 +382,24 @@ class CalibrationMode(BaseMode):
             ButtonDefinition("LEVEL", "auto_level", is_toggle=True, row=1),
             ButtonDefinition("CALIB", "auto_calibrate", row=1),
             ButtonDefinition("R", "reset_calibration", row=1),
-            # Row 2: Playback (freeze), Peak, Avg, G, E, AG, AE, Prev, Save, CSV, Load
+            # Row 2: Play (freeze + progress) | Peak/Avg/Acc | Bars | ZX/ZY | VIEW | Save/CSV/Load | spacer | Quit
             ButtonDefinition("Play", "freeze", is_toggle=True, row=2, icon_type="playback"),
+            ButtonDefinition("__gap__", "__gap__c1", row=2),
             ButtonDefinition("Peak", "capture_peak", is_toggle=True, row=2),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=2),
             ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=2),
+            ButtonDefinition("__gap__", "__gap__c2", row=2),
             ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=2),
             ButtonDefinition("ZX", "show_zoom_x_slider", is_toggle=True, row=2),
             ButtonDefinition("ZY", "show_zoom_y_slider", is_toggle=True, row=2),
-            ButtonDefinition("G", "show_gain_slider", is_toggle=True, row=2),
-            ButtonDefinition("E", "show_exposure_slider", is_toggle=True, row=2),
-            ButtonDefinition("AG", "auto_gain", is_toggle=True, row=2),
-            ButtonDefinition("AE", "auto_exposure", is_toggle=True, row=2),
-            ButtonDefinition("Prev", "cycle_preview", shortcut="v", row=2),
+            ButtonDefinition("__gap__", "__gap__c3", row=2),
+            ButtonDefinition("VIEW", "cycle_preview", shortcut="v", row=2),
+            ButtonDefinition("__gap__", "__gap__c4", row=2),
             ButtonDefinition("Save", "save_cal", shortcut="w", row=2),
             ButtonDefinition("CSV", "save_spectrum", shortcut="s", row=2),
             ButtonDefinition("Load", "load_cal", row=2),
-            ButtonDefinition("Quit", "quit", row=2),
             ButtonDefinition("__spacer__", "__spacer_right__", row=2),
+            ButtonDefinition("Quit", "quit", row=2),
         ]
 
     def process_spectrum(

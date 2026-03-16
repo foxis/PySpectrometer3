@@ -130,7 +130,7 @@ def _place_all(
         (tw, th), _ = cv2.getTextSize(f"{peak.wavelength:.0f}", font, font_scale, 1)
         box_w = tw + _PAD * 2
         if show_width:
-            (_, th2), _ = cv2.getTextSize("Δ99.9nm", font, delta_scale, 1)
+            (_, th2), _ = cv2.getTextSize("d99.9", font, delta_scale, 1)
             box_h = th + th2 + 4 + _PAD * 2
         else:
             box_h = th + _PAD * 2
@@ -264,7 +264,7 @@ def draw_labels(
         cv2.putText(image, label, (tx, wl_baseline), font, font_scale, (0, 0, 0), 1, cv2.LINE_AA)
         fwhm = get_fwhm(peak)
         if fwhm is not None:
-            delta_label = f"Δ{fwhm:.1f}nm"
+            delta_label = f"d{fwhm:.1f}"
             (dw, dh), _ = cv2.getTextSize(delta_label, font, delta_scale, 1)
             dx = x1 + _PAD if left else x2 - _PAD - dw
             dx = max(0, min(dx, width - dw))

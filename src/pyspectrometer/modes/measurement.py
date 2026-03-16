@@ -76,7 +76,9 @@ class MeasurementMode(BaseMode):
         self.register_callback("lamp_toggle", lambda: self._on_toggle_light(ctx))
         self.register_callback("snap_to_peaks", lambda: self._on_toggle_snap_to_peaks(ctx))
         self.register_callback("clear_markers", lambda: self._on_clear_markers(ctx))
+        self.register_callback("clear_all", lambda: self._on_clear_all(ctx))
         self.register_callback("show_peak_delta", lambda: self._on_toggle_peak_delta(ctx))
+        self.register_callback("export_csv", lambda: self._on_export_csv(ctx))
 
     def _on_toggle_peak_delta(self, ctx: ModeContext) -> None:
         """Toggle peak/marker width (FWHM) below wavelength label."""
@@ -95,13 +97,34 @@ class MeasurementMode(BaseMode):
         ctx.display.state.marker_lines.clear()
         print("[MARKERS] All marker lines cleared")
 
+    def _on_clear_all(self, ctx: ModeContext) -> None:
+        """Clear marker lines and peak-include region."""
+        ctx.display.state.marker_lines.clear()
+        ctx.display.clear_peak_include_region()
+        print("[MARKERS] Markers and peak region cleared")
+
+    def _on_export_csv(self, ctx: ModeContext) -> None:
+        """Export current spectrum to CSV (same as Save: CSV + PNG)."""
+        self._on_save(ctx)
+
     def _on_capture(self, ctx: ModeContext) -> None:
-        """Handle capture current spectrum."""
-        if ctx.last_data is None:
-            print("[CAPTURE] No spectrum data available")
-            return
-        self.capture_current(ctx.last_data.intensity, ctx.last_data.wavelengths)
-        self.set_reference_spectrum(ctx.last_data.intensity, "Captured")
+        """Toggle capture: on = capture and hold as reference, off = clear captured spectrum."""
+        btn = ctx.display.control_bar.get_button("capture")
+        if btn is not None and btn.is_active:
+            if ctx.last_data is None:
+                print("[CAPTURE] No spectrum data available")
+                ctx.display.set_button_active("capture", False)
+                return
+            self.capture_current(ctx.last_data.intensity, ctx.last_data.wavelengths)
+            self.set_reference_spectrum(ctx.last_data.intensity, "Captured")
+        else:
+            self.meas_state.captured_spectrum = None
+            self.meas_state.captured_wavelengths = None
+            self.meas_state.reference_spectrum = None
+            self.meas_state.reference_name = "None"
+            ctx.display.state.reference_spectrum = None
+            ctx.display.state.reference_name = "None"
+            print("[Measurement] Capture cleared")
 
     def _on_toggle_averaging(self, ctx: ModeContext) -> None:
         """Toggle averaging (off Acc if on)."""
@@ -216,6 +239,7 @@ class MeasurementMode(BaseMode):
         graph_height: int,
     ) -> None:
         """Update measurement overlay and status. Control graph click from mode: markers when peaks off, else default (pan/peak_region/spectrum_select)."""
+        ctx.display.set_button_active("capture", self.meas_state.captured_spectrum is not None)
         ctx.display.state.graph_click_behavior = (
             "marker" if not ctx.display.state.peaks_visible else "default"
         )
@@ -234,38 +258,45 @@ class MeasurementMode(BaseMode):
         return "Measurement"
 
     def get_buttons(self) -> list[ButtonDefinition]:
-        """Get measurement mode buttons."""
+        """Get measurement mode buttons. Grouped with gaps; Quit right-aligned."""
         return [
-            # Row 1: Record (capture + progress indicator) and references
-            ButtonDefinition("Rec", "capture", row=1, icon_type="playback"),
-            ButtonDefinition("Peak", "capture_peak", is_toggle=True, shortcut="h", row=1),
+            # Row 1: Rec (capture + progress) | Avg/Peak/Acc | Dark/White | Bars | ZX/ZY | VIEW
+            ButtonDefinition("Rec", "capture", is_toggle=True, row=1, icon_type="playback"),
+            ButtonDefinition("__gap__", "__gap__", row=1),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=1),
+            ButtonDefinition("Peak", "capture_peak", is_toggle=True, shortcut="h", row=1),
             ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=1),
+            ButtonDefinition("__gap__", "__gap__2", row=1),
             ButtonDefinition("Dark", "set_dark", is_toggle=True, row=1),
             ButtonDefinition("White", "set_white", is_toggle=True, row=1),
-            ButtonDefinition("ClrRef", "clear_refs", row=1),
-            # Row 2: Display and control
-            ButtonDefinition("ShowRef", "show_reference", is_toggle=True, row=2),
-            ButtonDefinition("Norm", "normalize", is_toggle=True, row=2),
+            ButtonDefinition("__gap__", "__gap__3", row=1),
+            ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=1),
+            ButtonDefinition("__gap__", "__gap__4", row=1),
+            ButtonDefinition("ZX", "show_zoom_x_slider", is_toggle=True, row=1),
+            ButtonDefinition("ZY", "show_zoom_y_slider", is_toggle=True, row=1),
+            ButtonDefinition("__gap__", "__gap__5", row=1),
+            ButtonDefinition("VIEW", "cycle_preview", shortcut="v", row=1),
+            # Row 2: Lamp | Peaks/Snap/Pkd/Clr | Ref | G/E/AG/AE | Save/Load | Export | spacer | Quit
+            ButtonDefinition("Lamp", "lamp_toggle", is_toggle=True, row=2),
+            ButtonDefinition("__gap__", "__gap__6", row=2),
             ButtonDefinition("Peaks", "show_peaks", is_toggle=True, row=2),
-            ButtonDefinition("SnapPk", "snap_to_peaks", is_toggle=True, row=2),
-            ButtonDefinition("ClrMk", "clear_markers", row=2),
+            ButtonDefinition("Snap", "snap_to_peaks", is_toggle=True, row=2),
             ButtonDefinition("Pkd", "show_peak_delta", is_toggle=True, row=2),
-            ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=2),
-            ButtonDefinition("ClrPeak", "clear_peak_region", shortcut="z", row=2),
-            ButtonDefinition("ZX", "show_zoom_x_slider", is_toggle=True, row=2),
-            ButtonDefinition("ZY", "show_zoom_y_slider", is_toggle=True, row=2),
+            ButtonDefinition("Clr", "clear_all", shortcut="z", row=2),
+            ButtonDefinition("__gap__", "__gap__7", row=2),
+            ButtonDefinition("Ref", "show_reference", is_toggle=True, row=2),
+            ButtonDefinition("__gap__", "__gap__8", row=2),
             ButtonDefinition("G", "show_gain_slider", is_toggle=True, row=2),
             ButtonDefinition("E", "show_exposure_slider", is_toggle=True, row=2),
             ButtonDefinition("AG", "auto_gain", is_toggle=True, row=2),
             ButtonDefinition("AE", "auto_exposure", is_toggle=True, row=2),
-            ButtonDefinition("Prev", "cycle_preview", shortcut="v", row=2),
-            ButtonDefinition("Lamp", "lamp_toggle", is_toggle=True, row=2),
+            ButtonDefinition("__gap__", "__gap__9", row=2),
             ButtonDefinition("Save", "save", shortcut="s", row=2),
             ButtonDefinition("Load", "load", row=2),
-            ButtonDefinition("LoadAs", "cycle_load_as", row=2),
-            ButtonDefinition("Quit", "quit", row=2),
+            ButtonDefinition("__gap__", "__gap__10", row=2),
+            ButtonDefinition("Export", "export_csv", row=2),
             ButtonDefinition("__spacer__", "__spacer_right__", row=2),
+            ButtonDefinition("Quit", "quit", row=2),
         ]
 
     def process_spectrum(

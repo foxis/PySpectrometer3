@@ -143,6 +143,7 @@ class ControlBar:
                     if i > spacer_idx
                     and b.row == same_row
                     and not b.action_name.startswith("__spacer")
+                    and not b.action_name.startswith("__gap__")
                 ]
                 right_width = 0
                 for rd in right_defs:

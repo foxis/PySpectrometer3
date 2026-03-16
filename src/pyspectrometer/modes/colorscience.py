@@ -133,10 +133,10 @@ class ColorScienceMode(BaseMode):
             ButtonDefinition("E",    "show_exposure_slider",is_toggle=True, row=2),
             ButtonDefinition("AG",   "auto_gain",           is_toggle=True, row=2),
             ButtonDefinition("AE",   "auto_exposure",       is_toggle=True, row=2),
-            ButtonDefinition("Prev", "cycle_preview", shortcut="v", row=2),
+            ButtonDefinition("VIEW", "cycle_preview", shortcut="v", row=2),
             ButtonDefinition("Lamp", "lamp_toggle",   is_toggle=True, row=2),
-            ButtonDefinition("Quit", "quit", row=2),
             ButtonDefinition("__spacer__", "__spacer_right__", row=2),
+            ButtonDefinition("Quit", "quit", row=2),
         ]
 
     def on_start(self, ctx: ModeContext) -> None:

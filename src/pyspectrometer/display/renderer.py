@@ -93,7 +93,7 @@ class DisplayState:
     selected_spectrum_index: int | None = None
     # Click-to-include: single (center_index, half_width) in data coordinates, or None
     peak_include_region: tuple[int, int] | None = None
-    peaks_visible: bool = True
+    peaks_visible: bool = False
     # Vertical marker lines: list of data indices (max 10)
     marker_lines: list[int] = field(default_factory=list)
     snap_to_peaks: bool = False
@@ -977,7 +977,7 @@ class DisplayManager:
                 wavelength = round(data.wavelengths[x], 2)
                 cv2.putText(
                     graph,
-                    f"{wavelength}nm",
+                    f"{wavelength}",
                     (x + 5, y - 165),
                     self._font,
                     0.4,
