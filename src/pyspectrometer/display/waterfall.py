@@ -38,34 +38,32 @@ class WaterfallDisplay:
         self._buffer = np.zeros([height, width, 3], dtype=np.uint8)
 
     def set_dimensions(self, width: int, height: int) -> None:
-        """Update dimensions (e.g. after camera reports actual size). Recreates buffer."""
-        if width == self.width and height == self.height:
+        """Set display height (buffer height). Buffer width follows data length in update()."""
+        if height == self.height:
             return
         self.width = width
         self.height = height
-        self._buffer = np.zeros([height, width, 3], dtype=np.uint8)
+        self._buffer = np.zeros([height, 1, 3], dtype=np.uint8)
 
     def update(self, data: SpectrumData) -> None:
         """Add a new spectrum line to the waterfall.
 
-        Args:
-            data: Spectrum data to add as a new line
+        Buffer has one column per spectrum point so viewport cropping aligns with
+        the spectrum preview strip and graph.
         """
-        line = np.zeros([1, self.width, 3], dtype=np.uint8)
+        data_len = len(data.intensity)
+        if data_len == 0:
+            return
+        if self._buffer.shape[1] != data_len or self._buffer.shape[0] != self.height:
+            self._buffer = np.zeros([self.height, data_len, 3], dtype=np.uint8)
 
+        line = np.zeros([1, data_len, 3], dtype=np.uint8)
         for i, intensity in enumerate(data.intensity):
-            if i >= self.width:
-                break
-
             wavelength = round(data.wavelengths[i])
             rgb = wavelength_to_rgb(wavelength)
-
-            # Intensity is 0-1 (normalized by extraction)
             luminosity = float(intensity)
             scaled = apply_luminosity(rgb, luminosity)
-            bgr = rgb_to_bgr(scaled)
-
-            line[0, i] = bgr
+            line[0, i] = rgb_to_bgr(scaled)
 
         line = cv2.addWeighted(
             line,
@@ -76,7 +74,7 @@ class WaterfallDisplay:
         )
 
         self._buffer = np.insert(self._buffer, 0, line, axis=0)
-        self._buffer = self._buffer[:-1].copy()
+        self._buffer = self._buffer[: self.height].copy()
 
     def render(self) -> np.ndarray:
         """Get the current waterfall display image.

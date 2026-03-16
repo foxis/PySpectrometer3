@@ -108,23 +108,40 @@ class MeasurementMode(BaseMode):
         self._on_save(ctx)
 
     def _on_capture(self, ctx: ModeContext) -> None:
-        """Toggle capture: on = capture and hold as reference, off = clear captured spectrum."""
+        """Toggle freeze (like calibration Play): active = live (red circle), inactive = frozen (gray square). Click when live → freeze; when frozen → unfreeze."""
         btn = ctx.display.control_bar.get_button("capture")
         if btn is not None and btn.is_active:
+            # Currently live: user clicked to freeze
             if ctx.last_data is None:
                 print("[CAPTURE] No spectrum data available")
-                ctx.display.set_button_active("capture", False)
                 return
+            frozen = self.toggle_freeze()
+            assert frozen
+            ctx.frozen_spectrum = True
+            ctx.frozen_intensity = (
+                ctx.last_raw_intensity.copy()
+                if ctx.last_raw_intensity is not None
+                else ctx.last_data.intensity.copy()
+            )
             self.capture_current(ctx.last_data.intensity, ctx.last_data.wavelengths)
             self.set_reference_spectrum(ctx.last_data.intensity, "Captured")
+            ctx.display.state.reference_spectrum = self.meas_state.reference_spectrum.copy()
+            ctx.display.state.reference_name = "Captured"
+            ctx.display.set_button_active("capture", False)
+            print("[Measurement] Frozen, reference set")
         else:
+            # Currently frozen: user clicked to unfreeze
+            frozen = self.toggle_freeze()
+            assert not frozen
+            ctx.frozen_spectrum = False
+            ctx.frozen_intensity = None
             self.meas_state.captured_spectrum = None
             self.meas_state.captured_wavelengths = None
             self.meas_state.reference_spectrum = None
-            self.meas_state.reference_name = "None"
             ctx.display.state.reference_spectrum = None
             ctx.display.state.reference_name = "None"
-            print("[Measurement] Capture cleared")
+            ctx.display.set_button_active("capture", True)
+            print("[Measurement] Unfrozen, reference cleared")
 
     def _on_toggle_averaging(self, ctx: ModeContext) -> None:
         """Toggle averaging (off Acc if on)."""
@@ -239,7 +256,7 @@ class MeasurementMode(BaseMode):
         graph_height: int,
     ) -> None:
         """Update measurement overlay and status. Control graph click from mode: markers when peaks off, else default (pan/peak_region/spectrum_select)."""
-        ctx.display.set_button_active("capture", self.meas_state.captured_spectrum is not None)
+        ctx.display.set_button_active("capture", not ctx.frozen_spectrum)
         ctx.display.state.graph_click_behavior = (
             "marker" if not ctx.display.state.peaks_visible else "default"
         )
@@ -256,6 +273,16 @@ class MeasurementMode(BaseMode):
     @property
     def name(self) -> str:
         return "Measurement"
+
+    @property
+    def preview_modes(self) -> list[str]:
+        """No full image preview in measurement; spectrum bar or none only."""
+        return ["none", "spectrum"]
+
+    def on_start(self, ctx: ModeContext) -> None:
+        """Hide camera preview by default and sync Rec (freeze) button."""
+        ctx.display.preview_mode = "none"
+        ctx.display.set_button_active("capture", not ctx.frozen_spectrum)
 
     def get_buttons(self) -> list[ButtonDefinition]:
         """Get measurement mode buttons. Grouped with gaps; Quit right-aligned."""

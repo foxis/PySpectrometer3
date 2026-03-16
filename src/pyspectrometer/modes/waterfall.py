@@ -64,23 +64,42 @@ class WaterfallMode(MeasurementMode):
         return ["window", "spectrum", "none"]
 
     def get_buttons(self) -> list[ButtonDefinition]:
-        """Waterfall mode buttons — ZY omitted (no intensity axis to zoom)."""
+        """Waterfall mode buttons — layout like Measurement; ZY omitted (no intensity zoom)."""
         return [
+            # Row 1: Play | Avg/Peak/Acc | Dark/White | Bars | ZX | VIEW
+            ButtonDefinition("Play", "capture", is_toggle=True, row=1, icon_type="playback"),
+            ButtonDefinition("__gap__", "__gap__", row=1),
+            ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=1),
             ButtonDefinition("Peak", "capture_peak", is_toggle=True, shortcut="h", row=1),
-            ButtonDefinition("SnapPk", "snap_to_peaks", is_toggle=True, row=1),
-            ButtonDefinition("ClrMk", "clear_markers", row=1),
-            ButtonDefinition("PkΔ", "show_peak_delta", is_toggle=True, row=1),
-            ButtonDefinition("Dark", "set_dark", row=1),
-            ButtonDefinition("White", "set_white", row=1),
-            ButtonDefinition("ClrRef", "clear_refs", row=1),
+            ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=1),
+            ButtonDefinition("__gap__", "__gap__2", row=1),
+            ButtonDefinition("Dark", "set_dark", is_toggle=True, row=1),
+            ButtonDefinition("White", "set_white", is_toggle=True, row=1),
+            ButtonDefinition("__gap__", "__gap__3", row=1),
+            ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=1),
+            ButtonDefinition("__gap__", "__gap__4", row=1),
+            ButtonDefinition("ZX", "show_zoom_x_slider", is_toggle=True, row=1),
+            ButtonDefinition("__gap__", "__gap__5", row=1),
+            ButtonDefinition("VIEW", "cycle_preview", shortcut="v", row=1),
+            # Row 2: Lamp | Peaks/Snap/Pkd/Clr | Ref | G/E/AG/AE | Save/Load/Export | spacer | Quit
+            ButtonDefinition("Lamp", "lamp_toggle", is_toggle=True, row=2),
+            ButtonDefinition("__gap__", "__gap__6", row=2),
             ButtonDefinition("Peaks", "show_peaks", is_toggle=True, row=2),
-            ButtonDefinition("ZX", "show_zoom_x_slider", is_toggle=True, row=2),
+            ButtonDefinition("Snap", "snap_to_peaks", is_toggle=True, row=2),
+            ButtonDefinition("Pkd", "show_peak_delta", is_toggle=True, row=2),
+            ButtonDefinition("Clr", "clear_all", shortcut="z", row=2),
+            ButtonDefinition("__gap__", "__gap__7", row=2),
+            ButtonDefinition("Ref", "show_reference", is_toggle=True, row=2),
+            ButtonDefinition("__gap__", "__gap__8", row=2),
             ButtonDefinition("G", "show_gain_slider", is_toggle=True, row=2),
             ButtonDefinition("E", "show_exposure_slider", is_toggle=True, row=2),
             ButtonDefinition("AG", "auto_gain", is_toggle=True, row=2),
             ButtonDefinition("AE", "auto_exposure", is_toggle=True, row=2),
-            ButtonDefinition("Prev", "cycle_preview", shortcut="v", row=2),
+            ButtonDefinition("__gap__", "__gap__9", row=2),
             ButtonDefinition("Save", "save", shortcut="s", row=2),
-            ButtonDefinition("Quit", "quit", row=2),
+            ButtonDefinition("Load", "load", row=2),
+            ButtonDefinition("__gap__", "__gap__10", row=2),
+            ButtonDefinition("Export", "export_csv", row=2),
             ButtonDefinition("__spacer__", "__spacer_right__", row=2),
+            ButtonDefinition("Quit", "quit", row=2),
         ]

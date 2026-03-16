@@ -50,30 +50,47 @@ class RamanMode(BaseMode):
     def name(self) -> str:
         return "Raman"
 
+    @property
+    def preview_modes(self) -> list[str]:
+        """No full image preview; spectrum bar or none only, like Measurement."""
+        return ["none", "spectrum"]
+
+    def on_start(self, ctx: ModeContext) -> None:
+        """Hide camera preview by default and sync Play (freeze) button."""
+        ctx.display.preview_mode = "none"
+        ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
+
     def get_buttons(self) -> list[ButtonDefinition]:
-        """Get Raman mode buttons per architecture."""
+        """Layout aligned with Measurement: Play first, grouped with gaps, Quit right-aligned."""
         return [
-            ButtonDefinition("Save", "save", shortcut="s", row=1),
-            ButtonDefinition("Load", "load", row=1),
-            ButtonDefinition("__gap__", "__gap__r1", row=1),
-            ButtonDefinition("Ref", "set_reference", row=1),
+            # Row 1: Play | Avg/Peak/Acc | Dark/Ref | Bars | ZX/ZY | VIEW
+            ButtonDefinition("Play", "freeze", is_toggle=True, row=1, icon_type="playback"),
+            ButtonDefinition("__gap__", "__gap__", row=1),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=1),
-            ButtonDefinition("Peak", "capture_peak", is_toggle=True, row=1),
+            ButtonDefinition("Peak", "capture_peak", is_toggle=True, shortcut="h", row=1),
             ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=1),
-            ButtonDefinition("__gap__", "__gap__r2", row=1),
+            ButtonDefinition("__gap__", "__gap__2", row=1),
             ButtonDefinition("Dark", "set_dark", is_toggle=True, row=1),
-            ButtonDefinition("__gap__", "__gap__r3", row=1),
+            ButtonDefinition("Ref", "set_reference", row=1),
+            ButtonDefinition("__gap__", "__gap__3", row=1),
             ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=1),
+            ButtonDefinition("__gap__", "__gap__4", row=1),
             ButtonDefinition("ZX", "show_zoom_x_slider", is_toggle=True, row=1),
             ButtonDefinition("ZY", "show_zoom_y_slider", is_toggle=True, row=1),
-            ButtonDefinition("__gap__", "__gap__r4", row=1),
+            ButtonDefinition("__gap__", "__gap__5", row=1),
             ButtonDefinition("VIEW", "cycle_preview", shortcut="v", row=1),
+            # Row 2: Lamp | Peaks | G/E/AG/AE | Save/Load | spacer | Quit
+            ButtonDefinition("Lamp", "lamp_toggle", is_toggle=True, row=2),
+            ButtonDefinition("__gap__", "__gap__6", row=2),
+            ButtonDefinition("Peaks", "show_peaks", is_toggle=True, row=2),
+            ButtonDefinition("__gap__", "__gap__7", row=2),
             ButtonDefinition("G", "show_gain_slider", is_toggle=True, row=2),
             ButtonDefinition("E", "show_exposure_slider", is_toggle=True, row=2),
             ButtonDefinition("AG", "auto_gain", is_toggle=True, row=2),
             ButtonDefinition("AE", "auto_exposure", is_toggle=True, row=2),
-            ButtonDefinition("__gap__", "__gap__r5", row=2),
-            ButtonDefinition("Peaks", "show_peaks", is_toggle=True, row=2),
+            ButtonDefinition("__gap__", "__gap__8", row=2),
+            ButtonDefinition("Save", "save", shortcut="s", row=2),
+            ButtonDefinition("Load", "load", row=2),
             ButtonDefinition("__spacer__", "__spacer_right__", row=2),
             ButtonDefinition("Quit", "quit", row=2),
         ]
@@ -81,12 +98,24 @@ class RamanMode(BaseMode):
     def setup(self, ctx: ModeContext) -> None:
         """Register Raman-specific handlers."""
         super().setup(ctx)
+        self.register_callback("freeze", lambda: self._on_toggle_freeze(ctx))
         self.register_callback("save", lambda: self._on_save(ctx))
         self.register_callback("load", lambda: self._on_load(ctx))
         self.register_callback("set_reference", lambda: self._on_set_reference(ctx))
         self.register_callback("set_dark", lambda: self._on_set_dark(ctx))
         self.register_callback("toggle_averaging", lambda: self._on_toggle_averaging(ctx))
         self.register_callback("toggle_accumulation", lambda: self._on_toggle_accumulation(ctx))
+
+    def _on_toggle_freeze(self, ctx: ModeContext) -> None:
+        """Toggle spectrum freeze (same behavior as Measurement/Color Science Play)."""
+        frozen = self.toggle_freeze()
+        ctx.frozen_spectrum = frozen
+        if frozen and ctx.last_data is not None:
+            ctx.frozen_intensity = ctx.last_data.intensity.copy()
+        else:
+            ctx.frozen_intensity = None
+        ctx.display.set_button_active("freeze", not frozen)
+        print(f"[RAMAN] Spectrum {'FROZEN' if frozen else 'LIVE'}")
 
     def _on_save(self, ctx: ModeContext) -> None:
         """Save spectrum (after transform to wavenumber)."""

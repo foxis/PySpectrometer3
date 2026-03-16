@@ -378,9 +378,9 @@ class CalibrationMode(BaseMode):
             ButtonDefinition("Peaks", "show_peaks", is_toggle=True, row=1),
             ButtonDefinition("__spacer__", "__spacer_left__", row=1),
             ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=1),
-            ButtonDefinition("CORR", "correct_sensitivity", row=1),
-            ButtonDefinition("LEVEL", "auto_level", is_toggle=True, row=1),
-            ButtonDefinition("CALIB", "auto_calibrate", row=1),
+            ButtonDefinition("CRR", "correct_sensitivity", row=1),
+            ButtonDefinition("LVL", "auto_level", is_toggle=True, row=1),
+            ButtonDefinition("CAL", "auto_calibrate", row=1),
             ButtonDefinition("R", "reset_calibration", row=1),
             # Row 2: Play (freeze + progress) | Peak/Avg/Acc | Bars | ZX/ZY | VIEW | Save/CSV/Load | spacer | Quit
             ButtonDefinition("Play", "freeze", is_toggle=True, row=2, icon_type="playback"),

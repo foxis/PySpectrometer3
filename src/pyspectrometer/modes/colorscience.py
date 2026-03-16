@@ -105,36 +105,43 @@ class ColorScienceMode(BaseMode):
         return _PREVIEW_MODES
 
     def get_buttons(self) -> list[ButtonDefinition]:
-        """Row 1: type switch | XYZ/LAB | Dark/White | Add/Del/CLR | Save/Load."""
+        """Row 1: Play | type | Dark/White | Add/Del/CLR | Save/Load. Row 2: grouped with gaps like Measurement."""
         return [
-            # Measurement type (radio-switch)
+            # Row 1: Play | Refl/Trans/Illum | Dark/White | Add/Del/CLR | Save/Load
+            ButtonDefinition("Play", "freeze", is_toggle=True, row=1, icon_type="playback"),
+            ButtonDefinition("__gap__", "__gap__", row=1),
             ButtonDefinition("Refl",  "type_reflectance",   is_toggle=True, row=1),
             ButtonDefinition("Trans", "type_transmittance", is_toggle=True, row=1),
             ButtonDefinition("Illum", "type_illumination",  is_toggle=True, row=1),
-            ButtonDefinition("", "__gap__", row=1),
-            # References
+            ButtonDefinition("__gap__", "__gap__2", row=1),
             ButtonDefinition("Dark",  "set_dark",  is_toggle=True, row=1),
             ButtonDefinition("White", "set_white", is_toggle=True, row=1),
-            ButtonDefinition("", "__gap__", row=1),
-            # Swatch management
+            ButtonDefinition("__gap__", "__gap__3", row=1),
             ButtonDefinition("Add", "add_swatch",   row=1),
             ButtonDefinition("Del", "del_swatch",   row=1),
             ButtonDefinition("CLR", "clear_swatches", row=1),
-            ButtonDefinition("", "__gap__", row=1),
+            ButtonDefinition("__gap__", "__gap__4", row=1),
             ButtonDefinition("Save", "save", shortcut="s", row=1),
             ButtonDefinition("Load", "load", row=1),
-            # Row 2: display and camera controls
+            # Row 2: Avg/Peak/Acc/Peaks | Bars | ZX/ZY | G/E/AG/AE | VIEW | Lamp | spacer | Quit
             ButtonDefinition("Avg",  "toggle_averaging",    is_toggle=True, row=2),
             ButtonDefinition("Acc",  "toggle_accumulation", is_toggle=True, row=2),
-            ButtonDefinition("Bars", "show_spectrum_bars",  is_toggle=True, row=2),
+            ButtonDefinition("Peak", "capture_peak",        is_toggle=True, shortcut="h", row=2),
+            ButtonDefinition("Peaks", "show_peaks",         is_toggle=True, row=2),
+            ButtonDefinition("__gap__", "__gap__5", row=2),
+            ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=2),
+            ButtonDefinition("__gap__", "__gap__6", row=2),
             ButtonDefinition("ZX",   "show_zoom_x_slider",  is_toggle=True, row=2),
-            ButtonDefinition("ZY",   "show_zoom_y_slider",  is_toggle=True, row=2),
+            ButtonDefinition("ZY",   "show_zoom_y_slider", is_toggle=True, row=2),
+            ButtonDefinition("__gap__", "__gap__7", row=2),
             ButtonDefinition("G",    "show_gain_slider",    is_toggle=True, row=2),
-            ButtonDefinition("E",    "show_exposure_slider",is_toggle=True, row=2),
+            ButtonDefinition("E",    "show_exposure_slider", is_toggle=True, row=2),
             ButtonDefinition("AG",   "auto_gain",           is_toggle=True, row=2),
-            ButtonDefinition("AE",   "auto_exposure",       is_toggle=True, row=2),
+            ButtonDefinition("AE",   "auto_exposure",      is_toggle=True, row=2),
+            ButtonDefinition("__gap__", "__gap__8", row=2),
             ButtonDefinition("VIEW", "cycle_preview", shortcut="v", row=2),
-            ButtonDefinition("Lamp", "lamp_toggle",   is_toggle=True, row=2),
+            ButtonDefinition("__gap__", "__gap__9", row=2),
+            ButtonDefinition("Lamp", "lamp_toggle",        is_toggle=True, row=2),
             ButtonDefinition("__spacer__", "__spacer_right__", row=2),
             ButtonDefinition("Quit", "quit", row=2),
         ]
@@ -147,7 +154,10 @@ class ColorScienceMode(BaseMode):
             )
         ctx.display.set_button_active("set_dark",  self.color_state.dark_spectrum is not None)
         ctx.display.set_button_active("set_white", self._is_white_set())
+        ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
         ctx.display.state.peaks_visible = False
+        ctx.display.set_button_active("show_peaks", False)
+        ctx.display.set_button_active("capture_peak", ctx.display.state.hold_peaks)
         # Start in plain spectrum + crop view
         ctx.display.preview_mode = "cs_crop"
         ctx.display.set_graph_click_callback(self._make_swatch_click_cb(ctx))
@@ -176,6 +186,7 @@ class ColorScienceMode(BaseMode):
         self.register_callback("clear_swatches",     lambda: self._on_clear_swatches(ctx))
         self.register_callback("toggle_averaging",   lambda: self._on_toggle_averaging(ctx))
         self.register_callback("toggle_accumulation",lambda: self._on_toggle_accumulation(ctx))
+        self.register_callback("freeze",             lambda: self._on_toggle_freeze(ctx))
         self.register_callback("lamp_toggle",        lambda: self._on_toggle_light(ctx))
 
     # ------------------------------------------------------------------
@@ -211,6 +222,7 @@ class ColorScienceMode(BaseMode):
         graph_height: int,
     ) -> None:
         """Update graph and preview strip according to current PREV view."""
+        ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
         ctx.display.state.graph_click_behavior = "default"
         ctx.display.set_mode_overlay(None)
         ctx.display.set_sensitivity_overlay(None)
@@ -278,6 +290,23 @@ class ColorScienceMode(BaseMode):
     # ------------------------------------------------------------------
     # Button handlers
     # ------------------------------------------------------------------
+
+    def _on_toggle_freeze(self, ctx: ModeContext) -> None:
+        """Toggle spectrum freeze (same behavior as calibration Play)."""
+        frozen = self.toggle_freeze()
+        ctx.frozen_spectrum = frozen
+        if frozen:
+            raw = ctx.last_raw_intensity
+            if raw is not None:
+                ctx.frozen_intensity = raw.copy()
+            elif ctx.last_data is not None:
+                ctx.frozen_intensity = ctx.last_data.intensity.copy()
+            else:
+                ctx.frozen_intensity = None
+        else:
+            ctx.frozen_intensity = None
+        ctx.display.set_button_active("freeze", not frozen)
+        print(f"[FREEZE] Spectrum {'FROZEN' if frozen else 'LIVE'}")
 
     def _is_white_set(self) -> bool:
         """True when a white reference of any kind is active for the current type."""

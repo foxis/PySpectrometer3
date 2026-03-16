@@ -568,6 +568,7 @@ class DisplayManager:
         peak_threshold: int,
         extraction_method: str = "Weighted Sum",
         spectrum_y_center: int = 0,
+        frozen_spectrum: bool = False,
     ) -> None:
         """Render the complete spectrum display.
 
@@ -579,6 +580,7 @@ class DisplayManager:
             peak_threshold: Current peak threshold
             extraction_method: Current extraction method name
             spectrum_y_center: Y coordinate of spectrum center (for full view indicator)
+            frozen_spectrum: When True, waterfall does not scroll (freeze capture).
         """
         self._spectrum_y_center = spectrum_y_center
         width = self.config.display.window_width
@@ -797,13 +799,11 @@ class DisplayManager:
         if self._waterfall is not None and (
             self.config.display.waterfall_enabled or waterfall_mode
         ):
-            self._waterfall.update(data)
+            if not frozen_spectrum:
+                self._waterfall.update(data)
             waterfall_img = self._waterfall.render()
-
-            # Defensive: ensure waterfall matches width for vstack
-            if waterfall_img.shape[1] != width:
-                waterfall_img = cv2.resize(waterfall_img, (width, waterfall_img.shape[0]))
-
+            # Viewport crop: buffer has one column per data index; crop and resize to width
+            # so the waterfall aligns with the spectrum preview and graph when zoomed.
             waterfall_img = self._apply_viewport_to_waterfall(waterfall_img, width)
 
             waterfall_vertical = self._build_waterfall_frame(
@@ -1351,11 +1351,11 @@ class DisplayManager:
 
         The strip has been scaled to `width` pixels wide, covering the full data
         range [0, data_width-1]. We crop to the viewport x range and resize back
-        so the preview stays aligned with the spectrum graph below it.
+        so the preview aligns with the spectrum graph and waterfall when zoomed.
         """
         data_width = max(1, self._last_data_width)
-        col_start = int(self._viewport.x_start / data_width * width)
-        col_end = int(self._viewport.x_end / data_width * width) + 1
+        col_start = int(round(self._viewport.x_start * width / data_width))
+        col_end = int(round(self._viewport.x_end * width / data_width)) + 1
         col_start = max(0, col_start)
         col_end = min(width, col_end)
         if col_end - col_start < 2:

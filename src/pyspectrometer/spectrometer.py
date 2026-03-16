@@ -207,9 +207,8 @@ class Spectrometer:
         intensity = extraction_result.intensity.astype(np.float32)
         self._ctx.last_raw_extraction_max = float(extraction_result.max_in_roi)
 
-        if self._calibration_mode is not None and self._ctx.frozen_spectrum:
-            if self._ctx.frozen_intensity is not None:
-                intensity = self._ctx.frozen_intensity.copy()
+        if self._ctx.frozen_spectrum and self._ctx.frozen_intensity is not None:
+            intensity = self._ctx.frozen_intensity.copy()
 
         if self._display.state.hold_peaks:
             if self._ctx.held_intensity is None:
@@ -218,7 +217,10 @@ class Spectrometer:
                 self._ctx.held_intensity = np.maximum(self._ctx.held_intensity, intensity)
             intensity = self._ctx.held_intensity
 
-        if self._calibration_mode is not None and not self._ctx.frozen_spectrum:
+        if (
+            self._calibration_mode is not None
+            and not self._ctx.frozen_spectrum
+        ):
             intensity = self._calibration_mode.accumulate_spectrum(intensity)
         else:
             self._ctx.last_raw_intensity = intensity.copy()
@@ -298,6 +300,7 @@ class Spectrometer:
             peak_threshold=self._peak_detector.threshold,
             extraction_method=str(self._extractor.method),
             spectrum_y_center=self._extractor.spectrum_y_center,
+            frozen_spectrum=self._ctx.frozen_spectrum,
         )
 
     def _check_window_closed(self) -> None:
