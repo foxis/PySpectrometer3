@@ -40,6 +40,8 @@ class MeasurementState:
     # Display settings
     show_reference: bool = False
     normalize_to_reference: bool = False
+    show_raw_overlay: bool = False
+    show_absorption: bool = False
     subtract_dark: bool = True
 
     # Loaded spectrum info
@@ -73,6 +75,8 @@ class MeasurementMode(BaseMode):
         self.register_callback("cycle_load_as", lambda: self._on_cycle_load_as(ctx))
         self.register_callback("show_reference", lambda: self._on_toggle_show_reference(ctx))
         self.register_callback("normalize", lambda: self._on_toggle_normalize(ctx))
+        self.register_callback("show_raw_overlay", lambda: self._on_toggle_raw_overlay(ctx))
+        self.register_callback("show_absorption", lambda: self._on_toggle_absorption(ctx))
         self.register_callback("lamp_toggle", lambda: self._on_toggle_light(ctx))
         self.register_callback("snap_to_peaks", lambda: self._on_toggle_snap_to_peaks(ctx))
         self.register_callback("clear_markers", lambda: self._on_clear_markers(ctx))
@@ -175,7 +179,10 @@ class MeasurementMode(BaseMode):
         """Toggle white reference: set if unset, clear if already set."""
         if self.meas_state.white_spectrum is not None:
             self.meas_state.white_spectrum = None
+            self.meas_state.show_absorption = False
             ctx.display.set_button_active("set_white", False)
+            ctx.display.set_button_active("show_absorption", False)
+            ctx.display.set_button_disabled("show_absorption", True)
             print("[WHITE] White reference cleared")
             return
 
@@ -189,8 +196,13 @@ class MeasurementMode(BaseMode):
     def _on_clear_refs(self, ctx: ModeContext) -> None:
         """Clear all references."""
         self.clear_references()
+        ctx.display.set_button_active("set_dark", False)
+        ctx.display.set_button_active("set_white", False)
+        ctx.display.set_button_active("show_absorption", False)
+        ctx.display.set_button_disabled("show_absorption", True)
         ctx.display.set_button_active("show_reference", False)
         ctx.display.set_button_active("normalize", False)
+        ctx.display.set_button_active("show_raw_overlay", False)
 
     def _on_save(self, ctx: ModeContext) -> None:
         """Handle save button."""
@@ -245,6 +257,20 @@ class MeasurementMode(BaseMode):
         enabled = self.toggle_normalize()
         ctx.display.set_button_active("normalize", enabled)
 
+    def _on_toggle_raw_overlay(self, ctx: ModeContext) -> None:
+        """Toggle overlay of dark, white, reference and measured spectra (unmodified)."""
+        self.meas_state.show_raw_overlay = not self.meas_state.show_raw_overlay
+        ctx.display.set_button_active("show_raw_overlay", self.meas_state.show_raw_overlay)
+        print(f"[Measurement] Raw overlay: {'ON' if self.meas_state.show_raw_overlay else 'OFF'}")
+
+    def _on_toggle_absorption(self, ctx: ModeContext) -> None:
+        """Toggle absorption spectrum (only effective when white reference is set)."""
+        if self.meas_state.white_spectrum is None:
+            return
+        self.meas_state.show_absorption = not self.meas_state.show_absorption
+        ctx.display.set_button_active("show_absorption", self.meas_state.show_absorption)
+        print(f"[Measurement] Absorption: {'ON' if self.meas_state.show_absorption else 'OFF'}")
+
     def _on_toggle_light(self, ctx: ModeContext) -> None:
         """Toggle light control - placeholder."""
         print("[LIGHT] Toggle light (GPIO not implemented yet)")
@@ -257,11 +283,25 @@ class MeasurementMode(BaseMode):
     ) -> None:
         """Update measurement overlay and status. Control graph click from mode: markers when peaks off, else default (pan/peak_region/spectrum_select)."""
         ctx.display.set_button_active("capture", not ctx.frozen_spectrum)
+        ctx.display.set_button_active("show_raw_overlay", self.meas_state.show_raw_overlay)
+        white_set = self.meas_state.white_spectrum is not None
+        ctx.display.set_button_disabled("show_absorption", not white_set)
+        if not white_set and self.meas_state.show_absorption:
+            self.meas_state.show_absorption = False
+            ctx.display.set_button_active("show_absorption", False)
+        ctx.display.set_button_active("show_absorption", self.meas_state.show_absorption)
         ctx.display.state.graph_click_behavior = (
             "marker" if not ctx.display.state.peaks_visible else "default"
         )
-        overlay = self.get_overlay(processed.wavelengths, graph_height)
-        ctx.display.set_mode_overlay(overlay)
+        if self.meas_state.show_raw_overlay:
+            ctx.display.set_raw_overlays(
+                self._build_raw_overlays(ctx, processed.wavelengths, graph_height)
+            )
+            ctx.display.set_mode_overlay(None)
+        else:
+            ctx.display.set_raw_overlays([])
+            overlay = self.get_overlay(processed.wavelengths, graph_height)
+            ctx.display.set_mode_overlay(overlay)
         ctx.display.set_sensitivity_overlay(None)
         for key, value in self.get_status().items():
             ctx.display.set_status(key, value)
@@ -280,9 +320,13 @@ class MeasurementMode(BaseMode):
         return ["none", "spectrum"]
 
     def on_start(self, ctx: ModeContext) -> None:
-        """Hide camera preview by default and sync Rec (freeze) button."""
+        """Hide camera preview by default and sync Rec (freeze), Overlay and ABS buttons."""
         ctx.display.preview_mode = "none"
         ctx.display.set_button_active("capture", not ctx.frozen_spectrum)
+        ctx.display.set_button_active("show_raw_overlay", self.meas_state.show_raw_overlay)
+        white_set = self.meas_state.white_spectrum is not None
+        ctx.display.set_button_disabled("show_absorption", not white_set)
+        ctx.display.set_button_active("show_absorption", self.meas_state.show_absorption)
 
     def get_buttons(self) -> list[ButtonDefinition]:
         """Get measurement mode buttons. Grouped with gaps; Quit right-aligned."""
@@ -296,6 +340,7 @@ class MeasurementMode(BaseMode):
             ButtonDefinition("__gap__", "__gap__2", row=1),
             ButtonDefinition("Dark", "set_dark", is_toggle=True, row=1),
             ButtonDefinition("White", "set_white", is_toggle=True, row=1),
+            ButtonDefinition("ABS", "show_absorption", is_toggle=True, row=1),
             ButtonDefinition("__gap__", "__gap__3", row=1),
             ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=1),
             ButtonDefinition("__gap__", "__gap__4", row=1),
@@ -312,6 +357,7 @@ class MeasurementMode(BaseMode):
             ButtonDefinition("Clr", "clear_all", shortcut="z", row=2),
             ButtonDefinition("__gap__", "__gap__7", row=2),
             ButtonDefinition("Ref", "show_reference", is_toggle=True, row=2),
+            ButtonDefinition("Overlay", "show_raw_overlay", is_toggle=True, row=2),
             ButtonDefinition("__gap__", "__gap__8", row=2),
             ButtonDefinition("G", "show_gain_slider", is_toggle=True, row=2),
             ButtonDefinition("E", "show_exposure_slider", is_toggle=True, row=2),
@@ -348,6 +394,13 @@ class MeasurementMode(BaseMode):
             self.meas_state.white_spectrum,
         )
 
+        # Absorption: A = -log10(T), with T the transmission (result). Scale to 0-1 for display.
+        if self.meas_state.show_absorption and self.meas_state.white_spectrum is not None:
+            transmission = np.maximum(result, 1e-10)
+            absorption = -np.log10(transmission)
+            max_abs = 4.0
+            result = np.clip(absorption / max_abs, 0, 1).astype(np.float32)
+
         # Normalize to reference spectrum if enabled
         if (
             self.meas_state.normalize_to_reference
@@ -361,13 +414,49 @@ class MeasurementMode(BaseMode):
 
         return result
 
+    def _build_raw_overlays(
+        self,
+        ctx: ModeContext,
+        wavelengths: np.ndarray,
+        graph_height: int,
+    ) -> list[tuple[np.ndarray, tuple[int, int, int]]]:
+        """Build list of (intensity 0-1, BGR) for dark, white, ref, measured (unmodified)."""
+        n = len(wavelengths)
+        if n == 0:
+            return []
+        raw = _get_raw(ctx)
+        spectra: list[tuple[np.ndarray, tuple[int, int, int]]] = []
+        if self.meas_state.dark_spectrum is not None:
+            d = np.asarray(self.meas_state.dark_spectrum, dtype=np.float64)[:n]
+            spectra.append((d, (40, 40, 40)))
+        if self.meas_state.white_spectrum is not None:
+            w = np.asarray(self.meas_state.white_spectrum, dtype=np.float64)[:n]
+            spectra.append((w, (200, 120, 0)))
+        if self.meas_state.reference_spectrum is not None:
+            r = np.asarray(self.meas_state.reference_spectrum, dtype=np.float64)[:n]
+            spectra.append((r, (150, 150, 150)))
+        if raw is not None:
+            m = np.asarray(raw, dtype=np.float64)[:n]
+            spectra.append((m, (0, 0, 200)))
+        if not spectra:
+            return []
+        global_max = max(
+            float(np.max(s[0])) for s in spectra
+        )
+        global_max = max(global_max, 1.0)
+        out: list[tuple[np.ndarray, tuple[int, int, int]]] = []
+        for arr, color in spectra:
+            norm = np.clip(arr / global_max, 0, 1).astype(np.float32)
+            out.append((norm, color))
+        return out
+
     def get_overlay(
         self,
         wavelengths: np.ndarray,
         graph_height: int,
     ) -> tuple[np.ndarray, tuple[int, int, int]] | None:
         """Get reference spectrum overlay if enabled."""
-        if not self.meas_state.show_reference:
+        if not self.meas_state.show_reference or self.meas_state.show_raw_overlay:
             return None
 
         ref = self.meas_state.reference_spectrum
@@ -412,6 +501,8 @@ class MeasurementMode(BaseMode):
         self.meas_state.subtract_dark = True
         self.meas_state.normalize_to_reference = False
         self.meas_state.show_reference = False
+        self.meas_state.show_raw_overlay = False
+        self.meas_state.show_absorption = False
         self.meas_state.loaded_spectrum_name = ""
         print("[Measurement] All references cleared")
 
@@ -439,6 +530,8 @@ class MeasurementMode(BaseMode):
             status["White"] = "SET"
         if self.meas_state.reference_spectrum is not None:
             status["Ref"] = self.meas_state.loaded_spectrum_name or "SET"
+        if self.meas_state.show_absorption:
+            status["ABS"] = "ON"
         status["LoadAs"] = self.meas_state.load_as.capitalize()
 
         if self.state.integration_mode != "none":

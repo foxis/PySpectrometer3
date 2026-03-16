@@ -178,6 +178,10 @@ class Button:
         """Set active state for toggle buttons."""
         self.is_active = active
 
+    def set_disabled(self, disabled: bool) -> None:
+        """Set disabled state; when True, button is greyed out and clicks are ignored."""
+        self.state = ButtonState.DISABLED if disabled else ButtonState.NORMAL
+
 
 class ButtonBar:
     """A horizontal bar of buttons."""

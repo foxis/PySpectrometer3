@@ -185,6 +185,8 @@ class DisplayManager:
 
         # Mode overlay (intensity array, color)
         self._mode_overlay: tuple[np.ndarray, tuple[int, int, int]] | None = None
+        # Raw/reference overlays: list of (intensity 0-1, BGR color) for dark/white/ref/measured
+        self._raw_overlays: list[tuple[np.ndarray, tuple[int, int, int]]] = []
         # Sensitivity curve overlay (intensity array, color)
         self._sensitivity_overlay: tuple[np.ndarray, tuple[int, int, int]] | None = None
         # Autolevel non-blocking overlay
@@ -616,6 +618,17 @@ class DisplayManager:
         self._viewport.init_if_needed(data_width)
         self._viewport.clamp_x(data_width)
 
+        # Auto-rescale Y to data range when view is at default 0-1 and data exceeds it
+        if data_width > 0:
+            i_min = float(np.min(data.intensity))
+            i_max = float(np.max(data.intensity))
+            if self._viewport.y_min == 0.0 and self._viewport.y_max == 1.0:
+                margin = 0.02
+                self._viewport.y_min = min(0.0, i_min) - margin
+                self._viewport.y_max = max(1.0, i_max) + margin
+                if self._viewport.y_max <= self._viewport.y_min:
+                    self._viewport.y_max = self._viewport.y_min + 1.0
+
         if self._graph_override is not None:
             src = self._graph_override
             if src.shape[0] != graph_height or src.shape[1] != width:
@@ -639,6 +652,7 @@ class DisplayManager:
             self._spectrogram.selected_index = self.state.selected_spectrum_index
             self._spectrogram.render(graph, data, self._viewport)
             self._render_mode_overlay(graph)
+            self._render_raw_overlays(graph)
             self._render_sensitivity_overlay(graph)
             if self.state.peaks_visible:
                 self._peaks_renderer.show_width = self.state.peak_delta_visible
@@ -905,6 +919,17 @@ class DisplayManager:
         """
         self._mode_overlay = overlay
 
+    def set_raw_overlays(
+        self,
+        overlays: list[tuple[np.ndarray, tuple[int, int, int]]],
+    ) -> None:
+        """Set multiple raw/reference overlays (e.g. dark, white, ref, measured).
+
+        Args:
+            overlays: List of (intensity 0-1 array, BGR color). Cleared when empty.
+        """
+        self._raw_overlays = list(overlays) if overlays else []
+
     def set_sensitivity_overlay(
         self,
         overlay: tuple[np.ndarray, tuple[int, int, int]] | None,
@@ -927,6 +952,19 @@ class DisplayManager:
         render_polyline_overlay(
             graph, intensity_01, color, thickness=1, viewport=self._viewport
         )
+
+    def _render_raw_overlays(self, graph: np.ndarray) -> None:
+        """Render multiple raw/reference overlays (dark, white, ref, measured)."""
+        for intensity, color in self._raw_overlays:
+            if intensity is None or len(intensity) == 0:
+                continue
+            render_polyline_overlay(
+                graph,
+                np.asarray(intensity, dtype=np.float32),
+                color,
+                thickness=1,
+                viewport=self._viewport,
+            )
 
     def _render_sensitivity_overlay(self, graph: np.ndarray) -> None:
         """Render CMOS sensitivity curve overlay.
@@ -1166,6 +1204,10 @@ class DisplayManager:
             True if button was found
         """
         return self._control_bar.set_button_active(action_name, active)
+
+    def set_button_disabled(self, action_name: str, disabled: bool) -> bool:
+        """Set the disabled state of a button (greyed out, clicks ignored)."""
+        return self._control_bar.set_button_disabled(action_name, disabled)
 
     def handle_key(self, key_char: str) -> bool:
         """Invoke button callback for shortcut. Returns True if handled."""

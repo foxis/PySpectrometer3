@@ -68,15 +68,15 @@ class ColorScienceState:
 
     measurement_type: ColorMeasurementType = ColorMeasurementType.ILLUMINATION
     dark_spectrum: np.ndarray | None = None
-    # Reflectance / Transmittance: raw white-reference spectrum
+    # White reference: raw SPD. Refl/Trans use for R/T; Illumination for intensity scale by max(white).
     white_spectrum: np.ndarray | None = None
-    # Illumination: (X_w, Y_w, Z_w) of a reference white measurement.
-    # All subsequent XYZ values are scaled by 100/Y_w so the reference reads
-    # Y=100, and L*a*b* is computed against the chromatically-correct
-    # reference white (X_w/Y_w·100, 100, Z_w/Y_w·100).
+    # Illumination: (X_w, Y_w, Z_w) for L*a*b* reference (Y=100). Optional.
     white_level_xyz: tuple[float, float, float] | None = None
+    # Illumination: max(white - dark) so XYZ scale matches normalized spectrum (sample/max_white).
+    white_max: float = 1.0
+    show_raw_overlay: bool = False
+    show_absorption: bool = False
     swatches: list[ColorSwatch] = field(default_factory=list)
-    # Indices into swatches list that are currently selected (max 2)
     selected: set[int] = field(default_factory=set)
 
 
@@ -116,6 +116,8 @@ class ColorScienceMode(BaseMode):
             ButtonDefinition("__gap__", "__gap__2", row=1),
             ButtonDefinition("Dark",  "set_dark",  is_toggle=True, row=1),
             ButtonDefinition("White", "set_white", is_toggle=True, row=1),
+            ButtonDefinition("Overlay", "show_raw_overlay", is_toggle=True, row=1),
+            ButtonDefinition("ABS", "show_absorption", is_toggle=True, row=1),
             ButtonDefinition("__gap__", "__gap__3", row=1),
             ButtonDefinition("Add", "add_swatch",   row=1),
             ButtonDefinition("Del", "del_swatch",   row=1),
@@ -154,11 +156,18 @@ class ColorScienceMode(BaseMode):
             )
         ctx.display.set_button_active("set_dark",  self.color_state.dark_spectrum is not None)
         ctx.display.set_button_active("set_white", self._is_white_set())
+        ctx.display.set_button_active("show_raw_overlay", self.color_state.show_raw_overlay)
+        refl_trans = self.color_state.measurement_type in (
+            ColorMeasurementType.REFLECTANCE,
+            ColorMeasurementType.TRANSMITTANCE,
+        )
+        white_set = self.color_state.white_spectrum is not None
+        ctx.display.set_button_disabled("show_absorption", not (refl_trans and white_set))
+        ctx.display.set_button_active("show_absorption", self.color_state.show_absorption)
         ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
         ctx.display.state.peaks_visible = False
         ctx.display.set_button_active("show_peaks", False)
         ctx.display.set_button_active("capture_peak", ctx.display.state.hold_peaks)
-        # Start in plain spectrum + crop view
         ctx.display.preview_mode = "cs_crop"
         ctx.display.set_graph_click_callback(self._make_swatch_click_cb(ctx))
 
@@ -179,6 +188,8 @@ class ColorScienceMode(BaseMode):
                                lambda: self._on_type(ctx, ColorMeasurementType.ILLUMINATION))
         self.register_callback("set_dark",           lambda: self._on_toggle_dark(ctx))
         self.register_callback("set_white",          lambda: self._on_toggle_white(ctx))
+        self.register_callback("show_raw_overlay",   lambda: self._on_toggle_raw_overlay(ctx))
+        self.register_callback("show_absorption",    lambda: self._on_toggle_absorption(ctx))
         self.register_callback("save",               lambda: self._on_save(ctx))
         self.register_callback("load",               lambda: self._on_load(ctx))
         self.register_callback("add_swatch",         lambda: self._on_add_swatch(ctx))
@@ -198,15 +209,47 @@ class ColorScienceMode(BaseMode):
         intensity: np.ndarray,
         wavelengths: np.ndarray,
     ) -> np.ndarray:
-        """Apply dark/white correction per measurement type."""
+        """Apply mode-specific correction. When overlay on: only dark subtract + scale to 0-1."""
         result = intensity.astype(np.float64)
         if self.state.integration_mode != "none":
             result = self.accumulate_spectrum(result)
 
-        dark  = self.color_state.dark_spectrum
-        white = None if self.color_state.measurement_type == ColorMeasurementType.ILLUMINATION \
-                     else self.color_state.white_spectrum
-        return apply_dark_white_correction(result, dark, white)
+        dark = self.color_state.dark_spectrum
+        white = self.color_state.white_spectrum
+        mtype = self.color_state.measurement_type
+
+        if self.color_state.show_raw_overlay:
+            if dark is not None:
+                result = result - np.asarray(dark, dtype=np.float64)
+                result = np.maximum(result, 0)
+            m = float(np.max(result)) if result.size else 1.0
+            m = max(m, 1e-10)
+            return np.clip((result / m).astype(np.float32), 0, 1)
+
+        if mtype == ColorMeasurementType.ILLUMINATION:
+            if dark is not None:
+                result = result - np.asarray(dark, dtype=np.float64)
+                result = np.maximum(result, 0)
+            if white is not None:
+                white_arr = np.asarray(white, dtype=np.float64)
+                if dark is not None:
+                    white_arr = white_arr - np.asarray(dark, dtype=np.float64)
+                white_max = float(np.max(np.maximum(white_arr, 0)))
+                if white_max >= 1e-10:
+                    result = result / white_max
+            return result.astype(np.float32)
+
+        if mtype in (ColorMeasurementType.REFLECTANCE, ColorMeasurementType.TRANSMITTANCE):
+            result = apply_dark_white_correction(result, dark, white)
+            if self.color_state.show_absorption and white is not None:
+                r_t = np.maximum(result.astype(np.float64), 1e-10)
+                absorption = -np.log10(r_t)
+                result = np.clip(absorption / 4.0, 0, 1).astype(np.float32)
+            else:
+                result = result.astype(np.float32)
+            return result
+
+        return np.clip(result.astype(np.float32), 0, 1)
 
     def get_overlay(self, wavelengths: np.ndarray, graph_height: int):
         return None
@@ -223,11 +266,45 @@ class ColorScienceMode(BaseMode):
     ) -> None:
         """Update graph and preview strip according to current PREV view."""
         ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
+        ctx.display.set_button_active("show_raw_overlay", self.color_state.show_raw_overlay)
+        refl_trans = self.color_state.measurement_type in (
+            ColorMeasurementType.REFLECTANCE,
+            ColorMeasurementType.TRANSMITTANCE,
+        )
+        white_set = self.color_state.white_spectrum is not None
+        ctx.display.set_button_disabled("show_absorption", not (refl_trans and white_set))
+        if (not refl_trans or not white_set) and self.color_state.show_absorption:
+            self.color_state.show_absorption = False
+            ctx.display.set_button_active("show_absorption", False)
+        ctx.display.set_button_active("show_absorption", self.color_state.show_absorption)
         ctx.display.state.graph_click_behavior = "default"
+
+        if self.color_state.show_raw_overlay:
+            ctx.display.set_raw_overlays(
+                _build_raw_overlays(
+                    ctx,
+                    self.color_state.dark_spectrum,
+                    self.color_state.white_spectrum,
+                    processed.wavelengths,
+                )
+            )
+        else:
+            ctx.display.set_raw_overlays([])
         ctx.display.set_mode_overlay(None)
         ctx.display.set_sensitivity_overlay(None)
 
         xyz_lab = self._compute_xyz_lab(processed.intensity, processed.wavelengths)
+        power_ratio = None
+        if (
+            refl_trans
+            and white_set
+            and not self.color_state.show_absorption
+        ):
+            power_ratio = _power_ratio(
+                processed.intensity,
+                self.color_state.dark_spectrum,
+                self.color_state.white_spectrum,
+            )
         cct_duv = None
         cri_ra = None
         if self.color_state.measurement_type == ColorMeasurementType.ILLUMINATION and xyz_lab is not None:
@@ -236,9 +313,10 @@ class ColorScienceMode(BaseMode):
             cri_ra = cri_from_spectrum(processed.wavelengths, processed.intensity)
         info_lines = _xyz_lab_lines(
             xyz_lab,
-            white_set=self._is_white_set(),
+            white_set=white_set,
             cct_duv=cct_duv,
             cri_ra=cri_ra,
+            power_ratio=power_ratio,
         )
 
         width  = ctx.display.config.display.window_width
@@ -309,9 +387,7 @@ class ColorScienceMode(BaseMode):
         print(f"[FREEZE] Spectrum {'FROZEN' if frozen else 'LIVE'}")
 
     def _is_white_set(self) -> bool:
-        """True when a white reference of any kind is active for the current type."""
-        if self.color_state.measurement_type == ColorMeasurementType.ILLUMINATION:
-            return self.color_state.white_level_xyz is not None
+        """True when a white reference is set for the current type."""
         return self.color_state.white_spectrum is not None
 
     def _on_type(self, ctx: ModeContext, mtype: ColorMeasurementType) -> None:
@@ -345,39 +421,52 @@ class ColorScienceMode(BaseMode):
             self._on_toggle_white_spectrum(ctx)
 
     def _on_toggle_white_level(self, ctx: ModeContext) -> None:
-        """Set/clear the white-level scalar for illumination mode.
-
-        Captures the current measurement's XYZ as a reference white point.
-        All subsequent XYZ values are scaled so this reference reads Y = 100,
-        making L*a*b* meaningful relative to the scene white.
-        """
-        if self.color_state.white_level_xyz is not None:
+        """Set/clear white reference for illumination: scale by max(white-dark), L*a*b* ref from white XYZ."""
+        if self.color_state.white_spectrum is not None:
             self.color_state.white_level_xyz = None
+            self.color_state.white_spectrum = None
+            self.color_state.white_max = 1.0
             ctx.display.set_button_active("set_white", False)
             print("[COLOR] White level cleared")
             return
 
-        if ctx.last_data is None:
+        raw = _get_raw(ctx)
+        if raw is None:
             return
-        # white_level_xyz is None here, so _compute_xyz_lab returns equal-energy
-        # normalised raw values — exactly what we want to store as the reference.
-        xyz_lab = self._compute_xyz_lab(ctx.last_data.intensity, ctx.last_data.wavelengths)
-        if xyz_lab is None:
-            print("[COLOR] Cannot set white level: color computation failed")
-            return
-        X_w, Y_w, Z_w = xyz_lab[0]
-        if Y_w < 1e-10:
-            print("[COLOR] Cannot set white level: Y ≈ 0")
-            return
-        self.color_state.white_level_xyz = (X_w, Y_w, Z_w)
+        self.color_state.white_spectrum = raw.copy()
+        dark = self.color_state.dark_spectrum
+        white_arr = np.asarray(raw, dtype=np.float64)
+        if dark is not None:
+            white_arr = white_arr - np.asarray(dark, dtype=np.float64)
+        white_arr = np.maximum(white_arr, 0)
+        self.color_state.white_max = float(np.max(white_arr))
+        if self.color_state.white_max < 1e-10:
+            self.color_state.white_max = 1.0
+        if ctx.last_data is not None:
+            wl = ctx.last_data.wavelengths
+            try:
+                X_w, Y_w, Z_w = calculate_XYZ(
+                    white_arr.astype(np.float32),
+                    wl,
+                    "illumination",
+                    None,
+                    None,
+                )
+                if Y_w >= 1e-10:
+                    self.color_state.white_level_xyz = (float(X_w), float(Y_w), float(Z_w))
+            except (FileNotFoundError, ValueError):
+                pass
         ctx.display.set_button_active("set_white", True)
-        print(f"[COLOR] White level set: X={X_w:.2f} Y={Y_w:.2f} Z={Z_w:.2f}")
+        print("[COLOR] White level set (intensity scale + L* ref)")
 
     def _on_toggle_white_spectrum(self, ctx: ModeContext) -> None:
         """Set or clear the white reference spectrum (Reflectance / Transmittance)."""
         if self.color_state.white_spectrum is not None:
             self.color_state.white_spectrum = None
+            self.color_state.show_absorption = False
             ctx.display.set_button_active("set_white", False)
+            ctx.display.set_button_active("show_absorption", False)
+            ctx.display.set_button_disabled("show_absorption", True)
             print("[COLOR] White reference cleared")
             return
         raw = _get_raw(ctx)
@@ -385,7 +474,27 @@ class ColorScienceMode(BaseMode):
             return
         self.color_state.white_spectrum = raw.copy()
         ctx.display.set_button_active("set_white", True)
+        ctx.display.set_button_disabled("show_absorption", False)
         print("[COLOR] White reference set")
+
+    def _on_toggle_raw_overlay(self, ctx: ModeContext) -> None:
+        """Toggle overlay of dark, white, and measured SPDs (unmodified)."""
+        self.color_state.show_raw_overlay = not self.color_state.show_raw_overlay
+        ctx.display.set_button_active("show_raw_overlay", self.color_state.show_raw_overlay)
+        print(f"[COLOR] Raw overlay: {'ON' if self.color_state.show_raw_overlay else 'OFF'}")
+
+    def _on_toggle_absorption(self, ctx: ModeContext) -> None:
+        """Toggle absorption spectrum (Refl/Trans only, requires white)."""
+        if self.color_state.measurement_type not in (
+            ColorMeasurementType.REFLECTANCE,
+            ColorMeasurementType.TRANSMITTANCE,
+        ):
+            return
+        if self.color_state.white_spectrum is None:
+            return
+        self.color_state.show_absorption = not self.color_state.show_absorption
+        ctx.display.set_button_active("show_absorption", self.color_state.show_absorption)
+        print(f"[COLOR] Absorption: {'ON' if self.color_state.show_absorption else 'OFF'}")
 
     def _on_add_swatch(self, ctx: ModeContext) -> None:
         """Capture current measurement as a new swatch."""
@@ -574,9 +683,14 @@ class ColorScienceMode(BaseMode):
             )
             if mtype == "illumination":
                 ref_white = _illumination_ref_white(
-                    X, Y, Z, self.color_state.white_level_xyz
+                    self.color_state.white_level_xyz,
+                    self.color_state.white_max,
                 )
-                X, Y, Z = _apply_white_level(X, Y, Z, self.color_state.white_level_xyz)
+                X, Y, Z = _apply_white_level(
+                    X, Y, Z,
+                    self.color_state.white_level_xyz,
+                    self.color_state.white_max,
+                )
             else:
                 ref_white = tuple(
                     float(v) for v in
@@ -600,36 +714,94 @@ def _get_raw(ctx: ModeContext) -> np.ndarray | None:
     return None
 
 
+def _build_raw_overlays(
+    ctx: ModeContext,
+    dark: np.ndarray | None,
+    white: np.ndarray | None,
+    wavelengths: np.ndarray,
+) -> list[tuple[np.ndarray, tuple[int, int, int]]]:
+    """Build (intensity 0-1, BGR) list for dark, white, measured (raw) for overlay."""
+    n = len(wavelengths)
+    if n == 0:
+        return []
+    raw = _get_raw(ctx)
+    spectra: list[tuple[np.ndarray, tuple[int, int, int]]] = []
+    if dark is not None:
+        d = np.asarray(dark, dtype=np.float64)[:n]
+        spectra.append((d, (40, 40, 40)))
+    if white is not None:
+        w = np.asarray(white, dtype=np.float64)[:n]
+        spectra.append((w, (200, 120, 0)))
+    if raw is not None:
+        m = np.asarray(raw, dtype=np.float64)[:n]
+        spectra.append((m, (0, 0, 200)))
+    if not spectra:
+        return []
+    global_max = max(float(np.max(s[0])) for s in spectra)
+    global_max = max(global_max, 1.0)
+    return [
+        (np.clip(arr / global_max, 0, 1).astype(np.float32), color)
+        for arr, color in spectra
+    ]
+
+
+def _power_ratio(
+    processed: np.ndarray,
+    dark: np.ndarray | None,
+    white: np.ndarray | None,
+) -> float | None:
+    """Relative power (reflectance/transmittance): sum(sample-dark)/sum(white-dark). Returns None if not defined."""
+    if dark is None or white is None or len(processed) == 0:
+        return None
+    n = min(len(processed), len(dark), len(white))
+    white_sub = np.maximum(
+        np.asarray(white, dtype=np.float64)[:n] - np.asarray(dark, dtype=np.float64)[:n],
+        1e-10,
+    )
+    # processed is R or T = (sample-dark)/(white-dark), so sample-dark = processed * (white-dark)
+    numer = np.sum(processed[:n].astype(np.float64) * white_sub)
+    denom = float(np.sum(white_sub))
+    if denom < 1e-20:
+        return None
+    return float(numer / denom)
+
+
 def _apply_white_level(
     X: float, Y: float, Z: float,
     white_level_xyz: tuple[float, float, float] | None,
+    white_max: float = 1.0,
 ) -> tuple[float, float, float]:
-    """Scale XYZ so the white-level reference reads Y = 100."""
+    """Scale XYZ so the white-level reference reads Y = 100.
+
+    Illumination passes spectrum = (sample - dark) / max(white - dark), so its XYZ
+    is (1/white_max) * XYZ(raw). We store white_level_xyz = XYZ(raw white - dark).
+    So scale must be 100 * white_max / Y_w so that (Y_w/white_max) * scale = 100.
+    """
     if white_level_xyz is None:
         return (X, Y, Z)
     _, Y_w, _ = white_level_xyz
     if Y_w < 1e-10:
         return (X, Y, Z)
-    scale = 100.0 / Y_w
+    scale = 100.0 * white_max / Y_w
     return (X * scale, Y * scale, Z * scale)
 
 
 def _illumination_ref_white(
-    X: float, Y: float, Z: float,
     white_level_xyz: tuple[float, float, float] | None,
+    white_max: float = 1.0,
 ) -> tuple[float, float, float]:
     """Return the L*a*b* reference white for an illumination measurement.
 
     Without a white level: equal-energy E → (100, 100, 100).
-    With a white level: scale the captured white XYZ so Y_w → 100, preserving
-    the chromaticity of the scene white (e.g. D65-ish daylight).
+    With a white level: scale so the reference white reads Y = 100 (same scale
+    as _apply_white_level so L* is correct).
     """
     if white_level_xyz is None:
         return (100.0, 100.0, 100.0)
     X_w, Y_w, Z_w = white_level_xyz
     if Y_w < 1e-10:
         return (100.0, 100.0, 100.0)
-    scale = 100.0 / Y_w
+    scale = 100.0 * white_max / Y_w
     return (X_w * scale, 100.0, Z_w * scale)
 
 
@@ -638,20 +810,24 @@ def _xyz_lab_lines(
     white_set: bool = False,
     cct_duv: tuple[float, float] | None = None,
     cri_ra: float | None = None,
+    power_ratio: float | None = None,
 ) -> list[str]:
     if xyz_lab is None:
-        return []
-    (X, Y, Z), (L, a, b) = xyz_lab
-    wl_tag = "  [WL]" if white_set else ""
-    lines = [
-        f"X={X:.1f}  Y={Y:.1f}  Z={Z:.1f}{wl_tag}",
-        f"L*={L:.1f}  a*={a:.1f}  b*={b:.1f}",
-    ]
-    if cct_duv is not None:
-        cct_k, duv = cct_duv
-        lines.append(f"CCT: {cct_k:.0f} K  Δuv={duv:+.4f}")
-    if cri_ra is not None:
-        lines.append(f"CRI Ra: {cri_ra:.1f}")
+        lines = []
+    else:
+        (X, Y, Z), (L, a, b) = xyz_lab
+        wl_tag = "  [WL]" if white_set else ""
+        lines = [
+            f"X={X:.1f}  Y={Y:.1f}  Z={Z:.1f}{wl_tag}",
+            f"L*={L:.1f}  a*={a:.1f}  b*={b:.1f}",
+        ]
+        if cct_duv is not None:
+            cct_k, duv = cct_duv
+            lines.append(f"CCT: {cct_k:.0f} K  Δuv={duv:+.4f}")
+        if cri_ra is not None:
+            lines.append(f"CRI Ra: {cri_ra:.1f}")
+    if power_ratio is not None:
+        lines.append(f"P/P_w: {power_ratio:.3f}")
     return lines
 
 

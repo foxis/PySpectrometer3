@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 import cv2
 import numpy as np
 
-from .buttons import Button, ButtonBar, ButtonStyle
+from .buttons import Button, ButtonBar, ButtonState, ButtonStyle
 
 
 def _estimate_button_width(label: str, shortcut: str, style: ButtonStyle) -> int:
@@ -212,6 +212,21 @@ class ControlBar:
                 return True
         return False
 
+    def set_button_disabled(self, action_name: str, disabled: bool) -> bool:
+        """Set the disabled state of a button (greyed out, clicks ignored).
+
+        Returns:
+            True if button was found
+        """
+        for bar in [self._row1, self._row2]:
+            if bar is None:
+                continue
+            button = bar.get_button(action_name)
+            if button is not None:
+                button.set_disabled(disabled)
+                return True
+        return False
+
     def set_status(self, key: str, value: str) -> None:
         """Set a status value to display.
 
@@ -233,7 +248,7 @@ class ControlBar:
         self._capture_duration_sec = duration_sec
 
     # Fixed order for status keys (left-to-right when drawn right-aligned).
-    _STATUS_ORDER = ("Calibrate", "Cal", "G", "E", "SG", "Ext", "Ref", "Sel", "d")
+    _STATUS_ORDER = ("Calibrate", "Cal", "G", "E", "SG", "Ext", "Ref", "ABS", "Sel", "d")
 
     def get_status_segments(
         self,
@@ -316,15 +331,12 @@ class ControlBar:
     def handle_click(self, px: int, py: int) -> Button | None:
         """Handle mouse click event. Routes through mode.handle_action when mode_instance set.
 
-        Args:
-            px: Mouse X position (relative to control bar)
-            py: Mouse Y position (relative to control bar)
-
-        Returns:
-            Clicked button, or None
+        Disabled buttons do not trigger actions.
         """
         btn = self._get_clicked_button(px, py)
         if btn is None:
+            return None
+        if btn.state == ButtonState.DISABLED:
             return None
         print(f"[BUTTON] '{btn.label}' clicked -> action: {btn.action_name}")
         if self._mode_instance is not None:

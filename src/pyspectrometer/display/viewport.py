@@ -74,11 +74,9 @@ class Viewport:
         # Clamp to valid range (caller provides data_width for clamping if needed)
 
     def pan_y(self, delta_intensity: float) -> None:
-        """Pan vertically by delta in intensity units."""
+        """Pan vertically by delta in intensity units. Range can extend beyond 0-1."""
         self.y_min += delta_intensity
         self.y_max += delta_intensity
-        self.y_min = max(0.0, min(1.0, self.y_min))
-        self.y_max = max(0.0, min(1.0, self.y_max))
         if self.y_max <= self.y_min:
             self.y_max = self.y_min + 0.01
 
@@ -101,7 +99,7 @@ class Viewport:
         self.x_end = x_end
 
     def zoom_y(self, factor: float, center_intensity: float | None = None) -> None:
-        """Zoom vertically. factor>1 zooms in."""
+        """Zoom vertically. factor>1 zooms in. Range can extend beyond 0-1."""
         span = self.y_max - self.y_min
         if span <= 0:
             return
@@ -111,25 +109,11 @@ class Viewport:
             else (self.y_min + self.y_max) / 2
         )
         new_span = span / factor
-
-        # Full zoom-out: snap to full range
-        if new_span >= 1.0:
-            self.y_min = 0.0
-            self.y_max = 1.0
-            return
-
         half = new_span / 2
         y_min = center - half
         y_max = center + half
-
-        # Clamp and push the opposite edge to preserve the full requested span
-        if y_min < 0.0:
-            y_max = min(1.0, y_max - y_min)
-            y_min = 0.0
-        if y_max > 1.0:
-            y_min = max(0.0, y_min - (y_max - 1.0))
-            y_max = 1.0
-
+        if y_max <= y_min:
+            y_max = y_min + 0.01
         self.y_min = y_min
         self.y_max = y_max
 

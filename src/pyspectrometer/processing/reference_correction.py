@@ -30,7 +30,8 @@ def apply_dark_white_correction(
         white_arr = np.asarray(white, dtype=np.float64)
         if dark is not None:
             white_arr = white_arr - np.asarray(dark, dtype=np.float64)
-        white_arr = np.maximum(white_arr, 1)
+        # Avoid division by zero; use small epsilon so 0-1 data is actually normalized
+        white_arr = np.maximum(white_arr, 1e-10)
         result = result / white_arr
 
     return np.clip(result, 0, 1).astype(np.float32)
