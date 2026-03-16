@@ -36,6 +36,7 @@ from ..colorscience.swatches import (
 from ..colorscience.illumination_metrics import cct_from_xyz, cri_from_spectrum
 from ..colorscience.xyz import calculate_XYZ, xyz_to_lab
 from ..core.mode_context import ModeContext
+from ..export.csv_exporter import build_markers_peaks_metadata
 from ..processing.reference_correction import apply_dark_white_correction
 from .base import BaseMode, ButtonDefinition, ModeType
 
@@ -127,8 +128,8 @@ class ColorScienceMode(BaseMode):
             ButtonDefinition("Load", "load", row=1),
             # Row 2: Avg/Peak/Acc/Peaks | Bars | ZX/ZY | G/E/AG/AE | VIEW | Lamp | spacer | Quit
             ButtonDefinition("Avg",  "toggle_averaging",    is_toggle=True, row=2),
+            ButtonDefinition("Max", "capture_peak",        is_toggle=True, shortcut="h", row=2),
             ButtonDefinition("Acc",  "toggle_accumulation", is_toggle=True, row=2),
-            ButtonDefinition("Peak", "capture_peak",        is_toggle=True, shortcut="h", row=2),
             ButtonDefinition("Peaks", "show_peaks",         is_toggle=True, row=2),
             ButtonDefinition("__gap__", "__gap__5", row=2),
             ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=2),
@@ -213,6 +214,7 @@ class ColorScienceMode(BaseMode):
         result = intensity.astype(np.float64)
         if self.state.integration_mode != "none":
             result = self.accumulate_spectrum(result)
+        self._last_measured_pre_correction = result.copy()
 
         dark = self.color_state.dark_spectrum
         white = self.color_state.white_spectrum
@@ -588,11 +590,21 @@ class ColorScienceMode(BaseMode):
                 f"{sw.label} {sw.mode} L*={sw.L:.1f} a*={sw.a:.1f} b*={sw.b:.1f}"
             )
 
+        markers_peaks = build_markers_peaks_metadata(
+            ctx.display.state.marker_lines,
+            ctx.last_data.wavelengths,
+            ctx.last_data.intensity,
+            ctx.last_data.peaks,
+        )
+        metadata.update(markers_peaks)
+
+        measured = getattr(self, "_last_measured_pre_correction", None) or ctx.last_raw_intensity
         ctx.save_snapshot(
             ctx.last_data,
             dark_intensity=self.color_state.dark_spectrum,
             white_intensity=white,
             metadata=metadata,
+            measured_raw_intensity=measured,
             extra_spectra=[(sw.label, sw.wavelengths, sw.spectrum)
                            for sw in self.color_state.swatches],
         )

@@ -15,6 +15,7 @@ import numpy as np
 from ..core.calibration import GraticuleData, graticule_from_x_axis
 from ..core.mode_context import ModeContext
 from ..core.spectrum import SpectrumData
+from ..export.csv_exporter import build_markers_peaks_metadata
 from ..processing.raman import wavelengths_to_wavenumbers
 from ..processing.reference_correction import apply_dark_white_correction
 from ..utils.graph_scale import scale_intensity_to_graph
@@ -63,11 +64,11 @@ class RamanMode(BaseMode):
     def get_buttons(self) -> list[ButtonDefinition]:
         """Layout aligned with Measurement: Play first, grouped with gaps, Quit right-aligned."""
         return [
-            # Row 1: Play | Avg/Peak/Acc | Dark/Ref | Bars | ZX/ZY | VIEW
+            # Row 1: Play | Avg/Max/Acc | Dark/Ref | Bars | ZX/ZY | VIEW
             ButtonDefinition("Play", "freeze", is_toggle=True, row=1, icon_type="playback"),
             ButtonDefinition("__gap__", "__gap__", row=1),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=1),
-            ButtonDefinition("Peak", "capture_peak", is_toggle=True, shortcut="h", row=1),
+            ButtonDefinition("Max", "capture_peak", is_toggle=True, shortcut="h", row=1),
             ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=1),
             ButtonDefinition("__gap__", "__gap__2", row=1),
             ButtonDefinition("Dark", "set_dark", is_toggle=True, row=1),
@@ -130,7 +131,19 @@ class RamanMode(BaseMode):
             "Exposure": f"{getattr(ctx.camera, 'exposure', 0)}",
             "Note": "",
         }
-        ctx.save_snapshot(ctx.last_data, metadata=metadata)
+        markers_peaks = build_markers_peaks_metadata(
+            ctx.display.state.marker_lines,
+            ctx.last_data.wavelengths,
+            ctx.last_data.intensity,
+            ctx.last_data.peaks,
+        )
+        metadata.update(markers_peaks)
+        measured = getattr(self, "_last_measured_pre_correction", None) or ctx.last_raw_intensity
+        ctx.save_snapshot(
+            ctx.last_data,
+            metadata=metadata,
+            measured_raw_intensity=measured,
+        )
 
     def _on_load(self, ctx: ModeContext) -> None:
         """Load spectrum - placeholder."""
@@ -186,6 +199,7 @@ class RamanMode(BaseMode):
 
         if self.state.integration_mode != "none":
             result = self.accumulate_spectrum(result)
+        self._last_measured_pre_correction = result.copy()
 
         result = apply_dark_white_correction(
             result,

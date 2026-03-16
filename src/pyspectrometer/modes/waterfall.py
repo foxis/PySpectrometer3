@@ -1,11 +1,15 @@
 """Waterfall mode: standalone waterfall display only.
 
 Single window showing control bar + preview + waterfall.
-No spectrograph window.
+No spectrograph window. Save/Export write raw measured SPD rows with dark/white in comments.
+REC appends raw SPD rows to CSV indefinitely.
 """
 
+import time
+from collections import deque
 from typing import TYPE_CHECKING
 
+from ..export.csv_exporter import build_absorption_metadata, build_markers_peaks_metadata
 from .base import BaseMode, ButtonDefinition, ModeType
 from .measurement import MeasurementMode
 
@@ -16,6 +20,10 @@ if TYPE_CHECKING:
 class WaterfallMode(MeasurementMode):
     """Waterfall mode: measurement processing with waterfall-only display."""
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._waterfall_rec_writer = None
+
     @property
     def mode_type(self) -> ModeType:
         return ModeType.MEASUREMENT
@@ -25,8 +33,13 @@ class WaterfallMode(MeasurementMode):
         return "Waterfall"
 
     def setup(self, ctx: "ModeContext") -> None:
-        """Apply waterfall-specific display defaults after common setup."""
+        """Apply waterfall-specific display defaults and buffer for export."""
         super().setup(ctx)
+        height = ctx.display.config.display.graph_height
+        ctx.waterfall_raw_buffer = deque(maxlen=3 * height)
+        self.register_callback("save", lambda: self._on_save_waterfall(ctx))
+        self.register_callback("export_csv", lambda: self._on_export_csv_waterfall(ctx))
+        self.register_callback("waterfall_rec", lambda: self._on_toggle_waterfall_rec(ctx))
         ctx.display.show_spectrum_bars(True)
         ctx.display.state.peaks_visible = False
         ctx.display.state.graph_click_behavior = "marker"
@@ -53,6 +66,74 @@ class WaterfallMode(MeasurementMode):
         ctx.display.state.marker_lines.clear()
         print("[MARKERS] All marker lines cleared")
 
+    def _on_save_waterfall(self, ctx: "ModeContext") -> None:
+        """Export current waterfall buffer (raw SPD rows, limited to 3× height) with dark/white in comments."""
+        buf = getattr(ctx, "waterfall_raw_buffer", None)
+        if buf is None or len(buf) == 0:
+            print("[WATERFALL] No data to save")
+            return
+        if ctx.last_data is None:
+            print("[WATERFALL] No wavelength calibration")
+            return
+        rows = list(buf)
+        wl = ctx.last_data.wavelengths
+        metadata = {
+            "Mode": "Waterfall",
+            "Date": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "Rows": str(len(rows)),
+        }
+        markers_peaks = build_markers_peaks_metadata(
+            ctx.display.state.marker_lines,
+            ctx.last_data.wavelengths,
+            ctx.last_data.intensity,
+            ctx.last_data.peaks,
+        )
+        metadata.update(markers_peaks)
+        if self.meas_state.white_spectrum is not None:
+            last_measured = rows[-1] if rows else None
+            if last_measured is not None:
+                absorption_meta = build_absorption_metadata(
+                    last_measured,
+                    self.meas_state.dark_spectrum,
+                    self.meas_state.white_spectrum,
+                )
+                metadata.update(absorption_meta)
+        ctx.save_waterfall_snapshot(
+            rows,
+            wl,
+            dark_intensity=self.meas_state.dark_spectrum,
+            white_intensity=self.meas_state.white_spectrum,
+            metadata=metadata,
+        )
+
+    def _on_export_csv_waterfall(self, ctx: "ModeContext") -> None:
+        """Same as Save: export waterfall buffer to CSV."""
+        self._on_save_waterfall(ctx)
+
+    def _on_toggle_waterfall_rec(self, ctx: "ModeContext") -> None:
+        """Toggle REC: when on, append each frame's raw SPD to CSV indefinitely; when off, stop and close file."""
+        if self._waterfall_rec_writer is not None:
+            self._waterfall_rec_writer.close()
+            self._waterfall_rec_writer = None
+            ctx.waterfall_rec_writer = None
+            ctx.display.set_button_active("waterfall_rec", False)
+            print("[WATERFALL] Recording stopped")
+            return
+        if ctx.last_data is None:
+            print("[WATERFALL] No wavelength calibration; start capture first")
+            return
+        path = ctx.exporter.generate_filename("Waterfall-Rec")
+        self._waterfall_rec_writer = ctx.exporter.start_waterfall_rec(
+            path,
+            ctx.last_data.wavelengths,
+            dark_intensity=self.meas_state.dark_spectrum,
+            white_intensity=self.meas_state.white_spectrum,
+            metadata={"Mode": "Waterfall-Rec", "Date": time.strftime("%Y-%m-%d %H:%M:%S")},
+        )
+        ctx.waterfall_rec_writer = self._waterfall_rec_writer
+        ctx.display.set_button_active("waterfall_rec", True)
+        print(f"[WATERFALL] Recording to {path}")
+
     @property
     def preview_modes(self) -> list[str]:
         """Waterfall-relevant preview modes.
@@ -66,15 +147,16 @@ class WaterfallMode(MeasurementMode):
     def get_buttons(self) -> list[ButtonDefinition]:
         """Waterfall mode buttons — layout like Measurement; ZY omitted (no intensity zoom)."""
         return [
-            # Row 1: Play | Avg/Peak/Acc | Dark/White | Bars | ZX | VIEW
+            # Row 1: Play | Avg/Max/Acc | Dark/White | Bars | ZX | VIEW
             ButtonDefinition("Play", "capture", is_toggle=True, row=1, icon_type="playback"),
             ButtonDefinition("__gap__", "__gap__", row=1),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=1),
-            ButtonDefinition("Peak", "capture_peak", is_toggle=True, shortcut="h", row=1),
+            ButtonDefinition("Max", "capture_peak", is_toggle=True, shortcut="h", row=1),
             ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=1),
             ButtonDefinition("__gap__", "__gap__2", row=1),
             ButtonDefinition("Dark", "set_dark", is_toggle=True, row=1),
             ButtonDefinition("White", "set_white", is_toggle=True, row=1),
+            ButtonDefinition("ABS", "show_absorption", is_toggle=True, row=1),
             ButtonDefinition("__gap__", "__gap__3", row=1),
             ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=1),
             ButtonDefinition("__gap__", "__gap__4", row=1),
@@ -96,6 +178,7 @@ class WaterfallMode(MeasurementMode):
             ButtonDefinition("AG", "auto_gain", is_toggle=True, row=2),
             ButtonDefinition("AE", "auto_exposure", is_toggle=True, row=2),
             ButtonDefinition("__gap__", "__gap__9", row=2),
+            ButtonDefinition("REC", "waterfall_rec", is_toggle=True, row=2),
             ButtonDefinition("Save", "save", shortcut="s", row=2),
             ButtonDefinition("Load", "load", row=2),
             ButtonDefinition("__gap__", "__gap__10", row=2),

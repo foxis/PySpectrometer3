@@ -174,6 +174,7 @@ class Spectrometer:
         )
         ctx.quit_app = lambda: setattr(ctx, "running", False)
         ctx.save_snapshot = self._save_snapshot
+        ctx.save_waterfall_snapshot = self._save_waterfall_snapshot
         ctx.clear_autolevel_overlay = self._clear_autolevel_overlay
         ctx.auto_calibrate_debounce_sec = 1.5
         return ctx
@@ -331,9 +332,11 @@ class Spectrometer:
         white_intensity: np.ndarray | None = None,
         metadata: dict | None = None,
         extra_spectra: list[tuple[str, np.ndarray, np.ndarray]] | None = None,
+        measured_raw_intensity: np.ndarray | None = None,
     ) -> None:
         """Save spectrum to CSV and optionally waterfall image.
 
+        All SPD columns (Measured, Dark, White, extra) are written as raw values.
         extra_spectra: list of (column_name, wavelengths, spectrum) tuples, one
         per swatch.  Each swatch spectrum is interpolated to the main wavelength
         grid inside the exporter.
@@ -351,6 +354,32 @@ class Spectrometer:
             white_intensity=white_intensity,
             metadata=metadata,
             extra_columns=extra_columns,
+            measured_raw_intensity=measured_raw_intensity,
+        )
+        time_display = time.strftime(self.config.export.time_format)
+        self._display.state.save_message = f"Last Save: {time_display}"
+        print(f"Saved: {csv_path}")
+        waterfall_img = self._display.get_waterfall_image()
+        if waterfall_img is not None:
+            timestamp = time.strftime(self.config.export.timestamp_format)
+            cv2.imwrite(str(Path(f"waterfall-{timestamp}.png")), waterfall_img)
+
+    def _save_waterfall_snapshot(
+        self,
+        rows: list[np.ndarray],
+        wavelengths: np.ndarray,
+        *,
+        dark_intensity: np.ndarray | None = None,
+        white_intensity: np.ndarray | None = None,
+        metadata: dict | None = None,
+    ) -> None:
+        """Save waterfall buffer to CSV (rows = raw measured SPD; dark/white in comments)."""
+        csv_path = self._exporter.generate_filename("Waterfall")
+        self._exporter.export_waterfall(
+            rows, wavelengths, csv_path,
+            dark_intensity=dark_intensity,
+            white_intensity=white_intensity,
+            metadata=metadata,
         )
         time_display = time.strftime(self.config.export.time_format)
         self._display.state.save_message = f"Last Save: {time_display}"
@@ -367,6 +396,7 @@ class Spectrometer:
             "measurement": "Measurement",
             "raman": "Raman",
             "colorscience": "Color Science",
+            "waterfall": "Waterfall",
         }
         print(f"Starting PySpectrometer 3 - {mode_names.get(self.mode, self.mode)} Mode...")
 
@@ -410,6 +440,13 @@ class Spectrometer:
                     processed = self._mode_instance.transform_spectrum_data(processed)
                     processed = self._expand_peaks_with_regions(processed)
                     self._ctx.last_data = processed
+                    if self.mode == "waterfall":
+                        buf = getattr(self._ctx, "waterfall_raw_buffer", None)
+                        if buf is not None and self._ctx.last_raw_intensity is not None:
+                            buf.append(self._ctx.last_raw_intensity.copy())
+                        rec = getattr(self._ctx, "waterfall_rec_writer", None)
+                        if rec is not None and self._ctx.last_raw_intensity is not None:
+                            rec.write_row(self._ctx.last_raw_intensity)
                     # Use raw extraction max for AE/AG so saturated shows as 1.0 (not white-ref ~0.8).
                     ae_data = SpectrumData(
                         intensity=np.array([self._ctx.last_raw_extraction_max], dtype=np.float32),

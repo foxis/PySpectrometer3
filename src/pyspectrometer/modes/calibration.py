@@ -1,5 +1,8 @@
 """Calibration mode for wavelength calibration.
 
+Respects Avg/Max/Acc like other modes: Max (hold peak) is applied in the capture
+pipeline; Avg and Acc are applied via accumulate_spectrum before sensitivity/freeze.
+
 Workflow:
 1. Select reference source (FL, Hg, D65, LED)
 2. Point spectrometer at light source
@@ -145,7 +148,7 @@ class CalibrationMode(BaseMode):
             ctx.display.set_status("Status", "LIVE")
 
     def _sync_button_status(self, ctx: ModeContext) -> None:
-        """Sync button active state from model to display (Peak, Avg, Acc, G, E, AG, AE, S, sources, Overlay, Play)."""
+        """Sync button active state from model to display (Max, Avg, Acc, G, E, AG, AE, S, sources, Overlay, Play)."""
         for s in self.SOURCES:
             ctx.display.set_button_active(
                 f"source_{s.name.lower()}", s == self.cal_state.current_source
@@ -382,11 +385,11 @@ class CalibrationMode(BaseMode):
             ButtonDefinition("LVL", "auto_level", is_toggle=True, row=1),
             ButtonDefinition("CAL", "auto_calibrate", row=1),
             ButtonDefinition("R", "reset_calibration", row=1),
-            # Row 2: Play (freeze + progress) | Peak/Avg/Acc | Bars | ZX/ZY | VIEW | Save/CSV/Load | spacer | Quit
+            # Row 2: Play (freeze + progress) | Max/Avg/Acc | Bars | ZX/ZY | VIEW | Save/CSV/Load | spacer | Quit
             ButtonDefinition("Play", "freeze", is_toggle=True, row=2, icon_type="playback"),
             ButtonDefinition("__gap__", "__gap__c1", row=2),
-            ButtonDefinition("Peak", "capture_peak", is_toggle=True, row=2),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=2),
+            ButtonDefinition("Max", "capture_peak", is_toggle=True, row=2),
             ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=2),
             ButtonDefinition("__gap__", "__gap__c2", row=2),
             ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=2),

@@ -33,6 +33,10 @@ def _noop_save(_: SpectrumData) -> None:
     pass
 
 
+def _noop_waterfall_save(*args: object, **kwargs: object) -> None:
+    pass
+
+
 @dataclass
 class ModeContext:
     """Shared context passed to modes for implementing handlers.
@@ -56,6 +60,8 @@ class ModeContext:
 
     # Save snapshot - mode calls with SpectrumData and optional kwargs (reference_intensity, metadata)
     save_snapshot: Callable[..., None] = _noop_save
+    # Save waterfall buffer (rows of raw SPD) with dark/white in comments; used by waterfall mode
+    save_waterfall_snapshot: Callable[..., None] = _noop_waterfall_save
 
     # Frame state (orchestrator updates each frame; modes read)
     last_data: SpectrumData | None = None

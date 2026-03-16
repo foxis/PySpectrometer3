@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 import numpy as np
 
 from ..core.mode_context import ModeContext
+from ..export.csv_exporter import build_absorption_metadata, build_markers_peaks_metadata
 from ..processing.reference_correction import apply_dark_white_correction
 from ..utils.graph_scale import scale_intensity_to_graph
 from .base import BaseMode, ButtonDefinition, ModeType
@@ -226,11 +227,30 @@ class MeasurementMode(BaseMode):
             "Exposure": f"{getattr(ctx.camera, 'exposure', 0)}",
             "Note": "",
         }
+        markers_peaks = build_markers_peaks_metadata(
+            ctx.display.state.marker_lines,
+            ctx.last_data.wavelengths,
+            ctx.last_data.intensity,
+            ctx.last_data.peaks,
+        )
+        metadata.update(markers_peaks)
+        measured = getattr(self, "_last_measured_pre_correction", None) or ctx.last_raw_intensity
+        if (
+            self.meas_state.white_spectrum is not None
+            and measured is not None
+        ):
+            absorption_meta = build_absorption_metadata(
+                measured,
+                self.meas_state.dark_spectrum,
+                self.meas_state.white_spectrum,
+            )
+            metadata.update(absorption_meta)
         ctx.save_snapshot(
             ctx.last_data,
             dark_intensity=self.meas_state.dark_spectrum,
             white_intensity=self.meas_state.white_spectrum,
             metadata=metadata,
+            measured_raw_intensity=measured,
         )
 
     def _on_cycle_load_as(self, ctx: ModeContext) -> None:
@@ -331,11 +351,11 @@ class MeasurementMode(BaseMode):
     def get_buttons(self) -> list[ButtonDefinition]:
         """Get measurement mode buttons. Grouped with gaps; Quit right-aligned."""
         return [
-            # Row 1: Rec (capture + progress) | Avg/Peak/Acc | Dark/White | Bars | ZX/ZY | VIEW
+            # Row 1: Rec (capture + progress) | Avg/Max/Acc | Dark/White | Bars | ZX/ZY | VIEW
             ButtonDefinition("Rec", "capture", is_toggle=True, row=1, icon_type="playback"),
             ButtonDefinition("__gap__", "__gap__", row=1),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=1),
-            ButtonDefinition("Peak", "capture_peak", is_toggle=True, shortcut="h", row=1),
+            ButtonDefinition("Max", "capture_peak", is_toggle=True, shortcut="h", row=1),
             ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=1),
             ButtonDefinition("__gap__", "__gap__2", row=1),
             ButtonDefinition("Dark", "set_dark", is_toggle=True, row=1),
@@ -385,6 +405,7 @@ class MeasurementMode(BaseMode):
 
         if self.state.integration_mode != "none":
             result = self.accumulate_spectrum(result)
+        self._last_measured_pre_correction = result.copy()
 
         # Apply dark/white reference correction (shared logic)
         dark = self.meas_state.dark_spectrum if self.meas_state.subtract_dark else None
