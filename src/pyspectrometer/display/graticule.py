@@ -87,7 +87,6 @@ class GraticuleRenderer:
         """
         height = graph.shape[0]
         width = graph.shape[1]
-        unit = getattr(graticule, "unit", "nm")
         baseline = 12
 
         def to_screen(data_pos: int) -> int:
@@ -104,7 +103,7 @@ class GraticuleRenderer:
             if not in_range(pos):
                 continue
             screen_pos = to_screen(pos)
-            text = f"{str(label)}{unit}"
+            text = str(label)
             (text_w, _), _ = cv2.getTextSize(text, self.font, self.font_scale, 1)
 
             # Place to the right of the tick; clamp so it never leaves the canvas
@@ -187,11 +186,10 @@ class GraticuleRenderer:
                 cv2.line(waterfall, (screen_x, i), (screen_x, i + 1), (0, 0, 0), 2)
                 cv2.line(waterfall, (screen_x, i), (screen_x, i + 1), (255, 255, 255), 1)
 
-            unit = getattr(graticule, "unit", "nm")
             label_x = max(0, screen_x - self.text_offset)
             cv2.putText(
                 waterfall,
-                f"{label}{unit}",
+                str(label),
                 (label_x, height - 5),
                 self.font,
                 self.font_scale,
@@ -201,7 +199,7 @@ class GraticuleRenderer:
             )
             cv2.putText(
                 waterfall,
-                f"{label}{unit}",
+                str(label),
                 (label_x, height - 5),
                 self.font,
                 self.font_scale,

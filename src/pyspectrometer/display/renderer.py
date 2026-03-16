@@ -567,8 +567,6 @@ class DisplayManager:
         peak_min_dist: int,
         peak_threshold: int,
         extraction_method: str = "Weighted Sum",
-        rotation_angle: float = 0.0,
-        perp_width: int = 20,
         spectrum_y_center: int = 0,
     ) -> None:
         """Render the complete spectrum display.
@@ -580,8 +578,6 @@ class DisplayManager:
             peak_min_dist: Current peak minimum distance
             peak_threshold: Current peak threshold
             extraction_method: Current extraction method name
-            rotation_angle: Spectrum rotation angle in degrees
-            perp_width: Perpendicular sampling width
             spectrum_y_center: Y coordinate of spectrum center (for full view indicator)
         """
         self._spectrum_y_center = spectrum_y_center
@@ -611,9 +607,9 @@ class DisplayManager:
             wl2 = data.wavelengths[i2]
             d_wl = abs(wl2 - wl1)
             d_i = abs(float(data.intensity[i2]) - float(data.intensity[i1]))
-            self.set_status("Δ", f"Δλ={d_wl:.1f}nm ΔI={d_i:.2f}")
+            self.set_status("d", f"dL={d_wl:.1f}nm dI={d_i:.2f}")
         else:
-            self.set_status("Δ", "-")
+            self.set_status("d", "-")
 
         self._viewport.init_if_needed(data_width)
         self._viewport.clamp_x(data_width)
@@ -683,14 +679,14 @@ class DisplayManager:
         preview_height = self.config.display.preview_height
 
         # Always use control bar - no legacy banner
+        exposure_us = getattr(data, "exposure_us", None)
         self._update_control_bar_status(
             camera_gain,
             savgol_poly,
             peak_min_dist,
             peak_threshold,
             extraction_method,
-            rotation_angle,
-            perp_width,
+            exposure_us=exposure_us,
         )
         messages = self._control_bar.render()
 
@@ -764,8 +760,8 @@ class DisplayManager:
                     )
                     self._draw_rotated_crop_box(
                         scaled,
-                        rotation_angle,
-                        perp_width,
+                        self.calibration.rotation_angle,
+                        self.calibration.perpendicular_width,
                         self._spectrum_y_center,
                         original_width,
                         original_height,
@@ -1052,6 +1048,21 @@ class DisplayManager:
         p1 = (int(center_line_orig[1, 0] * scale_x), int(center_line_orig[1, 1] * scale_y))
         cv2.line(frame, p0, p1, (255, 255, 0), 1)
 
+    def _status_segments_width(
+        self, segments: list[tuple[str, tuple[int, int, int]]]
+    ) -> int:
+        """Total pixel width of status segment texts."""
+        font = self._font
+        font_scale = self.config.display.font_scale
+        thickness = 1
+        total = 0
+        for text, _ in segments:
+            if not text:
+                continue
+            (w, _), _ = cv2.getTextSize(text, font, font_scale, thickness)
+            total += w
+        return total
+
     def _draw_status_segments(
         self,
         image: np.ndarray,
@@ -1083,25 +1094,23 @@ class DisplayManager:
         image: np.ndarray,
         segments: list[tuple[str, tuple[int, int, int]]],
     ) -> None:
-        """Draw status segments overlaid on the preview strip (semi-transparent background)."""
+        """Draw status segments overlaid on the preview strip (semi-transparent background), right-aligned."""
         if not segments:
             return
 
-        full_text = "".join(s[0] for s in segments)
         font = self._font
         font_scale = self.config.display.font_scale
         thickness = 1
-        (text_width, text_height), baseline = cv2.getTextSize(
-            full_text, font, font_scale, thickness
-        )
+        text_width = self._status_segments_width(segments)
+        (_, text_height), baseline = cv2.getTextSize("0", font, font_scale, thickness)
 
         padding = 3
-        x = padding
+        x = image.shape[1] - padding - text_width
         y = image.shape[0] - padding
 
         bg_x1 = x - padding
         bg_y1 = y - text_height - padding
-        bg_x2 = x + text_width + padding
+        bg_x2 = image.shape[1]
         bg_y2 = y + baseline + padding
 
         overlay = image.copy()
@@ -1115,11 +1124,12 @@ class DisplayManager:
         image: np.ndarray,
         segments: list[tuple[str, tuple[int, int, int]]],
     ) -> None:
-        """Draw status segments at the bottom of the image."""
+        """Draw status segments at the bottom of the image, right-aligned."""
         if not segments:
             return
 
-        x = 5
+        margin = 5
+        x = image.shape[1] - margin - self._status_segments_width(segments)
         y = image.shape[0] - 5
         self._draw_status_segments(image, segments, x, y, shadow=True)
 
@@ -1185,19 +1195,22 @@ class DisplayManager:
         peak_min_dist: int,
         peak_threshold: int,
         extraction_method: str,
-        rotation_angle: float,
-        perp_width: int,
+        *,
+        exposure_us: int | None = None,
     ) -> None:
         """Update status values displayed in the control bar."""
         cal_result = self.calibration.result
         cal_label = "Calibrate" if self.mode != "calibration" else "Cal"
         self._control_bar.set_calibrate_red(self.mode != "calibration")
         self.set_status(cal_label, cal_result.status_message[:12])
-        self.set_status("Gain", f"{camera_gain:.0f}")
+        self.set_status("G", f"{camera_gain:.0f}")
+        if exposure_us is not None and exposure_us > 0:
+            n = round(1e6 / exposure_us)
+            self.set_status("E", f"1/{n}")
+        else:
+            self.set_status("E", "-")
         self.set_status("SG", str(savgol_poly))
         self.set_status("Ext", extraction_method[:3].upper())
-        self.set_status("Ang", f"{rotation_angle:.1f}")
-        self.set_status("Wid", str(perp_width))
 
         if self.state.reference_name != "None":
             self.set_status("Ref", self.state.reference_name[:8])

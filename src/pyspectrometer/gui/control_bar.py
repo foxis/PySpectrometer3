@@ -231,25 +231,29 @@ class ControlBar:
         self._capture_progress_frac = progress_frac
         self._capture_duration_sec = duration_sec
 
+    # Fixed order for status keys (left-to-right when drawn right-aligned).
+    _STATUS_ORDER = ("Calibrate", "Cal", "G", "E", "SG", "Ext", "Ref", "Sel", "d")
+
     def get_status_segments(
         self,
         default_color: tuple[int, int, int] = (0, 255, 255),
         red_color: tuple[int, int, int] = (0, 0, 255),
     ) -> list[tuple[str, tuple[int, int, int]]]:
-        """Get status as segments for colored drawing.
+        """Get status as segments for colored drawing in fixed order.
 
         Returns:
             List of (text, BGR color). Use None color for default (caller substitutes).
         """
         segments: list[tuple[str, tuple[int, int, int]]] = []
-        items = list(self._status_values.items())
-        for i, (k, v) in enumerate(items):
+        keys_present = [k for k in self._STATUS_ORDER if k in self._status_values]
+        for i, k in enumerate(keys_present):
+            v = self._status_values[k]
             if k == "Calibrate" and self._calibrate_red:
                 segments.append((f"{k}:", red_color))
                 segments.append((v, default_color))
             else:
                 segments.append((f"{k}:{v}", default_color))
-            if i < len(items) - 1:
+            if i < len(keys_present) - 1:
                 segments.append(("  ", default_color))
         return segments
 

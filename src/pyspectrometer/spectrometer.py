@@ -297,8 +297,6 @@ class Spectrometer:
             peak_min_dist=self._peak_detector.min_distance,
             peak_threshold=self._peak_detector.threshold,
             extraction_method=str(self._extractor.method),
-            rotation_angle=self._extractor.rotation_angle,
-            perp_width=self._extractor.perpendicular_width,
             spectrum_y_center=self._extractor.spectrum_y_center,
         )
 

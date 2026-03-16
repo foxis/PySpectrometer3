@@ -38,8 +38,8 @@ class CalibrationResult:
     def status_message(self) -> str:
         """Human-readable calibration status."""
         if self.order == 0:
-            return "UNCALIBRATED!"
-        return "Calibrated!!!"
+            return "UNCALIBRATED"
+        return "OK"
 
     @property
     def detail_message(self) -> str:
