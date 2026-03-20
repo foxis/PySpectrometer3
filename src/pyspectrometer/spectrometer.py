@@ -21,7 +21,14 @@ from .core.mode_context import ModeContext
 from .core.reference_spectrum import ReferenceSpectrumManager
 from .core.spectrum import SpectrumData
 from .display.renderer import DisplayManager
-from .export.csv_exporter import CSVExporter
+from .export.csv_exporter import (
+    CSVExporter,
+    build_sensitivity_for_export,
+    export_wavelength_mask,
+    trim_optional_intensity_row,
+    trim_spectrum_data_for_export_min_wavelength,
+    trim_waterfall_export_arrays,
+)
 from .modes.base import BaseMode
 from .modes.calibration import CalibrationMode
 from .modes.colorscience import ColorScienceMode
@@ -150,7 +157,7 @@ class Spectrometer:
                 self._mode_instance = ColorScienceMode()
             case "waterfall":
                 self._mode_instance = WaterfallMode()
-                self.config.display.waterfall_enabled = True
+                self.config.waterfall.enabled = True
             case _:
                 self._measurement_mode = MeasurementMode()
                 self._mode_instance = self._measurement_mode
@@ -181,7 +188,14 @@ class Spectrometer:
         ctx.sensitivity_engine = self._sensitivity
         if self.mode == "calibration":
             ctx.sensitivity_correction_enabled = False
+        ctx.min_wavelength = self._min_wavelength_for_mode()
         return ctx
+
+    def _min_wavelength_for_mode(self) -> float:
+        """CSV wavelength floor (nm) for the active mode; 0 keeps the full calibrated axis."""
+        if self.mode in ("measurement", "waterfall"):
+            return float(self.config.export.min_wavelength)
+        return 0.0
 
     def _capture_frame(self) -> np.ndarray:
         """Capture frame and update context (blocking; used when not using threaded capture)."""
@@ -347,15 +361,37 @@ class Spectrometer:
             [(name, (wl, sp)) for name, wl, sp in extra_spectra]
             if extra_spectra else None
         )
+        meta = dict(metadata) if metadata else {}
+        data_e = data
+        dark_e = dark_intensity
+        white_e = white_intensity
+        measured_e = measured_raw_intensity
+        min_wl = self._ctx.min_wavelength
+        if min_wl > 0:
+            data_e = trim_spectrum_data_for_export_min_wavelength(data, min_wl)
+            n = min(len(data.wavelengths), len(data.intensity))
+            mask = export_wavelength_mask(data.wavelengths, n, min_wl)
+            if not np.all(mask):
+                measured_e = trim_optional_intensity_row(measured_raw_intensity, n, mask)
+                dark_e = trim_optional_intensity_row(dark_intensity, n, mask)
+                white_e = trim_optional_intensity_row(white_intensity, n, mask)
+        sens_col, sens_meta = build_sensitivity_for_export(
+            correction_enabled=self._ctx.sensitivity_correction_enabled,
+            engine=self._ctx.sensitivity_engine,
+            wavelengths=data_e.wavelengths,
+            sens_cfg=self.config.sensitivity,
+        )
+        meta.update(sens_meta)
         self._exporter.export(
-            data,
+            data_e,
             csv_path,
             reference_intensity=reference_intensity,
-            dark_intensity=dark_intensity,
-            white_intensity=white_intensity,
-            metadata=metadata,
+            dark_intensity=dark_e,
+            white_intensity=white_e,
+            metadata=meta,
             extra_columns=extra_columns,
-            measured_raw_intensity=measured_raw_intensity,
+            measured_raw_intensity=measured_e,
+            sensitivity_intensity=sens_col,
         )
         time_display = time.strftime(self.config.export.time_format)
         self._display.state.save_message = f"Last Save: {time_display}"
@@ -376,11 +412,31 @@ class Spectrometer:
     ) -> None:
         """Save waterfall buffer to CSV (rows = raw measured SPD; dark/white in comments)."""
         csv_path = self._exporter.generate_filename("Waterfall")
+        meta = dict(metadata) if metadata else {}
+        min_wl = self._ctx.min_wavelength
+        sens_col, sens_meta = build_sensitivity_for_export(
+            correction_enabled=self._ctx.sensitivity_correction_enabled,
+            engine=self._ctx.sensitivity_engine,
+            wavelengths=wavelengths,
+            sens_cfg=self.config.sensitivity,
+        )
+        meta.update(sens_meta)
+        rows_e, wl_e, dark_e, white_e, sens_e, _ = trim_waterfall_export_arrays(
+            rows,
+            wavelengths,
+            min_wl,
+            dark_intensity,
+            white_intensity,
+            sens_col,
+        )
         self._exporter.export_waterfall(
-            rows, wavelengths, csv_path,
-            dark_intensity=dark_intensity,
-            white_intensity=white_intensity,
-            metadata=metadata,
+            rows_e,
+            wl_e,
+            csv_path,
+            dark_intensity=dark_e,
+            white_intensity=white_e,
+            sensitivity_intensity=sens_e,
+            metadata=meta,
         )
         time_display = time.strftime(self.config.export.time_format)
         self._display.state.save_message = f"Last Save: {time_display}"

@@ -198,7 +198,12 @@ class CalibrationMode(BaseMode):
             return
         wl_out, sens = pair
         eng.set_custom_curve(wl_out, sens)
-        ctx.calibration.save_sensitivity_curve(list(map(float, wl_out)), list(map(float, sens)))
+        ref_name = get_reference_name(self.cal_state.current_source)
+        ctx.calibration.save_sensitivity_curve(
+            list(map(float, wl_out)),
+            list(map(float, sens)),
+            calibration_reference=ref_name,
+        )
         print(
             f"[CRR] Sensitivity calibrated vs {get_reference_name(self.cal_state.current_source)} "
             f"({len(wl_out)} pts); saved. Toggle S in other modes to apply."
@@ -332,7 +337,6 @@ class CalibrationMode(BaseMode):
             "Mode": "Calibration",
             "Date": time.strftime("%Y-%m-%d %H:%M:%S"),
             "Reference source": get_reference_name(self.cal_state.current_source),
-            "Sensitivity correction": "on" if (self._ctx is not None and self._ctx.sensitivity_correction_enabled) else "off",
             "Gain": f"{ctx.camera.gain:.1f}",
             "Exposure": f"{getattr(ctx.camera, 'exposure', 0)}",
             "Note": "",

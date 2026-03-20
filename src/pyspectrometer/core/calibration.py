@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 if TYPE_CHECKING:
-    from ..config import Config
+    from ..config import Config, SensitivityConfig
 
 try:
     from scipy.interpolate import PchipInterpolator
@@ -91,6 +91,11 @@ class Calibration:
         self._cal_wavelengths = (
             list(cal.cal_wavelengths) if cal.cal_wavelengths else list(default_wavelengths)
         )
+
+    @property
+    def sensitivity_settings(self) -> "SensitivityConfig":
+        """Sensitivity section of app config (curve + CRR reference name)."""
+        return self._config.sensitivity
 
     @property
     def wavelengths(self) -> np.ndarray:
@@ -221,7 +226,13 @@ class Calibration:
             return True
         return False
 
-    def save_sensitivity_curve(self, wavelengths: list[float], values: list[float]) -> bool:
+    def save_sensitivity_curve(
+        self,
+        wavelengths: list[float],
+        values: list[float],
+        *,
+        calibration_reference: str = "",
+    ) -> bool:
         """Persist user-fitted sensitivity curve to config."""
         from ..config import save_config
 
@@ -232,6 +243,7 @@ class Calibration:
         sens.use_custom_curve = True
         sens.custom_wavelengths = [float(w) for w in wavelengths]
         sens.custom_values = [float(v) for v in values]
+        sens.calibration_reference = (calibration_reference or "").strip()
         if save_config(self._config, self._config_path):
             print(f"[Sensitivity] Saved user curve ({len(wavelengths)} points) to config")
             return True
@@ -245,6 +257,7 @@ class Calibration:
         sens.use_custom_curve = False
         sens.custom_wavelengths = []
         sens.custom_values = []
+        sens.calibration_reference = ""
         if save_config(self._config, self._config_path):
             print("[Sensitivity] User curve cleared; use CMOS button to reload datasheet in session")
             return True

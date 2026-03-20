@@ -83,7 +83,6 @@ def _config_to_dict(config: "Config") -> dict:
         },
         "display": {
             "fullscreen": config.display.fullscreen,
-            "waterfall_enabled": config.display.waterfall_enabled,
             "graph_height": config.display.graph_height,
             "preview_height": config.display.preview_height,
             "message_height": config.display.message_height,
@@ -94,6 +93,16 @@ def _config_to_dict(config: "Config") -> dict:
             "graph_label_font_scale": config.display.graph_label_font_scale,
             "status_col1_x": config.display.status_col1_x,
             "status_col2_x": config.display.status_col2_x,
+        },
+        "measurement": {
+            "auto_viewport": config.measurement.auto_viewport,
+            "viewport_wl_min": config.measurement.viewport_wl_min,
+            "viewport_wl_max": config.measurement.viewport_wl_max,
+        },
+        "color_science": {
+            "auto_viewport": config.color_science.auto_viewport,
+            "viewport_wl_min": config.color_science.viewport_wl_min,
+            "viewport_wl_max": config.color_science.viewport_wl_max,
         },
         "calibration": {
             "cal_pixels": list(config.calibration.cal_pixels),
@@ -119,8 +128,12 @@ def _config_to_dict(config: "Config") -> dict:
             "timestamp_format": config.export.timestamp_format,
             "time_format": config.export.time_format,
             "reference_dirs": [str(p) for p in config.export.reference_dirs],
+            "min_wavelength": config.export.min_wavelength,
         },
         "waterfall": {
+            "enabled": config.waterfall.enabled,
+            "viewport_wl_min": config.waterfall.viewport_wl_min,
+            "viewport_wl_max": config.waterfall.viewport_wl_max,
             "contrast": config.waterfall.contrast,
             "brightness": config.waterfall.brightness,
         },
@@ -139,6 +152,7 @@ def _config_to_dict(config: "Config") -> dict:
             "use_custom_curve": config.sensitivity.use_custom_curve,
             "custom_wavelengths": [float(w) for w in config.sensitivity.custom_wavelengths],
             "custom_values": [float(v) for v in config.sensitivity.custom_values],
+            "calibration_reference": config.sensitivity.calibration_reference,
         },
     }
 
@@ -186,6 +200,12 @@ def _apply_config(config: "Config", data: dict) -> None:
             config.export.time_format = exp["time_format"]
         if "reference_dirs" in exp:
             config.export.reference_dirs = [Path(p) for p in exp["reference_dirs"]]
+        if "min_wavelength" in exp:
+            config.export.min_wavelength = float(exp["min_wavelength"])
+    if "measurement" in data:
+        apply(config.measurement, data["measurement"])
+    if "color_science" in data:
+        apply(config.color_science, data["color_science"])
     if "waterfall" in data:
         apply(config.waterfall, data["waterfall"])
     if "extraction" in data:
@@ -200,6 +220,8 @@ def _apply_config(config: "Config", data: dict) -> None:
             config.sensitivity.custom_wavelengths = [float(w) for w in sens["custom_wavelengths"]]
         if "custom_values" in sens:
             config.sensitivity.custom_values = [float(v) for v in sens["custom_values"]]
+        if "calibration_reference" in sens:
+            config.sensitivity.calibration_reference = str(sens["calibration_reference"] or "")
 
 
 @dataclass
@@ -231,7 +253,6 @@ class DisplayConfig:
     """
 
     fullscreen: bool = False
-    waterfall_enabled: bool = False
     graph_height: int = 280
     preview_height: int = 60
     message_height: int = 60
@@ -251,6 +272,24 @@ class DisplayConfig:
     def stack_height(self) -> int:
         """Total height of the stacked display (canvas height)."""
         return self.graph_height + self.preview_height + self.message_height
+
+
+@dataclass
+class MeasurementConfig:
+    """Default horizontal wavelength window for spectrum modes (not calibration or Raman)."""
+
+    auto_viewport: bool = True
+    viewport_wl_min: float = 350.0
+    viewport_wl_max: float = 950.0
+
+
+@dataclass
+class ColorScienceConfig:
+    """Default horizontal wavelength window for color science mode."""
+
+    auto_viewport: bool = True
+    viewport_wl_min: float = 400.0
+    viewport_wl_max: float = 700.0
 
 
 @dataclass
@@ -312,6 +351,8 @@ class SensitivityConfig:
     use_custom_curve: bool = False
     custom_wavelengths: list[float] = field(default_factory=list)
     custom_values: list[float] = field(default_factory=list)
+    # Reference illuminant name used for last CRR fit (e.g. CIE Illuminant A); empty if datasheet only
+    calibration_reference: str = ""
 
 
 @dataclass
@@ -324,12 +365,18 @@ class ExportConfig:
     reference_dirs: list[Path] = field(
         default_factory=lambda: [Path("data/reference"), Path("output")]
     )
+    # CSV: omit points below this wavelength (nm). 0 = full axis. Modes that trim read this via context.
+    min_wavelength: float = 300.0
 
 
 @dataclass
 class WaterfallConfig:
-    """Waterfall display configuration."""
+    """Waterfall strip and its spectrum plot: on/off, wavelength span, contrast, brightness."""
 
+    enabled: bool = False
+    # Default visible wavelength interval (nm) on the spectrum graph tied to this feature.
+    viewport_wl_min: float = 350.0
+    viewport_wl_max: float = 950.0
     contrast: float = 2.5
     brightness: int = 10
 
@@ -371,6 +418,8 @@ class Config:
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
     waterfall: WaterfallConfig = field(default_factory=WaterfallConfig)
+    measurement: MeasurementConfig = field(default_factory=MeasurementConfig)
+    color_science: ColorScienceConfig = field(default_factory=ColorScienceConfig)
     extraction: ExtractionConfig = field(default_factory=ExtractionConfig)
     auto: AutoConfig = field(default_factory=AutoConfig)
     sensitivity: SensitivityConfig = field(default_factory=SensitivityConfig)
@@ -398,7 +447,7 @@ class Config:
         config = base if base is not None else cls()
 
         config.display.fullscreen = fullscreen
-        config.display.waterfall_enabled = waterfall
+        config.waterfall.enabled = waterfall
 
         if gain is not None:
             config.camera.gain = gain

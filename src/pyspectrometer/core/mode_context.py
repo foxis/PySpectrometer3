@@ -80,6 +80,8 @@ class ModeContext:
     auto_gain_enabled: bool = False
     auto_exposure_enabled: bool = False
     sensitivity_correction_enabled: bool = True
+    # CSV: omit points with λ below this (nm). 0 = full axis. Set from mode + ``ExportConfig.min_wavelength``.
+    min_wavelength: float = 0.0
 
     # Auto-level overlay dismiss (calibration mode sets)
     clear_autolevel_overlay: Callable[[], None] = _noop

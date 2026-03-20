@@ -31,7 +31,7 @@ from .markers import MarkersRenderer
 from .overlay_utils import render_polyline_overlay
 from .peaks import PeaksRenderer, _spectrum_screen_y
 from .spectrum import SpectrogramRenderer
-from .viewport import Viewport
+from .viewport import Viewport, x_span_for_wavelength_window
 from .waterfall import WaterfallDisplay
 
 def _scale_to_fit(
@@ -152,7 +152,7 @@ class DisplayManager:
         self._waterfall: WaterfallDisplay | None = None
 
         display_width = config.display.window_width
-        if config.display.waterfall_enabled or mode == "waterfall":
+        if config.waterfall.enabled or mode == "waterfall":
             self._waterfall = WaterfallDisplay(
                 width=display_width,
                 height=config.display.graph_height,
@@ -270,6 +270,8 @@ class DisplayManager:
         self._pan_last_x = 0
         self._pan_last_y = 0
         self._last_data_width = 0
+        # Re-apply default horizontal span when (mode, length, wl endpoints) change.
+        self._viewport_wl_preset_key: tuple[str, int, float, float] | None = None
 
         # Click vs drag for peak-include regions
         self._click_for_region = False
@@ -320,7 +322,7 @@ class DisplayManager:
             cv2.moveWindow(title2, 0, 0)
             cv2.setMouseCallback(title2, self._handle_mouse)
         else:
-            if self.config.display.waterfall_enabled:
+            if self.config.waterfall.enabled:
                 cv2.namedWindow(title2, cv2.WINDOW_NORMAL | WINDOW_GUI_NORMAL)
                 cv2.resizeWindow(title2, win_w, win_h)
                 cv2.moveWindow(title2, win_w + 10, 0)
@@ -561,6 +563,73 @@ class DisplayManager:
         self.state.peak_delta_visible = not self.state.peak_delta_visible
         return self.state.peak_delta_visible
 
+    def _sync_default_horizontal_viewport(
+        self,
+        wavelengths: np.ndarray,
+        data_width: int,
+    ) -> None:
+        """Set ``Viewport`` x span once per (mode, spectrum shape) to a configured nm window.
+
+        Calibration and Raman use full width. Color science uses ``[color_science]``.
+        Waterfall mode uses ``[waterfall]`` viewport bounds; measurement uses ``[measurement]``.
+        Existing zoom/pan controls continue to adjust the same ``Viewport``.
+        """
+        if data_width < 2:
+            return
+        n = min(len(wavelengths), data_width)
+        key = (
+            self.mode,
+            data_width,
+            float(wavelengths[0]),
+            float(wavelengths[n - 1]),
+        )
+        if key == self._viewport_wl_preset_key:
+            return
+        self._viewport_wl_preset_key = key
+
+        if self.mode in ("calibration", "raman"):
+            self._viewport.reset(data_width)
+            self._zoom_horizontal.value = 1.0
+            self._zoom_horizontal_prev = 1.0
+            return
+
+        if self.mode == "colorscience":
+            cs = self.config.color_science
+            if not cs.auto_viewport:
+                self._viewport.reset(data_width)
+                self._zoom_horizontal.value = 1.0
+                self._zoom_horizontal_prev = 1.0
+                return
+            wl_lo = cs.viewport_wl_min
+            wl_hi = cs.viewport_wl_max
+        elif self.mode == "waterfall":
+            wf = self.config.waterfall
+            wl_lo = wf.viewport_wl_min
+            wl_hi = wf.viewport_wl_max
+        else:
+            meas = self.config.measurement
+            if not meas.auto_viewport:
+                self._viewport.reset(data_width)
+                self._zoom_horizontal.value = 1.0
+                self._zoom_horizontal_prev = 1.0
+                return
+            wl_lo = meas.viewport_wl_min
+            wl_hi = meas.viewport_wl_max
+
+        span = x_span_for_wavelength_window(
+            wavelengths,
+            wl_lo,
+            wl_hi,
+            data_width=data_width,
+        )
+        if span is None:
+            self._viewport.reset(data_width)
+            self._zoom_horizontal.value = 1.0
+            self._zoom_horizontal_prev = 1.0
+            return
+        self._viewport.x_start, self._viewport.x_end = span
+        self._viewport.clamp_x(data_width)
+
     def render(
         self,
         data: SpectrumData,
@@ -615,6 +684,7 @@ class DisplayManager:
         else:
             self.set_status("d", "-")
 
+        self._sync_default_horizontal_viewport(data.wavelengths, data_width)
         self._viewport.init_if_needed(data_width)
         self._viewport.clamp_x(data_width)
 
@@ -811,7 +881,7 @@ class DisplayManager:
         waterfall_mode = self.mode == "waterfall"
 
         if self._waterfall is not None and (
-            self.config.display.waterfall_enabled or waterfall_mode
+            self.config.waterfall.enabled or waterfall_mode
         ):
             if not frozen_spectrum:
                 self._waterfall.update(data)

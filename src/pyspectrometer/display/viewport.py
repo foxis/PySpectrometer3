@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+import numpy as np
+
 
 @dataclass
 class Viewport:
@@ -130,3 +132,35 @@ class Viewport:
             self.x_start = 0
         if self.x_end - self.x_start < 1:
             self.x_end = self.x_start + 1
+
+
+def x_span_for_wavelength_window(
+    wavelengths: np.ndarray,
+    wl_lo: float,
+    wl_hi: float,
+    *,
+    data_width: int,
+) -> tuple[float, float] | None:
+    """Map a wavelength interval to fractional data indices for ``Viewport.x_start`` / ``x_end``.
+
+    Used only to set the initial horizontal view; zoom/pan sliders keep using the same
+    ``Viewport``. Returns ``None`` if the interval is invalid or ``data_width`` < 2.
+    """
+    if data_width < 2 or wl_hi <= wl_lo:
+        return None
+    wl = np.asarray(wavelengths[:data_width], dtype=np.float64)
+    idx = np.arange(data_width, dtype=np.float64)
+    if wl[-1] < wl[0]:
+        wl = wl[::-1]
+        idx = idx[::-1]
+    x0 = float(np.interp(wl_lo, wl, idx, left=float(idx[0]), right=float(idx[-1])))
+    x1 = float(np.interp(wl_hi, wl, idx, left=float(idx[0]), right=float(idx[-1])))
+    if x1 < x0:
+        x0, x1 = x1, x0
+    if x1 - x0 < 1.0:
+        mid = 0.5 * (x0 + x1)
+        x0 = max(0.0, mid - 0.5)
+        x1 = min(float(data_width - 1), mid + 0.5)
+        if x1 <= x0:
+            x1 = min(float(data_width - 1), x0 + 1.0)
+    return x0, x1

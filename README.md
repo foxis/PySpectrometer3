@@ -55,6 +55,7 @@ Most of it is vibe coded — built iteratively with a focus on “does it work?�
 - **CIE Illuminant A (“tungsten”)** — **Standard Illuminant A** is defined as a **Planckian (black-body) spectrum at 2856 K** correlated color temperature. It is the CIE model for **classic incandescent / tungsten** lamps used in vision and photometry. It is **not** the same as photographic “3200 K tungsten” film lights (those run hotter). Real bulbs vary with voltage and glass; match your lamp as closely as you can and keep geometry stable when recording.
 - **S button** — In **Measurement, Raman, Color Science, Waterfall**, **S** defaults **on** (correction applied). Turn **S** off to view data without dividing by the sensitivity curve. In **Calibration**, **S** defaults **off** so you can work on wavelength calibration on a raw(er) axis; enable **S** to preview the same correction as in other modes.
 - **CMOS button (Calibration)** — Drops the user fit and returns to the **datasheet-only** curve; clears the saved custom table in config.
+- **CSV / Waterfall export** — With **S on**, exports include the active sensitivity as a **`Sensitivity`** column (and waterfall / REC add `# Sensitivity: …` comma values like dark/white). Comment headers document correction: `Sensitivity_correction_applied`, `Sensitivity_curve` (`datasheet_CMOS` vs `user_calibrated`), `Sensitivity_calibration_reference` (illuminant used for CRR, or `n/a`). With **S off**, there is no sensitivity column or `# Sensitivity:` line; headers still record that correction was **not** applied. **`[sensitivity].calibration_reference`** in config stores the CRR reference name.
 
 ```mermaid
 flowchart LR
@@ -91,6 +92,7 @@ flowchart LR
 - **Waveshare 3.5"** — Optimized layout for touchscreen
 - **Fullscreen** — 800×480 for benchtop setups
 - **CSV export** — Spectrum data with metadata
+- **CSV wavelength floor** — Measurement and Waterfall use `[export].min_wavelength` (nm, default **300**): points below that are omitted from CSV. Set to **0** for the full axis. Other modes use **0** on context; a mode can set `ctx.min_wavelength` in `on_start` to trim.
 
 ---
 

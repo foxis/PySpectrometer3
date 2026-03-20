@@ -9,8 +9,13 @@ import time
 from collections import deque
 from typing import TYPE_CHECKING
 
-from ..export.csv_exporter import build_absorption_metadata, build_markers_peaks_metadata
-from .base import BaseMode, ButtonDefinition, ModeType
+from ..export.csv_exporter import (
+    build_absorption_metadata,
+    build_markers_peaks_metadata,
+    build_sensitivity_for_export,
+    waterfall_rec_trim_bundle,
+)
+from .base import ButtonDefinition, ModeType
 from .measurement import MeasurementMode
 
 if TYPE_CHECKING:
@@ -123,12 +128,31 @@ class WaterfallMode(MeasurementMode):
             print("[WATERFALL] No wavelength calibration; start capture first")
             return
         path = ctx.exporter.generate_filename("Waterfall-Rec")
+        wl = ctx.last_data.wavelengths
+        rec_meta = {"Mode": "Waterfall-Rec", "Date": time.strftime("%Y-%m-%d %H:%M:%S")}
+        sens_col, sens_meta = build_sensitivity_for_export(
+            correction_enabled=ctx.sensitivity_correction_enabled,
+            engine=ctx.sensitivity_engine,
+            wavelengths=wl,
+            sens_cfg=ctx.calibration.sensitivity_settings,
+        )
+        rec_meta.update(sens_meta)
+        wl_rec, dark_rec, white_rec, sens_rec, src_n, row_mask = waterfall_rec_trim_bundle(
+            wl,
+            ctx.min_wavelength,
+            self.meas_state.dark_spectrum,
+            self.meas_state.white_spectrum,
+            sens_col,
+        )
         self._waterfall_rec_writer = ctx.exporter.start_waterfall_rec(
             path,
-            ctx.last_data.wavelengths,
-            dark_intensity=self.meas_state.dark_spectrum,
-            white_intensity=self.meas_state.white_spectrum,
-            metadata={"Mode": "Waterfall-Rec", "Date": time.strftime("%Y-%m-%d %H:%M:%S")},
+            wl_rec,
+            dark_intensity=dark_rec,
+            white_intensity=white_rec,
+            sensitivity_intensity=sens_rec,
+            metadata=rec_meta,
+            row_source_length=src_n,
+            row_trim_mask=row_mask,
         )
         ctx.waterfall_rec_writer = self._waterfall_rec_writer
         ctx.display.set_button_active("waterfall_rec", True)
