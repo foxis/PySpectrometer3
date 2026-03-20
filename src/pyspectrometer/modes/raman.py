@@ -27,6 +27,7 @@ class RamanState:
     """State specific to Raman mode."""
 
     dark_spectrum: np.ndarray | None = None
+    dark_acq: str = ""
     reference_spectrum: np.ndarray | None = None
 
 
@@ -124,12 +125,15 @@ class RamanMode(BaseMode):
         if ctx.last_data is None:
             print("[RAMAN] No spectrum data available")
             return
+        measured_acq = self.acq_label(ctx.display.state.hold_peaks)
         metadata = {
             "Mode": "Raman",
             "Date": time.strftime("%Y-%m-%d %H:%M:%S"),
             "Base wavelength (nm)": f"{self.laser_nm:.1f}",
             "Gain": f"{ctx.camera.gain:.1f}",
             "Exposure": f"{getattr(ctx.camera, 'exposure', 0)}",
+            "Measured_acq": measured_acq,
+            "Dark_acq": self.raman_state.dark_acq or None,
             "Note": "",
         }
         markers_peaks = build_markers_peaks_metadata(
@@ -162,6 +166,7 @@ class RamanMode(BaseMode):
         """Toggle dark reference: set if unset, clear if already set."""
         if self.raman_state.dark_spectrum is not None:
             self.raman_state.dark_spectrum = None
+            self.raman_state.dark_acq = ""
             ctx.display.set_button_active("set_dark", False)
             print("[RAMAN] Dark reference cleared")
             return
@@ -174,6 +179,7 @@ class RamanMode(BaseMode):
         if raw is None:
             print("[RAMAN] No spectrum data available")
             return
+        self.raman_state.dark_acq = self.acq_label(ctx.display.state.hold_peaks)
         self.raman_state.dark_spectrum = raw.copy()
         ctx.display.set_button_active("set_dark", True)
         print("[RAMAN] Dark reference set")

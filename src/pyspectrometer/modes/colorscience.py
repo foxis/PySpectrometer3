@@ -77,6 +77,9 @@ class ColorScienceState:
     white_max: float = 1.0
     show_raw_overlay: bool = False
     show_absorption: bool = False
+    # Acquisition mode labels recorded when each reference was captured
+    dark_acq: str = ""
+    white_acq: str = ""
     swatches: list[ColorSwatch] = field(default_factory=list)
     selected: set[int] = field(default_factory=set)
 
@@ -406,12 +409,14 @@ class ColorScienceMode(BaseMode):
         """Set or clear the dark reference."""
         if self.color_state.dark_spectrum is not None:
             self.color_state.dark_spectrum = None
+            self.color_state.dark_acq = ""
             ctx.display.set_button_active("set_dark", False)
             print("[COLOR] Dark reference cleared")
             return
         raw = _get_raw(ctx)
         if raw is None:
             return
+        self.color_state.dark_acq = self.acq_label(ctx.display.state.hold_peaks)
         self.color_state.dark_spectrum = raw.copy()
         ctx.display.set_button_active("set_dark", True)
         print("[COLOR] Dark reference set")
@@ -428,6 +433,7 @@ class ColorScienceMode(BaseMode):
         if self.color_state.white_spectrum is not None:
             self.color_state.white_level_xyz = None
             self.color_state.white_spectrum = None
+            self.color_state.white_acq = ""
             self.color_state.white_max = 1.0
             ctx.display.set_button_active("set_white", False)
             print("[COLOR] White level cleared")
@@ -436,6 +442,7 @@ class ColorScienceMode(BaseMode):
         raw = _get_raw(ctx)
         if raw is None:
             return
+        self.color_state.white_acq = self.acq_label(ctx.display.state.hold_peaks)
         self.color_state.white_spectrum = raw.copy()
         dark = self.color_state.dark_spectrum
         white_arr = np.asarray(raw, dtype=np.float64)
@@ -466,6 +473,7 @@ class ColorScienceMode(BaseMode):
         """Set or clear the white reference spectrum (Reflectance / Transmittance)."""
         if self.color_state.white_spectrum is not None:
             self.color_state.white_spectrum = None
+            self.color_state.white_acq = ""
             self.color_state.show_absorption = False
             ctx.display.set_button_active("set_white", False)
             ctx.display.set_button_active("show_absorption", False)
@@ -475,6 +483,7 @@ class ColorScienceMode(BaseMode):
         raw = _get_raw(ctx)
         if raw is None:
             return
+        self.color_state.white_acq = self.acq_label(ctx.display.state.hold_peaks)
         self.color_state.white_spectrum = raw.copy()
         ctx.display.set_button_active("set_white", True)
         ctx.display.set_button_disabled("show_absorption", False)
@@ -556,6 +565,7 @@ class ColorScienceMode(BaseMode):
         white    = None if is_illum else self.color_state.white_spectrum
 
         xyz_lab = self._compute_xyz_lab(ctx.last_data.intensity, ctx.last_data.wavelengths)
+        measured_acq = self.acq_label(ctx.display.state.hold_peaks)
         metadata = {
             "Mode":        "Color Science",
             "Date":        time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -565,6 +575,9 @@ class ColorScienceMode(BaseMode):
             "PWM_log10":   pwm_log,
             "Gain":        f"{ctx.camera.gain:.1f}",
             "Exposure":    f"{getattr(ctx.camera, 'exposure', 0)}",
+            "Measured_acq": measured_acq,
+            "Dark_acq":    self.color_state.dark_acq or None,
+            "White_acq":   self.color_state.white_acq or None,
         }
         if xyz_lab is not None:
             (X, Y, Z), (L, a, b) = xyz_lab

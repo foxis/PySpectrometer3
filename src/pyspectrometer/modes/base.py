@@ -316,6 +316,23 @@ class BaseMode(ABC):
             return True
         return False
 
+    def acq_label(self, hold_peaks: bool = False) -> str:
+        """Acquisition mode label for CSV metadata at the moment of capture.
+
+        Reflects the active integration/peak-hold state so exported headers
+        record exactly how many frames were averaged/accumulated when a
+        reference or measured SPD was captured.
+        """
+        if hold_peaks:
+            return "PEAK"
+        match self.state.integration_mode:
+            case "avg":
+                return f"AVG {self.state.accumulated_frames}"
+            case "acc":
+                return f"ACC {self.state.accumulated_frames}"
+            case _:
+                return "LIVE"
+
     def toggle_freeze(self) -> bool:
         """Toggle spectrum freeze state."""
         self.state.frozen = not self.state.frozen

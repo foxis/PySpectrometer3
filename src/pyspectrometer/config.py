@@ -486,6 +486,16 @@ class Config:
 
         self.processing.peak_min_distance = 5
 
+    def apply_csv_viewer_preset(self) -> None:
+        """Apply settings for the camera-less CSV viewer (1024x800).
+
+        No camera strip — full window height goes to the spectrum graph.
+        """
+        self.display.window_width = 1024
+        self.display.graph_height = 740
+        self.display.preview_height = 0
+        self.display.message_height = 60
+
     def apply_desktop_preset(self) -> None:
         """Apply settings for desktop/large displays (1280x720)."""
         self.display.window_width = 1280

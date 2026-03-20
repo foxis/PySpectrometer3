@@ -86,6 +86,8 @@ class WaterfallMode(MeasurementMode):
             "Mode": "Waterfall",
             "Date": time.strftime("%Y-%m-%d %H:%M:%S"),
             "Rows": str(len(rows)),
+            "Dark_acq": self.meas_state.dark_acq or None,
+            "White_acq": self.meas_state.white_acq or None,
         }
         markers_peaks = build_markers_peaks_metadata(
             ctx.display.state.marker_lines,
@@ -129,7 +131,12 @@ class WaterfallMode(MeasurementMode):
             return
         path = ctx.exporter.generate_filename("Waterfall-Rec")
         wl = ctx.last_data.wavelengths
-        rec_meta = {"Mode": "Waterfall-Rec", "Date": time.strftime("%Y-%m-%d %H:%M:%S")}
+        rec_meta = {
+            "Mode": "Waterfall-Rec",
+            "Date": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "Dark_acq": self.meas_state.dark_acq or None,
+            "White_acq": self.meas_state.white_acq or None,
+        }
         sens_col, sens_meta = build_sensitivity_for_export(
             correction_enabled=ctx.sensitivity_correction_enabled,
             engine=ctx.sensitivity_engine,

@@ -156,6 +156,16 @@ Examples:
     )
 
     parser.add_argument(
+        "--csv",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PATH",
+        help="Open a spectrum CSV in viewer mode (no camera required). "
+             "Omit PATH to open a file-browser dialog.",
+    )
+
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s 3.0.0",
@@ -207,6 +217,33 @@ def main() -> int:
             for idx, desc in cameras:
                 print(f"  {idx}: {desc}")
         return 0
+
+    if args.csv is not None:
+        # args.csv == "" when --csv given with no value (const="") → show dialog
+        csv_path_arg: Path | None = None
+        if args.csv:
+            csv_path_arg = Path(args.csv)
+            if not csv_path_arg.exists():
+                print(f"Error: CSV file not found: {csv_path_arg}", file=sys.stderr)
+                return 1
+
+        from .config import load_config
+        from .csv_viewer.spectrometer import CsvViewerSpectrometer
+
+        config, _ = load_config(config_path)
+        try:
+            viewer = CsvViewerSpectrometer(csv_path_arg, config=config)
+            viewer.run()
+            return 0
+        except SystemExit as exc:
+            return int(exc.code) if exc.code is not None else 0
+        except KeyboardInterrupt:
+            return 130
+        except Exception as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+            return 1
 
     # Full imports (needed only when running spectrometer)
     from .config import Config

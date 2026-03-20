@@ -118,6 +118,19 @@ class Calibration:
             self._graticule = self._generate_graticule()
         return self._graticule
 
+    def seed_wavelengths(self, wavelengths: np.ndarray) -> None:
+        """Bypass polynomial fitting and use a pre-computed wavelength array directly.
+
+        Used by the CSV viewer to inject the axis from a loaded CSV without touching
+        the calibration config or running a polynomial fit.
+        """
+        self._result = CalibrationResult(
+            wavelengths=np.asarray(wavelengths, dtype=np.float64),
+            order=1,
+            coefficients=np.array([]),
+        )
+        self._graticule = None
+
     def load(self) -> CalibrationResult:
         """Load calibration from config and compute wavelengths."""
         cal = self._config.calibration

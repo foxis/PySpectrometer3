@@ -31,6 +31,8 @@ lint = "pyspectrometer.cli:lint"
 format = "pyspectrometer.cli:format_src"
 stream = "pyspectrometer.cli:stream"
 waterfall = "pyspectrometer.cli:waterfall"
+view_csv = "pyspectrometer.cli:view_csv"
+viewer = "pyspectrometer.cli:view_csv"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

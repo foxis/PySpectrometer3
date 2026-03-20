@@ -41,7 +41,7 @@ from .processing.filters import SavitzkyGolayFilter
 from .processing.peak_detection import PeakDetector, detect_peaks_in_region
 from .processing.pipeline import ProcessingPipeline
 from .processing.sensitivity_correction import SensitivityCorrection
-from .utils.dialog import prompt_calibrate
+from .utils.dialog import prompt_calibrate, prompt_label
 
 
 class Spectrometer:
@@ -338,6 +338,14 @@ class Spectrometer:
         self._display.set_autolevel_overlay(None)
         self._display.set_autolevel_click_dismiss(None)
 
+    _MODE_PREFIX: dict[str, str] = {
+        "measurement": "spectrum",
+        "raman": "raman",
+        "colorscience": "colors",
+        "waterfall": "waterfall",
+        "calibration": "calibration",
+    }
+
     def _save_snapshot(
         self,
         data: SpectrumData,
@@ -356,12 +364,15 @@ class Spectrometer:
         per swatch.  Each swatch spectrum is interpolated to the main wavelength
         grid inside the exporter.
         """
-        csv_path = self._exporter.generate_filename("Spectrum")
+        meta = dict(metadata) if metadata else {}
+        if not meta.get("Note"):
+            meta["Note"] = prompt_label("Save spectrum", "Label for this measurement (optional):")
+        prefix = self._MODE_PREFIX.get(self.mode, "spectrum")
+        csv_path = self._exporter.generate_filename(prefix, label=meta.get("Note", ""))
         extra_columns = (
             [(name, (wl, sp)) for name, wl, sp in extra_spectra]
             if extra_spectra else None
         )
-        meta = dict(metadata) if metadata else {}
         data_e = data
         dark_e = dark_intensity
         white_e = white_intensity
@@ -398,8 +409,7 @@ class Spectrometer:
         print(f"Saved: {csv_path}")
         waterfall_img = self._display.get_waterfall_image()
         if waterfall_img is not None:
-            timestamp = time.strftime(self.config.export.timestamp_format)
-            cv2.imwrite(str(Path(f"waterfall-{timestamp}.png")), waterfall_img)
+            cv2.imwrite(str(csv_path.with_suffix(".png")), waterfall_img)
 
     def _save_waterfall_snapshot(
         self,
@@ -411,8 +421,10 @@ class Spectrometer:
         metadata: dict | None = None,
     ) -> None:
         """Save waterfall buffer to CSV (rows = raw measured SPD; dark/white in comments)."""
-        csv_path = self._exporter.generate_filename("Waterfall")
         meta = dict(metadata) if metadata else {}
+        if not meta.get("Note"):
+            meta["Note"] = prompt_label("Save waterfall", "Label for this waterfall (optional):")
+        csv_path = self._exporter.generate_filename("waterfall", label=meta.get("Note", ""))
         min_wl = self._ctx.min_wavelength
         sens_col, sens_meta = build_sensitivity_for_export(
             correction_enabled=self._ctx.sensitivity_correction_enabled,
@@ -443,8 +455,7 @@ class Spectrometer:
         print(f"Saved: {csv_path}")
         waterfall_img = self._display.get_waterfall_image()
         if waterfall_img is not None:
-            timestamp = time.strftime(self.config.export.timestamp_format)
-            cv2.imwrite(str(Path(f"waterfall-{timestamp}.png")), waterfall_img)
+            cv2.imwrite(str(csv_path.with_suffix(".png")), waterfall_img)
 
     def run(self) -> None:
         """Run the main loop."""

@@ -1,9 +1,10 @@
 """CLI entry points for Poetry scripts: calibrate, measure, colors, raman, lint, format, stream, waterfall."""
 
 import subprocess
-import numpy as np
 import sys
 from pathlib import Path
+
+import numpy as np
 
 
 def _camera_arg() -> str | None:
@@ -42,7 +43,7 @@ def fit_csv() -> int:
     save_to_config = "--save" in sys.argv[1:]
 
     from .data import get_reference_spectrum, load_spectrum_csv
-    from .data.reference_spectra import ReferenceSource, get_reference_name
+    from .data.reference_spectra import ReferenceSource
     from .processing.auto_calibrator import calibrate
 
     measured, n, _ = load_spectrum_csv(csv_path)
@@ -119,3 +120,45 @@ def stream() -> int:
 def waterfall() -> int:
     """Run waterfall mode (standalone). Usage: poetry run waterfall [camera_source]"""
     return _run("waterfall", _camera_arg())
+
+
+def view_csv() -> int:
+    """Open a spectrum CSV in the viewer.
+
+    Usage:
+      poetry run viewer              # opens file-browser dialog (defaults to output dir)
+      poetry run viewer spectrum.csv # open directly
+    """
+    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    csv_path_arg = args[0] if args else None
+
+    if csv_path_arg and not Path(csv_path_arg).exists():
+        print(f"Error: file not found: {csv_path_arg}", file=sys.stderr)
+        return 1
+
+    config_arg = None
+    for i, a in enumerate(sys.argv[1:], 1):
+        if a in ("--config", "-c") and i < len(sys.argv) - 1:
+            config_arg = sys.argv[i + 1]
+            break
+
+    from .config import load_config
+    from .csv_viewer.spectrometer import CsvViewerSpectrometer
+
+    config, _ = load_config(Path(config_arg) if config_arg else None)
+    try:
+        viewer = CsvViewerSpectrometer(
+            Path(csv_path_arg) if csv_path_arg else None,
+            config=config,
+        )
+        viewer.run()
+        return 0
+    except SystemExit as exc:
+        return int(exc.code) if exc.code is not None else 0
+    except KeyboardInterrupt:
+        return 130
+    except Exception as exc:
+        import traceback
+        print(f"Error: {exc}", file=sys.stderr)
+        traceback.print_exc()
+        return 1

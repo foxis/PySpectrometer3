@@ -45,6 +45,10 @@ class MeasurementState:
     show_absorption: bool = False
     subtract_dark: bool = True
 
+    # Acquisition mode labels recorded when each reference was captured
+    dark_acq: str = ""
+    white_acq: str = ""
+
     # Loaded spectrum info
     loaded_spectrum_name: str = ""
     load_as: str = "overlay"  # overlay, black, white
@@ -164,6 +168,7 @@ class MeasurementMode(BaseMode):
         """Toggle dark reference: set if unset, clear if already set."""
         if self.meas_state.dark_spectrum is not None:
             self.meas_state.dark_spectrum = None
+            self.meas_state.dark_acq = ""
             self.meas_state.subtract_dark = True
             ctx.display.set_button_active("set_dark", False)
             print("[DARK] Dark reference cleared")
@@ -173,6 +178,7 @@ class MeasurementMode(BaseMode):
         if raw is None:
             print("[DARK] No spectrum data available")
             return
+        self.meas_state.dark_acq = self.acq_label(ctx.display.state.hold_peaks)
         self.set_dark_reference(raw)
         ctx.display.set_button_active("set_dark", True)
 
@@ -180,6 +186,7 @@ class MeasurementMode(BaseMode):
         """Toggle white reference: set if unset, clear if already set."""
         if self.meas_state.white_spectrum is not None:
             self.meas_state.white_spectrum = None
+            self.meas_state.white_acq = ""
             self.meas_state.show_absorption = False
             ctx.display.set_button_active("set_white", False)
             ctx.display.set_button_active("show_absorption", False)
@@ -191,6 +198,7 @@ class MeasurementMode(BaseMode):
         if raw is None:
             print("[WHITE] No spectrum data available")
             return
+        self.meas_state.white_acq = self.acq_label(ctx.display.state.hold_peaks)
         self.set_white_reference(raw)
         ctx.display.set_button_active("set_white", True)
 
@@ -217,6 +225,7 @@ class MeasurementMode(BaseMode):
             if led_pct is not None and light_on
             else None
         )
+        measured_acq = self.acq_label(ctx.display.state.hold_peaks)
         metadata = {
             "Mode": "Measurement",
             "Date": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -225,6 +234,9 @@ class MeasurementMode(BaseMode):
             "PWM intensity log10": pwm_log,
             "Gain": f"{ctx.camera.gain:.1f}",
             "Exposure": f"{getattr(ctx.camera, 'exposure', 0)}",
+            "Measured_acq": measured_acq,
+            "Dark_acq": self.meas_state.dark_acq or None,
+            "White_acq": self.meas_state.white_acq or None,
             "Note": "",
         }
         markers_peaks = build_markers_peaks_metadata(
@@ -518,7 +530,9 @@ class MeasurementMode(BaseMode):
     def clear_references(self) -> None:
         """Clear all reference spectra."""
         self.meas_state.dark_spectrum = None
+        self.meas_state.dark_acq = ""
         self.meas_state.white_spectrum = None
+        self.meas_state.white_acq = ""
         self.meas_state.reference_spectrum = None
         self.meas_state.subtract_dark = True
         self.meas_state.normalize_to_reference = False

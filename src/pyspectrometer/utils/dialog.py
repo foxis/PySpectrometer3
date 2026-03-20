@@ -1,6 +1,26 @@
 """Simple dialog utilities."""
 
 
+def prompt_label(title: str = "Save", prompt: str = "Label (optional):") -> str:
+    """Show a one-line text-input dialog and return the entered string.
+
+    Returns an empty string when the user cancels or leaves the field blank.
+    """
+    try:
+        import tkinter as tk
+        from tkinter import simpledialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.lift()
+        root.attributes("-topmost", True)
+        value = simpledialog.askstring(title, prompt, parent=root) or ""
+        root.destroy()
+        return value.strip()
+    except Exception:
+        return ""
+
+
 def prompt_calibrate() -> None:
     """Show dialog prompting user to run calibration when calibration data could not be loaded."""
     try:

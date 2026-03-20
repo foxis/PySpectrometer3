@@ -88,6 +88,20 @@ def build_absorption_metadata(
     return out
 
 
+def _slugify(text: str) -> str:
+    """Convert arbitrary text to a lowercase, hyphen-separated filename fragment.
+
+    Keeps letters, digits, spaces, hyphens, underscores; collapses whitespace to
+    hyphens; strips leading/trailing separators.
+    """
+    import re
+    text = text.strip().lower()
+    text = re.sub(r"[^\w\s-]", "", text)
+    text = re.sub(r"[\s_]+", "-", text)
+    text = re.sub(r"-{2,}", "-", text)
+    return text.strip("-")
+
+
 def _align(arr: np.ndarray | None, n: int) -> np.ndarray | None:
     """Pad or trim arr to length n; return None if arr is None."""
     if arr is None:
@@ -620,10 +634,18 @@ class CSVExporter(ExporterInterface):
             row_trim_mask=row_trim_mask,
         )
 
-    def generate_filename(self, prefix: str = "Spectrum") -> Path:
-        """Generate a timestamped filename."""
-        timestamp = time.strftime(self._timestamp_format)
-        return self._output_dir / f"{prefix}-{timestamp}{self.extension}"
+    def generate_filename(self, prefix: str = "spectrum", label: str = "") -> Path:
+        """Generate a date-organised, timestamped filename.
+
+        Layout: ``<output_dir>/<YYYY-MM-DD>/<prefix>-<HHMMSS>[-<slug>].csv``
+        where *slug* is a filesystem-safe version of *label* (empty → omitted).
+        """
+        date_dir = self._output_dir / time.strftime("%Y-%m-%d")
+        date_dir.mkdir(parents=True, exist_ok=True)
+        ts = time.strftime("%H%M%S")
+        slug = _slugify(label)
+        name = f"{prefix}-{ts}-{slug}" if slug else f"{prefix}-{ts}"
+        return date_dir / f"{name}{self.extension}"
 
 
 class WaterfallRecWriter:
