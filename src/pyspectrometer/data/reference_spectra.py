@@ -24,6 +24,7 @@ class ReferenceSource(Enum):
     """Available reference light sources for calibration."""
 
     HG = auto()  # Mercury low-pressure lamp
+    A = auto()  # CIE Illuminant A — tungsten incandescent (2856 K correlated color temperature)
     D65 = auto()  # CIE Illuminant D65 (daylight 6504K)
     FL1 = auto()  # CIE FL1 - Daylight fluorescent
     FL2 = auto()  # CIE FL2 - Cool white fluorescent
@@ -56,6 +57,7 @@ class ReferenceSpectrum:
 
 # colour-science SDS keys for each ReferenceSource
 _COLOUR_SDS_MAP = {
+    ReferenceSource.A: "A",
     ReferenceSource.FL1: "FL1",
     ReferenceSource.FL2: "FL2",
     ReferenceSource.FL3: "FL3",
@@ -98,6 +100,13 @@ D65_LINES = [
     SpectralLine(656.28, 1.0, "C"),
 ]
 
+# CIE Illuminant A (2856 K): smooth continuum — broad markers for UI only (not line peaks)
+A_LINES = [
+    SpectralLine(450.0, 0.85, "A"),
+    SpectralLine(550.0, 1.0, "A"),
+    SpectralLine(650.0, 0.95, "A"),
+]
+
 # White phosphor LED
 LED_LINES = [
     SpectralLine(450.0, 1.0, "Blue"),
@@ -112,6 +121,13 @@ REFERENCE_SPECTRA: dict[ReferenceSource, ReferenceSpectrum] = {
         peaks=HG_LINES,
         description="Low-pressure mercury vapor lamp emission lines",
         colour_key=None,
+    ),
+    ReferenceSource.A: ReferenceSpectrum(
+        name="A",
+        source=ReferenceSource.A,
+        peaks=A_LINES,
+        description="CIE Standard Illuminant A (tungsten, 2856 K CCT; Planckian radiator)",
+        colour_key="A",
     ),
     ReferenceSource.D65: ReferenceSpectrum(
         name="D65",

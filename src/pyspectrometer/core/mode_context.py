@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from ..export.csv_exporter import CSVExporter
     from ..processing.auto_controls import AutoExposureController, AutoGainController
     from ..processing.extraction import SpectrumExtractor
+    from ..processing.sensitivity_correction import SensitivityCorrection
     from .calibration import Calibration
 
 from ..processing.auto_controls import run_auto_gain_exposure_frame
@@ -54,6 +55,7 @@ class ModeContext:
     auto_gain: "AutoGainController"
     auto_exposure: "AutoExposureController"
     reference_manager: Optional["ReferenceSpectrumManager"] = None
+    sensitivity_engine: Optional["SensitivityCorrection"] = None
 
     # Quit callback - mode calls to stop the main loop
     quit_app: Callable[[], None] = _noop
@@ -77,7 +79,7 @@ class ModeContext:
     held_intensity: np.ndarray | None = None
     auto_gain_enabled: bool = False
     auto_exposure_enabled: bool = False
-    sensitivity_correction_enabled: bool = False
+    sensitivity_correction_enabled: bool = True
 
     # Auto-level overlay dismiss (calibration mode sets)
     clear_autolevel_overlay: Callable[[], None] = _noop

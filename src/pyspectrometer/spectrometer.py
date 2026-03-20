@@ -8,7 +8,6 @@ import queue
 import threading
 import time
 from pathlib import Path
-
 from queue import Empty
 
 import cv2
@@ -133,7 +132,7 @@ class Spectrometer:
             output_dir = Path("output")
         self._exporter = CSVExporter(output_dir=output_dir)
         self._reference_manager = ReferenceSpectrumManager()
-        self._sensitivity = SensitivityCorrection()
+        self._sensitivity = SensitivityCorrection(config=self.config.sensitivity)
 
         self._mode_instance: BaseMode
         self._calibration_mode: CalibrationMode | None = None
@@ -179,6 +178,9 @@ class Spectrometer:
         ctx.save_waterfall_snapshot = self._save_waterfall_snapshot
         ctx.clear_autolevel_overlay = self._clear_autolevel_overlay
         ctx.auto_calibrate_debounce_sec = 1.5
+        ctx.sensitivity_engine = self._sensitivity
+        if self.mode == "calibration":
+            ctx.sensitivity_correction_enabled = False
         return ctx
 
     def _capture_frame(self) -> np.ndarray:

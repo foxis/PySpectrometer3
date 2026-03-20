@@ -221,6 +221,35 @@ class Calibration:
             return True
         return False
 
+    def save_sensitivity_curve(self, wavelengths: list[float], values: list[float]) -> bool:
+        """Persist user-fitted sensitivity curve to config."""
+        from ..config import save_config
+
+        if len(wavelengths) != len(values) or len(wavelengths) < 4:
+            print("[Sensitivity] Need at least 4 wavelength/value pairs")
+            return False
+        sens = self._config.sensitivity
+        sens.use_custom_curve = True
+        sens.custom_wavelengths = [float(w) for w in wavelengths]
+        sens.custom_values = [float(v) for v in values]
+        if save_config(self._config, self._config_path):
+            print(f"[Sensitivity] Saved user curve ({len(wavelengths)} points) to config")
+            return True
+        return False
+
+    def clear_sensitivity_curve(self) -> bool:
+        """Remove user curve from config; app uses datasheet CMOS only after reset."""
+        from ..config import save_config
+
+        sens = self._config.sensitivity
+        sens.use_custom_curve = False
+        sens.custom_wavelengths = []
+        sens.custom_values = []
+        if save_config(self._config, self._config_path):
+            print("[Sensitivity] User curve cleared; use CMOS button to reload datasheet in session")
+            return True
+        return False
+
     @property
     def rotation_angle(self) -> float:
         """Get spectrum rotation angle in degrees."""

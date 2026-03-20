@@ -32,7 +32,6 @@ from ..data.reference_spectra import (
 )
 from ..display.calibration_preview import render as render_calibration_preview
 from ..processing.auto_calibrator import calibrate as run_calibration
-from ..processing.sensitivity_correction import SensitivityCorrection
 from ..utils.graph_scale import scale_intensity_to_graph
 from .base import BaseMode, ButtonDefinition, ModeType
 
@@ -63,10 +62,11 @@ class CalibrationState:
 class CalibrationMode(BaseMode):
     """Calibration mode for wavelength calibration."""
 
-    # Reference sources in cycle order: Hg, D65, FL1, FL2, FL3, FL12, LED1, LED2, LED3
+    # Reference sources: Hg, D65, A (tungsten 2856 K), fluorescents, LEDs
     SOURCES = [
         ReferenceSource.HG,
         ReferenceSource.D65,
+        ReferenceSource.A,
         ReferenceSource.FL1,
         ReferenceSource.FL2,
         ReferenceSource.FL3,
@@ -81,7 +81,6 @@ class CalibrationMode(BaseMode):
         super().__init__()
         self.cal_state = CalibrationState()
         self.state.auto_gain_enabled = True
-        self._sensitivity = SensitivityCorrection()
 
     def setup(self, ctx: ModeContext) -> None:
         """Register calibration-specific handlers."""
@@ -94,6 +93,8 @@ class CalibrationMode(BaseMode):
             name = f"source_{src.name.lower()}"
             self.register_callback(name, lambda s=src: self._on_select_source(ctx, s))
         self.register_callback("toggle_overlay", lambda: self._on_toggle_overlay(ctx))
+        self.register_callback("correct_sensitivity", lambda: self._on_correct_sensitivity(ctx))
+        self.register_callback("reset_sensitivity_cmos", lambda: self._on_reset_sensitivity_cmos(ctx))
         self.register_callback("auto_level", lambda: self._on_auto_level(ctx))
         self.register_callback("auto_calibrate", lambda: self._on_auto_calibrate(ctx))
         self.register_callback("reset_calibration", lambda: self._on_reset_calibration(ctx))
@@ -123,9 +124,10 @@ class CalibrationMode(BaseMode):
         self._sync_button_status(ctx)
         overlay = self.get_overlay(processed.wavelengths, graph_height)
         ctx.display.set_mode_overlay(overlay)
+        eng = ctx.sensitivity_engine
         sensitivity_overlay = (
-            self._sensitivity.get_curve_for_display(processed.wavelengths, graph_height)
-            if ctx.sensitivity_correction_enabled
+            eng.get_curve_for_display(processed.wavelengths, graph_height)
+            if ctx.sensitivity_correction_enabled and eng is not None
             else None
         )
         ctx.display.set_sensitivity_overlay(sensitivity_overlay)
@@ -172,6 +174,44 @@ class CalibrationMode(BaseMode):
         """Toggle reference overlay visibility."""
         visible = self.toggle_overlay()
         ctx.display.set_button_active("toggle_overlay", visible)
+
+    def _on_correct_sensitivity(self, ctx: ModeContext) -> None:
+        """Fit sensitivity curve from current spectrum vs selected reference; save to config."""
+        eng = ctx.sensitivity_engine
+        if eng is None:
+            print("[CRR] Sensitivity engine not available")
+            return
+        if ctx.last_intensity_pre_sensitivity is None:
+            print("[CRR] No spectrum yet — wait for a live frame (or unfreeze)")
+            return
+        if ctx.last_data is None:
+            print("[CRR] No wavelength data")
+            return
+        wl = ctx.last_data.wavelengths
+        meas = ctx.last_intensity_pre_sensitivity
+        if len(meas) != len(wl):
+            print("[CRR] Measured length does not match wavelength axis")
+            return
+        ref = get_reference_spectrum(self.cal_state.current_source, wl)
+        pair = eng.recalibrate_from_measurement(meas, wl, ref)
+        if pair is None:
+            return
+        wl_out, sens = pair
+        eng.set_custom_curve(wl_out, sens)
+        ctx.calibration.save_sensitivity_curve(list(map(float, wl_out)), list(map(float, sens)))
+        print(
+            f"[CRR] Sensitivity calibrated vs {get_reference_name(self.cal_state.current_source)} "
+            f"({len(wl_out)} pts); saved. Toggle S in other modes to apply."
+        )
+
+    def _on_reset_sensitivity_cmos(self, ctx: ModeContext) -> None:
+        """Discard user curve in config and reload datasheet CMOS sensitivity."""
+        eng = ctx.sensitivity_engine
+        if eng is None:
+            return
+        eng.reset_to_datasheet()
+        ctx.calibration.clear_sensitivity_curve()
+        print("[CMOS] Sensitivity reset to datasheet CMOS curve (config cleared)")
 
     def _on_auto_level(self, ctx: ModeContext) -> None:
         """Handle auto-level - detect rotation and Y center."""
@@ -232,8 +272,9 @@ class CalibrationMode(BaseMode):
             print("[CAL] No data available (dismissed too late)")
             return
         wl = ctx.last_data.wavelengths
-        if self._ctx is not None and self._ctx.sensitivity_correction_enabled:
-            measured = self._sensitivity.apply(measured, wl)
+        eng = ctx.sensitivity_engine
+        if self._ctx is not None and self._ctx.sensitivity_correction_enabled and eng is not None:
+            measured = eng.apply(measured, wl)
         ref_wl = np.linspace(380.0, 750.0, 500)
         ref_int = get_reference_spectrum(self.cal_state.current_source, ref_wl)
         cal_points = run_calibration(measured, ref_wl, ref_int)
@@ -351,6 +392,7 @@ class CalibrationMode(BaseMode):
             # Row 1: Source selection (Hg, D65, FL1, FL2, FL3, FL12, LED1, LED2, LED3)
             ButtonDefinition("Hg", "source_hg", is_toggle=True, row=1),
             ButtonDefinition("D65", "source_d65", is_toggle=True, row=1),
+            ButtonDefinition("A", "source_a", is_toggle=True, row=1),
             ButtonDefinition("FL1", "source_fl1", is_toggle=True, row=1),
             ButtonDefinition("FL2", "source_fl2", is_toggle=True, row=1),
             ButtonDefinition("FL3", "source_fl3", is_toggle=True, row=1),
@@ -364,6 +406,8 @@ class CalibrationMode(BaseMode):
             ButtonDefinition("LVL", "auto_level", is_toggle=True, row=1),
             ButtonDefinition("CAL", "auto_calibrate", row=1),
             ButtonDefinition("R", "reset_calibration", row=1),
+            ButtonDefinition("CRR", "correct_sensitivity", row=1),
+            ButtonDefinition("CR", "reset_sensitivity_cmos", row=1),
             # Row 2: Play (freeze + progress) | Max/Avg/Acc | Bars | ZX/ZY | VIEW | Save/CSV/Load | spacer | Quit
             ButtonDefinition("Play", "freeze", is_toggle=True, row=2, icon_type="playback"),
             ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=2),
@@ -425,6 +469,7 @@ class CalibrationMode(BaseMode):
         colors = {
             ReferenceSource.HG: (255, 0, 255),  # Magenta
             ReferenceSource.D65: (100, 200, 255),  # Daylight blue
+            ReferenceSource.A: (255, 200, 140),  # Tungsten warm
             ReferenceSource.FL1: (255, 200, 0),  # Yellow
             ReferenceSource.FL2: (200, 255, 100),  # Light green
             ReferenceSource.FL3: (255, 220, 150),  # Light orange
@@ -456,7 +501,9 @@ class CalibrationMode(BaseMode):
     ) -> list[tuple[int, float]]:
         """Perform automatic calibration. Uses triplet matching + correlation fallback."""
         if self._ctx is not None and self._ctx.sensitivity_correction_enabled:
-            measured_intensity = self._sensitivity.apply(measured_intensity, wavelengths)
+            eng = self._ctx.sensitivity_engine
+            if eng is not None:
+                measured_intensity = eng.apply(measured_intensity, wavelengths)
         ref_wl = np.linspace(380.0, 750.0, 500)
         ref_int = get_reference_spectrum(self.cal_state.current_source, ref_wl)
         return run_calibration(measured_intensity, ref_wl, ref_int)

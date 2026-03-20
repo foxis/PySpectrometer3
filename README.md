@@ -45,14 +45,37 @@ Most of it is vibe coded — built iteratively with a focus on “does it work?�
 ### Calibration
 
 - **4-point minimum** — 3rd order polynomial for accurate wavelength mapping
-- **Reference sources** — Fluorescent (FL12), Mercury (Hg), White LED, CIE D65
+- **Reference sources** — Fluorescent (FL12), Mercury (Hg), white LEDs, CIE D65, **CIE Illuminant A** (tungsten, 2856 K — see below)
 - **Auto-calibrate** — Match detected peaks to reference lines; save/load calibration
+
+### Spectral sensitivity correction
+
+- **Datasheet CMOS (default)** — Relative spectral response from the bundled OV9281 CSV (or silicon-CMOS fallback). This is the **generic** sensor curve from the manufacturer/PDF.
+- **User curve (CRR in Calibration)** — After **wavelength calibration**, choose a reference that matches your lamp (LED, **A**, D65, fluorescent, …), fill the slit with that light, then press **CRR**. The app forms a smoothed **measured / reference** ratio, scales it to the datasheet curve where the reference has signal, and **blends toward the datasheet** at the spectral edges (about ±35 nm fade) so ends stay stable. The result is stored under `[sensitivity]` in `~/.config/pyspectrometer/config.toml` and loaded on next start.
+- **CIE Illuminant A (“tungsten”)** — **Standard Illuminant A** is defined as a **Planckian (black-body) spectrum at 2856 K** correlated color temperature. It is the CIE model for **classic incandescent / tungsten** lamps used in vision and photometry. It is **not** the same as photographic “3200 K tungsten” film lights (those run hotter). Real bulbs vary with voltage and glass; match your lamp as closely as you can and keep geometry stable when recording.
+- **S button** — In **Measurement, Raman, Color Science, Waterfall**, **S** defaults **on** (correction applied). Turn **S** off to view data without dividing by the sensitivity curve. In **Calibration**, **S** defaults **off** so you can work on wavelength calibration on a raw(er) axis; enable **S** to preview the same correction as in other modes.
+- **CMOS button (Calibration)** — Drops the user fit and returns to the **datasheet-only** curve; clears the saved custom table in config.
+
+```mermaid
+flowchart LR
+  subgraph cal [Calibration mode]
+    R[Pick reference e.g. A or LED]
+    M[Live spectrum on calibrated axis]
+    F[CRR: smooth measured over ref]
+    C[(config.toml sensitivity)]
+    R --> M --> F --> C
+  end
+  subgraph use [Other modes]
+    S[S on: divide by active curve]
+    C --> S
+  end
+```
 
 ### Processing Pipeline
 
 - **Dark/white correction** — Normalize to references for transmission/reflectance
 - **Savitzky–Golay filter** — Smoothing with configurable order
-- **Sensitivity correction** — Optional sensor spectral curve (e.g. OV9281)
+- **Sensitivity correction** — Datasheet CMOS curve and optional user-calibrated curve (see above)
 - **Peak detection** — For calibration, overlays, and mode-specific logic
 
 ### Capture

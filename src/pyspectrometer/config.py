@@ -4,8 +4,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import tomllib
 import tomli_w
+import tomllib
 
 
 def config_search_paths(explicit: Path | None = None) -> list[Path]:
@@ -135,6 +135,11 @@ def _config_to_dict(config: "Config") -> dict:
             "peak_smoothing_period_sec": config.auto.peak_smoothing_period_sec,
             "max_adjust_rate_hz": config.auto.max_adjust_rate_hz,
         },
+        "sensitivity": {
+            "use_custom_curve": config.sensitivity.use_custom_curve,
+            "custom_wavelengths": [float(w) for w in config.sensitivity.custom_wavelengths],
+            "custom_values": [float(v) for v in config.sensitivity.custom_values],
+        },
     }
 
 
@@ -187,6 +192,14 @@ def _apply_config(config: "Config", data: dict) -> None:
         apply(config.extraction, data["extraction"])
     if "auto" in data:
         apply(config.auto, data["auto"])
+    if "sensitivity" in data:
+        sens = data["sensitivity"]
+        if "use_custom_curve" in sens:
+            config.sensitivity.use_custom_curve = bool(sens["use_custom_curve"])
+        if "custom_wavelengths" in sens:
+            config.sensitivity.custom_wavelengths = [float(w) for w in sens["custom_wavelengths"]]
+        if "custom_values" in sens:
+            config.sensitivity.custom_values = [float(v) for v in sens["custom_values"]]
 
 
 @dataclass
@@ -293,6 +306,15 @@ class CalibrationConfig:
 
 
 @dataclass
+class SensitivityConfig:
+    """User-fitted spectral sensitivity curve (saved with wavelength calibration)."""
+
+    use_custom_curve: bool = False
+    custom_wavelengths: list[float] = field(default_factory=list)
+    custom_values: list[float] = field(default_factory=list)
+
+
+@dataclass
 class ExportConfig:
     """Export-related configuration."""
 
@@ -351,6 +373,7 @@ class Config:
     waterfall: WaterfallConfig = field(default_factory=WaterfallConfig)
     extraction: ExtractionConfig = field(default_factory=ExtractionConfig)
     auto: AutoConfig = field(default_factory=AutoConfig)
+    sensitivity: SensitivityConfig = field(default_factory=SensitivityConfig)
 
     # Window titles
     spectrograph_title: str = "PySpectrometer 3 - Spectrograph"
