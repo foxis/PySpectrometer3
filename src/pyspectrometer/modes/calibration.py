@@ -47,9 +47,6 @@ class CalibrationState:
     # Overlay visibility
     overlay_visible: bool = True
 
-    # Sensitivity correction enabled
-    sensitivity_correction_enabled: bool = False
-
     # Detected peaks from measured spectrum
     detected_peaks: list[int] = field(default_factory=list)  # pixel positions
 
@@ -97,8 +94,6 @@ class CalibrationMode(BaseMode):
             name = f"source_{src.name.lower()}"
             self.register_callback(name, lambda s=src: self._on_select_source(ctx, s))
         self.register_callback("toggle_overlay", lambda: self._on_toggle_overlay(ctx))
-        self.register_callback("toggle_sensitivity", lambda: self._on_toggle_sensitivity(ctx))
-        self.register_callback("correct_sensitivity", lambda: self._on_correct_sensitivity(ctx))
         self.register_callback("auto_level", lambda: self._on_auto_level(ctx))
         self.register_callback("auto_calibrate", lambda: self._on_auto_calibrate(ctx))
         self.register_callback("reset_calibration", lambda: self._on_reset_calibration(ctx))
@@ -109,9 +104,6 @@ class CalibrationMode(BaseMode):
         self.register_callback("toggle_averaging", lambda: self._on_toggle_averaging(ctx))
         self.register_callback("toggle_accumulation", lambda: self._on_toggle_accumulation(ctx))
         ctx.display.set_button_active("toggle_overlay", self.cal_state.overlay_visible)
-        ctx.display.set_button_active(
-            "toggle_sensitivity", self.cal_state.sensitivity_correction_enabled
-        )
         ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
 
     def on_start(self, ctx: ModeContext) -> None:
@@ -133,7 +125,7 @@ class CalibrationMode(BaseMode):
         ctx.display.set_mode_overlay(overlay)
         sensitivity_overlay = (
             self._sensitivity.get_curve_for_display(processed.wavelengths, graph_height)
-            if self.cal_state.sensitivity_correction_enabled
+            if ctx.sensitivity_correction_enabled
             else None
         )
         ctx.display.set_sensitivity_overlay(sensitivity_overlay)
@@ -164,9 +156,7 @@ class CalibrationMode(BaseMode):
         ctx.display.set_button_active("show_zoom_y_slider", ctx.display.is_zoom_y_slider_visible())
         ctx.display.set_button_active("auto_gain", ctx.auto_gain_enabled)
         ctx.display.set_button_active("auto_exposure", ctx.auto_exposure_enabled)
-        ctx.display.set_button_active(
-            "toggle_sensitivity", self.cal_state.sensitivity_correction_enabled
-        )
+        ctx.display.set_button_active("toggle_sensitivity", ctx.sensitivity_correction_enabled)
         ctx.display.set_button_active("toggle_overlay", self.cal_state.overlay_visible)
         ctx.display.set_button_active("show_peaks", ctx.display.is_peaks_visible())
         ctx.display.set_button_active("show_spectrum_bars", ctx.display.is_spectrum_bars_visible())
@@ -182,15 +172,6 @@ class CalibrationMode(BaseMode):
         """Toggle reference overlay visibility."""
         visible = self.toggle_overlay()
         ctx.display.set_button_active("toggle_overlay", visible)
-
-    def _on_toggle_sensitivity(self, ctx: ModeContext) -> None:
-        """Toggle CMOS sensitivity correction."""
-        enabled = self.toggle_sensitivity_correction()
-        ctx.display.set_button_active("toggle_sensitivity", enabled)
-
-    def _on_correct_sensitivity(self, ctx: ModeContext) -> None:
-        """Handle CORR button - placeholder for future sensitivity curve correction."""
-        print("[CORR] Correct sensitivity curve (placeholder, noop)")
 
     def _on_auto_level(self, ctx: ModeContext) -> None:
         """Handle auto-level - detect rotation and Y center."""
@@ -219,7 +200,7 @@ class CalibrationMode(BaseMode):
         measured = (
             ctx.last_intensity_pre_sensitivity
             if (
-                self.cal_state.sensitivity_correction_enabled
+                ctx.sensitivity_correction_enabled
                 and ctx.last_intensity_pre_sensitivity is not None
                 and len(ctx.last_intensity_pre_sensitivity) == len(ctx.last_data.intensity)
             )
@@ -251,7 +232,7 @@ class CalibrationMode(BaseMode):
             print("[CAL] No data available (dismissed too late)")
             return
         wl = ctx.last_data.wavelengths
-        if self.cal_state.sensitivity_correction_enabled and self._sensitivity is not None:
+        if self._ctx is not None and self._ctx.sensitivity_correction_enabled:
             measured = self._sensitivity.apply(measured, wl)
         ref_wl = np.linspace(380.0, 750.0, 500)
         ref_int = get_reference_spectrum(self.cal_state.current_source, ref_wl)
@@ -310,7 +291,7 @@ class CalibrationMode(BaseMode):
             "Mode": "Calibration",
             "Date": time.strftime("%Y-%m-%d %H:%M:%S"),
             "Reference source": get_reference_name(self.cal_state.current_source),
-            "Sensitivity correction": "on" if self.cal_state.sensitivity_correction_enabled else "off",
+            "Sensitivity correction": "on" if (self._ctx is not None and self._ctx.sensitivity_correction_enabled) else "off",
             "Gain": f"{ctx.camera.gain:.1f}",
             "Exposure": f"{getattr(ctx.camera, 'exposure', 0)}",
             "Note": "",
@@ -380,13 +361,12 @@ class CalibrationMode(BaseMode):
             ButtonDefinition("Overlay", "toggle_overlay", is_toggle=True, row=1),
             ButtonDefinition("Peaks", "show_peaks", is_toggle=True, row=1),
             ButtonDefinition("__spacer__", "__spacer_left__", row=1),
-            ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=1),
-            ButtonDefinition("CRR", "correct_sensitivity", row=1),
             ButtonDefinition("LVL", "auto_level", is_toggle=True, row=1),
             ButtonDefinition("CAL", "auto_calibrate", row=1),
             ButtonDefinition("R", "reset_calibration", row=1),
             # Row 2: Play (freeze + progress) | Max/Avg/Acc | Bars | ZX/ZY | VIEW | Save/CSV/Load | spacer | Quit
             ButtonDefinition("Play", "freeze", is_toggle=True, row=2, icon_type="playback"),
+            ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=2),
             ButtonDefinition("__gap__", "__gap__c1", row=2),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=2),
             ButtonDefinition("Max", "capture_peak", is_toggle=True, row=2),
@@ -475,7 +455,7 @@ class CalibrationMode(BaseMode):
         peak_indices: list,
     ) -> list[tuple[int, float]]:
         """Perform automatic calibration. Uses triplet matching + correlation fallback."""
-        if self.cal_state.sensitivity_correction_enabled and self._sensitivity is not None:
+        if self._ctx is not None and self._ctx.sensitivity_correction_enabled:
             measured_intensity = self._sensitivity.apply(measured_intensity, wavelengths)
         ref_wl = np.linspace(380.0, 750.0, 500)
         ref_int = get_reference_spectrum(self.cal_state.current_source, ref_wl)
@@ -505,23 +485,3 @@ class CalibrationMode(BaseMode):
     def get_current_source_name(self) -> str:
         """Get name of current reference source."""
         return get_reference_name(self.cal_state.current_source)
-
-    def toggle_sensitivity_correction(self) -> bool:
-        """Toggle CMOS sensitivity correction."""
-        self.cal_state.sensitivity_correction_enabled = (
-            not self.cal_state.sensitivity_correction_enabled
-        )
-        print(
-            f"[Calibration] Sensitivity correction: {'ON' if self.cal_state.sensitivity_correction_enabled else 'OFF'}"
-        )
-        return self.cal_state.sensitivity_correction_enabled
-
-    def apply_sensitivity_correction(
-        self,
-        intensity: np.ndarray,
-        wavelengths: np.ndarray,
-    ) -> np.ndarray:
-        """Apply CMOS sensitivity correction to linearize spectrum."""
-        if not self.cal_state.sensitivity_correction_enabled:
-            return intensity
-        return self._sensitivity.apply(intensity, wavelengths)

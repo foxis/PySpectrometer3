@@ -110,6 +110,7 @@ class ColorScienceMode(BaseMode):
         return [
             # Row 1: Play | Refl/Trans/Illum | Dark/White | Add/Del/CLR | Save/Load
             ButtonDefinition("Play", "freeze", is_toggle=True, row=1, icon_type="playback"),
+            ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=1),
             ButtonDefinition("__gap__", "__gap__", row=1),
             ButtonDefinition("Refl",  "type_reflectance",   is_toggle=True, row=1),
             ButtonDefinition("Trans", "type_transmittance", is_toggle=True, row=1),

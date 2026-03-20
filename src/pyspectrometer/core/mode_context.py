@@ -77,6 +77,7 @@ class ModeContext:
     held_intensity: np.ndarray | None = None
     auto_gain_enabled: bool = False
     auto_exposure_enabled: bool = False
+    sensitivity_correction_enabled: bool = False
 
     # Auto-level overlay dismiss (calibration mode sets)
     clear_autolevel_overlay: Callable[[], None] = _noop

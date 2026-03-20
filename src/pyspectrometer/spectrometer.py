@@ -34,6 +34,7 @@ from .processing.extraction import ExtractionMethod, SpectrumExtractor
 from .processing.filters import SavitzkyGolayFilter
 from .processing.peak_detection import PeakDetector, detect_peaks_in_region
 from .processing.pipeline import ProcessingPipeline
+from .processing.sensitivity_correction import SensitivityCorrection
 from .utils.dialog import prompt_calibrate
 
 
@@ -132,6 +133,7 @@ class Spectrometer:
             output_dir = Path("output")
         self._exporter = CSVExporter(output_dir=output_dir)
         self._reference_manager = ReferenceSpectrumManager()
+        self._sensitivity = SensitivityCorrection()
 
         self._mode_instance: BaseMode
         self._calibration_mode: CalibrationMode | None = None
@@ -229,13 +231,10 @@ class Spectrometer:
                 intensity, self._calibration.wavelengths
             )
 
-        if self._calibration_mode is not None:
-            self._ctx.last_intensity_pre_sensitivity = intensity.copy()
+        self._ctx.last_intensity_pre_sensitivity = intensity.copy()
 
-        if self._calibration_mode is not None:
-            intensity = self._calibration_mode.apply_sensitivity_correction(
-                intensity, self._calibration.wavelengths
-            )
+        if self._ctx.sensitivity_correction_enabled:
+            intensity = self._sensitivity.apply(intensity, self._calibration.wavelengths)
 
         n_wl = len(self._calibration.wavelengths)
         n_int = len(intensity)

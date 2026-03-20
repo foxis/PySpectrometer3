@@ -353,6 +353,7 @@ class MeasurementMode(BaseMode):
         return [
             # Row 1: Rec (capture + progress) | Avg/Max/Acc | Dark/White | Bars | ZX/ZY | VIEW
             ButtonDefinition("Rec", "capture", is_toggle=True, row=1, icon_type="playback"),
+            ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=1),
             ButtonDefinition("__gap__", "__gap__", row=1),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=1),
             ButtonDefinition("Max", "capture_peak", is_toggle=True, shortcut="h", row=1),

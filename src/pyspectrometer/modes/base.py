@@ -188,6 +188,7 @@ class BaseMode(ABC):
         self.register_callback("clear_peak_region", lambda: self._on_clear_peak_region())
         self.register_callback("auto_gain", lambda: self._on_toggle_auto_gain())
         self.register_callback("auto_exposure", lambda: self._on_toggle_auto_exposure())
+        self.register_callback("toggle_sensitivity", lambda: self._on_toggle_sensitivity())
         ctx.display.register_slider_callbacks(
             gain_cb=lambda v: setattr(ctx.camera, "gain", v),
             exposure_cb=lambda v: setattr(ctx.camera, "exposure", int(v)),
@@ -197,6 +198,7 @@ class BaseMode(ABC):
         ctx.display.set_button_active("show_peaks", ctx.display.is_peaks_visible())
         ctx.display.set_button_active("show_zoom_x_slider", ctx.display.is_zoom_x_slider_visible())
         ctx.display.set_button_active("show_zoom_y_slider", ctx.display.is_zoom_y_slider_visible())
+        ctx.display.set_button_active("toggle_sensitivity", ctx.sensitivity_correction_enabled)
 
     def _on_toggle_hold(self) -> None:
         """Toggle peak hold."""
@@ -288,6 +290,15 @@ class BaseMode(ABC):
         ctx.auto_exposure_enabled = not ctx.auto_exposure_enabled
         ctx.display.set_button_active("auto_exposure", ctx.auto_exposure_enabled)
         print(f"[AUTO_EXPOSURE] Auto exposure: {'ON' if ctx.auto_exposure_enabled else 'OFF'}")
+
+    def _on_toggle_sensitivity(self) -> None:
+        """Toggle CMOS sensitivity correction."""
+        ctx = self._ctx
+        if ctx is None:
+            return
+        ctx.sensitivity_correction_enabled = not ctx.sensitivity_correction_enabled
+        ctx.display.set_button_active("toggle_sensitivity", ctx.sensitivity_correction_enabled)
+        print(f"[SENSITIVITY] Correction: {'ON' if ctx.sensitivity_correction_enabled else 'OFF'}")
 
     def register_callback(self, action_name: str, callback: Callable[[], None]) -> None:
         """Register a callback for a button action."""
