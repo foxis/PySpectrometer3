@@ -18,11 +18,13 @@ from ..export.csv_exporter import (
     trim_optional_intensity_row,
     trim_spectrum_data_for_export_min_wavelength,
 )
+from ..core.reference_spectrum import ReferenceSpectrumManager
 from ..processing.auto_controls import AutoExposureController, AutoGainController
 from ..processing.extraction import ExtractionMethod, SpectrumExtractor
 from ..processing.filters import SavitzkyGolayFilter
 from ..processing.peak_detection import PeakDetector, detect_peaks_in_region
 from ..processing.pipeline import ProcessingPipeline
+from ..processing.sensitivity_correction import SensitivityCorrection
 from ..utils.dialog import prompt_label
 from .loader import LoadedCsv, load_csv
 from .mode import CsvViewerMode
@@ -112,6 +114,8 @@ class CsvViewerSpectrometer:
             mode="measurement",
             mode_instance=self._mode,
         )
+        self._sensitivity = SensitivityCorrection(config=self.config.sensitivity)
+        self._reference_manager = ReferenceSpectrumManager()
         self._ctx = self._build_context()
         self._mode.setup(self._ctx)
 
@@ -177,7 +181,9 @@ class CsvViewerSpectrometer:
         )
         ctx.quit_app = lambda: setattr(ctx, "running", False)
         ctx.save_snapshot = self._save_snapshot
-        ctx.sensitivity_correction_enabled = False
+        ctx.sensitivity_engine = self._sensitivity
+        ctx.reference_manager = self._reference_manager
+        ctx.sensitivity_correction_enabled = True
         ctx.pending_csv_reload = False  # type: ignore[attr-defined]
         return ctx
 
@@ -187,6 +193,8 @@ class CsvViewerSpectrometer:
         intensity = self._mode.process_spectrum(
             np.asarray(loaded.intensity[:n], dtype=np.float32), wl[:n]
         )
+        if self._ctx.sensitivity_correction_enabled:
+            intensity = self._sensitivity.apply(intensity, wl[:n])
         data = SpectrumData(intensity=intensity[:n], wavelengths=wl[:n])
         return self._pipeline.run(data)
 

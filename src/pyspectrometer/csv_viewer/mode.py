@@ -124,6 +124,20 @@ class CsvViewerMode(BaseMode):
     def get_buttons(self) -> list[ButtonDefinition]:
         """Buttons for CSV viewer — no camera controls."""
         has_refs = self._view.dark is not None or self._view.white is not None
+        row1: list[ButtonDefinition] = [
+            ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=1),
+            ButtonDefinition("Ref", "show_reference", row=1),
+        ]
+        if has_refs:
+            row1 += [
+                ButtonDefinition("__gap__", "__gap__r0", row=1),
+                ButtonDefinition("Overlay", "show_raw_overlay", is_toggle=True, row=1),
+                ButtonDefinition("ABS", "show_absorption", is_toggle=True, row=1),
+                ButtonDefinition("Refs", "toggle_refs", is_toggle=True, row=1),
+                ButtonDefinition("ClearRef", "clear_refs", row=1),
+            ]
+        row1.append(ButtonDefinition("__spacer__", "__spacer_r1__", row=1))
+
         row2: list[ButtonDefinition] = [
             ButtonDefinition("Peaks", "show_peaks", is_toggle=True, row=2),
             ButtonDefinition("Snap", "snap_to_peaks", is_toggle=True, row=2),
@@ -138,16 +152,6 @@ class CsvViewerMode(BaseMode):
             ButtonDefinition("__spacer__", "__spacer_right__", row=2),
             ButtonDefinition("Quit", "quit", row=2),
         ]
-
-        row1: list[ButtonDefinition] = []
-        if has_refs:
-            row1 += [
-                ButtonDefinition("Overlay", "show_raw_overlay", is_toggle=True, row=1),
-                ButtonDefinition("ABS", "show_absorption", is_toggle=True, row=1),
-                ButtonDefinition("Refs", "toggle_refs", is_toggle=True, row=1),
-                ButtonDefinition("ClearRef", "clear_refs", row=1),
-                ButtonDefinition("__spacer__", "__spacer_r1__", row=1),
-            ]
 
         return row1 + row2
 
@@ -177,7 +181,12 @@ class CsvViewerMode(BaseMode):
             ctx.display.set_mode_overlay(overlay)
 
         ctx.display.set_sensitivity_overlay(None)
-        for key, value in self._status().items():
+        if ctx.reference_manager is not None:
+            ref_intensity = ctx.reference_manager.get_interpolated(
+                processed.wavelengths, processed.intensity
+            )
+            ctx.display.state.reference_spectrum = ref_intensity
+        for key, value in self._status(ctx).items():
             ctx.display.set_status(key, value)
 
     # ------------------------------------------------------------------
@@ -207,6 +216,7 @@ class CsvViewerMode(BaseMode):
         self.register_callback("toggle_refs", lambda: self._on_toggle_refs(ctx))
         self.register_callback("clear_refs", lambda: self._on_clear_refs(ctx))
         self.register_callback("show_raw_overlay", lambda: self._on_toggle_raw_overlay(ctx))
+        self.register_callback("show_reference", lambda: self._on_cycle_illuminant(ctx))
         self.register_callback("export_csv", lambda: self._on_export(ctx))
         self.register_callback("load_csv", lambda: self._on_load(ctx))
         self.register_callback("snap_to_peaks", lambda: self._on_snap_to_peaks(ctx))
@@ -287,6 +297,12 @@ class CsvViewerMode(BaseMode):
             metadata=metadata,
         )
 
+    def _on_cycle_illuminant(self, ctx: "ModeContext") -> None:
+        if ctx.reference_manager is None:
+            return
+        name = ctx.reference_manager.cycle_next()
+        print(f"[CSV Viewer] Illuminant: {name}")
+
     def _on_load(self, ctx: "ModeContext") -> None:
         """Signal the spectrometer loop to prompt for a new file."""
         # The CsvViewerSpectrometer watches ctx for this flag
@@ -321,7 +337,7 @@ class CsvViewerMode(BaseMode):
             for arr, color in spectra
         ]
 
-    def _status(self) -> dict[str, str]:
+    def _status(self, ctx: "ModeContext | None" = None) -> dict[str, str]:
         s: dict[str, str] = {}
         if self._view.dark is not None:
             s["Dark"] = "CSV"
@@ -331,4 +347,8 @@ class CsvViewerMode(BaseMode):
             s["Refs"] = "OFF"
         if self._view.show_absorption:
             s["ABS"] = "ON"
+        if ctx is not None and ctx.reference_manager is not None:
+            name = ctx.reference_manager.current_name
+            if name != "None":
+                s["Illum"] = name
         return s
