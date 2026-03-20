@@ -5,11 +5,12 @@ Supports dark/white correction, absorption, normalization, zoom/pan, peaks, mark
 """
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import numpy as np
 
+from ..data.reference_spectra import ReferenceSource, get_reference_spectrum
 from ..export.csv_exporter import build_absorption_metadata, build_markers_peaks_metadata
 from ..processing.reference_correction import apply_dark_white_correction
 from ..utils.graph_scale import scale_intensity_to_graph
@@ -21,6 +22,35 @@ if TYPE_CHECKING:
 from ..modes.base import BaseMode, ButtonDefinition, ModeType
 
 
+# Same source list as CalibrationMode — all have data via colour-science or CSV files
+SOURCES: list[ReferenceSource] = [
+    ReferenceSource.HG,
+    ReferenceSource.D65,
+    ReferenceSource.A,
+    ReferenceSource.FL1,
+    ReferenceSource.FL2,
+    ReferenceSource.FL3,
+    ReferenceSource.FL12,
+    ReferenceSource.LED,
+    ReferenceSource.LED2,
+    ReferenceSource.LED3,
+]
+
+# BGR overlay colour per illuminant
+_ILLUM_COLOR: dict[ReferenceSource, tuple[int, int, int]] = {
+    ReferenceSource.HG:   (220,  60,  60),   # blue  — mercury blue lines
+    ReferenceSource.D65:  ( 50, 210, 255),   # yellow — daylight
+    ReferenceSource.A:    (  0, 120, 255),   # orange — tungsten warmth
+    ReferenceSource.FL1:  (255, 200,  80),   # sky blue
+    ReferenceSource.FL2:  ( 80, 220, 100),   # green
+    ReferenceSource.FL3:  ( 40, 160,  80),   # dark green
+    ReferenceSource.FL12: (200,  80, 220),   # violet
+    ReferenceSource.LED:  (255,  80, 180),   # pink
+    ReferenceSource.LED2: (180,  60, 255),   # magenta
+    ReferenceSource.LED3: (120,  40, 200),   # purple
+}
+
+
 @dataclass
 class CsvViewerState:
     """Mutable view state for CSV viewer (static data, no camera)."""
@@ -28,9 +58,13 @@ class CsvViewerState:
     loaded: LoadedCsv | None = None
     dark: np.ndarray | None = None
     white: np.ndarray | None = None
+    sensitivity: np.ndarray | None = None   # sensitivity curve stored in CSV
     show_absorption: bool = False
-    refs_active: bool = True      # dark/white correction on/off
+    refs_active: bool = True
     show_raw_overlay: bool = False
+    show_sensitivity_curve: bool = False    # show sensor sensitivity as overlay
+    show_csv_sensitivity: bool = False      # show sensitivity stored in CSV
+    active_sources: set[ReferenceSource] = field(default_factory=set)
 
 
 class CsvViewerMode(BaseMode):
@@ -45,6 +79,7 @@ class CsvViewerMode(BaseMode):
             loaded=loaded,
             dark=loaded.dark.copy() if loaded.dark is not None else None,
             white=loaded.white.copy() if loaded.white is not None else None,
+            sensitivity=loaded.sensitivity.copy() if loaded.sensitivity is not None else None,
         )
 
     # ------------------------------------------------------------------
@@ -122,21 +157,25 @@ class CsvViewerMode(BaseMode):
         return None
 
     def get_buttons(self) -> list[ButtonDefinition]:
-        """Buttons for CSV viewer — no camera controls."""
-        has_refs = self._view.dark is not None or self._view.white is not None
+        """Buttons for CSV viewer — fixed layout, no camera controls."""
         row1: list[ButtonDefinition] = [
             ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=1),
-            ButtonDefinition("Ref", "show_reference", row=1),
+            ButtonDefinition("SensOv", "show_sens_curve", is_toggle=True, row=1),
+            ButtonDefinition("SensRef", "show_csv_sens", is_toggle=True, row=1),
+            ButtonDefinition("__gap__", "__gap__illum", row=1),
         ]
-        if has_refs:
-            row1 += [
-                ButtonDefinition("__gap__", "__gap__r0", row=1),
-                ButtonDefinition("Overlay", "show_raw_overlay", is_toggle=True, row=1),
-                ButtonDefinition("ABS", "show_absorption", is_toggle=True, row=1),
-                ButtonDefinition("Refs", "toggle_refs", is_toggle=True, row=1),
-                ButtonDefinition("ClearRef", "clear_refs", row=1),
-            ]
-        row1.append(ButtonDefinition("__spacer__", "__spacer_r1__", row=1))
+        for source in SOURCES:
+            row1.append(
+                ButtonDefinition(source.name, f"source_{source.name.lower()}", is_toggle=True, row=1)
+            )
+        row1 += [
+            ButtonDefinition("__gap__", "__gap__refs", row=1),
+            ButtonDefinition("Overlay", "show_raw_overlay", is_toggle=True, row=1),
+            ButtonDefinition("ABS", "show_absorption", is_toggle=True, row=1),
+            ButtonDefinition("Refs", "toggle_refs", is_toggle=True, row=1),
+            ButtonDefinition("ClearRef", "clear_refs", row=1),
+            ButtonDefinition("__spacer__", "__spacer_r1__", row=1),
+        ]
 
         row2: list[ButtonDefinition] = [
             ButtonDefinition("Peaks", "show_peaks", is_toggle=True, row=2),
@@ -164,11 +203,9 @@ class CsvViewerMode(BaseMode):
         ctx.display.state.graph_click_behavior = (
             "marker" if not ctx.display.is_peaks_visible() else "default"
         )
-        white_set = self._view.white is not None
-        ctx.display.set_button_disabled("show_absorption", not white_set)
-        if not white_set and self._view.show_absorption:
+        if not self._view.white and self._view.show_absorption:
             self._view.show_absorption = False
-            ctx.display.set_button_active("show_absorption", False)
+        self._sync_button_states(ctx)
 
         if self._view.show_raw_overlay:
             ctx.display.set_raw_overlays(
@@ -176,16 +213,20 @@ class CsvViewerMode(BaseMode):
             )
             ctx.display.set_mode_overlay(None)
         else:
-            ctx.display.set_raw_overlays([])
+            ctx.display.set_raw_overlays(
+                self._build_illuminant_overlays(processed.wavelengths, graph_height)
+            )
             overlay = self.get_overlay(processed.wavelengths, graph_height)
             ctx.display.set_mode_overlay(overlay)
 
-        ctx.display.set_sensitivity_overlay(None)
-        if ctx.reference_manager is not None:
-            ref_intensity = ctx.reference_manager.get_interpolated(
-                processed.wavelengths, processed.intensity
+        sens_overlay = None
+        if self._view.show_sensitivity_curve and ctx.sensitivity_engine is not None:
+            sens_overlay = ctx.sensitivity_engine.get_curve_for_display(
+                processed.wavelengths, graph_height
             )
-            ctx.display.state.reference_spectrum = ref_intensity
+        ctx.display.set_sensitivity_overlay(sens_overlay)
+        ctx.display.state.reference_spectrum = None
+
         for key, value in self._status(ctx).items():
             ctx.display.set_status(key, value)
 
@@ -198,9 +239,12 @@ class CsvViewerMode(BaseMode):
         self._view.loaded = loaded
         self._view.dark = loaded.dark.copy() if loaded.dark is not None else None
         self._view.white = loaded.white.copy() if loaded.white is not None else None
+        self._view.sensitivity = loaded.sensitivity.copy() if loaded.sensitivity is not None else None
         self._view.show_absorption = False
         self._view.refs_active = True
         self._view.show_raw_overlay = False
+        self._view.show_csv_sensitivity = False
+        self._view.active_sources.clear()
         self._sync_button_states(ctx)
 
     @property
@@ -216,7 +260,13 @@ class CsvViewerMode(BaseMode):
         self.register_callback("toggle_refs", lambda: self._on_toggle_refs(ctx))
         self.register_callback("clear_refs", lambda: self._on_clear_refs(ctx))
         self.register_callback("show_raw_overlay", lambda: self._on_toggle_raw_overlay(ctx))
-        self.register_callback("show_reference", lambda: self._on_cycle_illuminant(ctx))
+        self.register_callback("show_sens_curve", lambda: self._on_toggle_sens_curve(ctx))
+        self.register_callback("show_csv_sens", lambda: self._on_toggle_csv_sens(ctx))
+        for source in SOURCES:
+            self.register_callback(
+                f"source_{source.name.lower()}",
+                lambda s=source: self._on_toggle_source(ctx, s),
+            )
         self.register_callback("export_csv", lambda: self._on_export(ctx))
         self.register_callback("load_csv", lambda: self._on_load(ctx))
         self.register_callback("snap_to_peaks", lambda: self._on_snap_to_peaks(ctx))
@@ -297,11 +347,22 @@ class CsvViewerMode(BaseMode):
             metadata=metadata,
         )
 
-    def _on_cycle_illuminant(self, ctx: "ModeContext") -> None:
-        if ctx.reference_manager is None:
+    def _on_toggle_source(self, ctx: "ModeContext", source: ReferenceSource) -> None:
+        if source in self._view.active_sources:
+            self._view.active_sources.discard(source)
+        else:
+            self._view.active_sources.add(source)
+        ctx.display.set_button_active(f"source_{source.name.lower()}", source in self._view.active_sources)
+
+    def _on_toggle_sens_curve(self, ctx: "ModeContext") -> None:
+        self._view.show_sensitivity_curve = not self._view.show_sensitivity_curve
+        ctx.display.set_button_active("show_sens_curve", self._view.show_sensitivity_curve)
+
+    def _on_toggle_csv_sens(self, ctx: "ModeContext") -> None:
+        if self._view.sensitivity is None:
             return
-        name = ctx.reference_manager.cycle_next()
-        print(f"[CSV Viewer] Illuminant: {name}")
+        self._view.show_csv_sensitivity = not self._view.show_csv_sensitivity
+        ctx.display.set_button_active("show_csv_sens", self._view.show_csv_sensitivity)
 
     def _on_load(self, ctx: "ModeContext") -> None:
         """Signal the spectrometer loop to prompt for a new file."""
@@ -310,24 +371,43 @@ class CsvViewerMode(BaseMode):
 
     def _sync_button_states(self, ctx: "ModeContext") -> None:
         """Sync all button active/disabled states to current view state."""
+        has_refs = self._view.dark is not None or self._view.white is not None
         white_set = self._view.white is not None
+        has_csv_sens = self._view.sensitivity is not None
+
         ctx.display.set_button_active("toggle_refs", self._view.refs_active)
+        ctx.display.set_button_disabled("toggle_refs", not has_refs)
+        ctx.display.set_button_active("show_raw_overlay", self._view.show_raw_overlay)
+        ctx.display.set_button_disabled("show_raw_overlay", not has_refs)
         ctx.display.set_button_active("show_absorption", self._view.show_absorption)
         ctx.display.set_button_disabled("show_absorption", not white_set)
-        ctx.display.set_button_active("show_raw_overlay", self._view.show_raw_overlay)
+        ctx.display.set_button_disabled("clear_refs", not has_refs)
+
+        ctx.display.set_button_active("show_csv_sens", self._view.show_csv_sensitivity)
+        ctx.display.set_button_disabled("show_csv_sens", not has_csv_sens)
+
+        ctx.display.set_button_active("show_sens_curve", self._view.show_sensitivity_curve)
         ctx.display.set_button_active("show_peaks", ctx.display.is_peaks_visible())
+
+        for source in SOURCES:
+            ctx.display.set_button_active(
+                f"source_{source.name.lower()}", source in self._view.active_sources
+            )
 
     def _build_raw_overlays(
         self,
         wavelengths: np.ndarray,
         graph_height: int,
     ) -> list[tuple[np.ndarray, tuple[int, int, int]]]:
+        """Dark/white/CSV-sensitivity overlays when Overlay mode is active."""
         n = len(wavelengths)
         spectra: list[tuple[np.ndarray, tuple[int, int, int]]] = []
         if self._view.dark is not None:
             spectra.append((np.asarray(self._view.dark, dtype=np.float64)[:n], (60, 60, 60)))
         if self._view.white is not None:
             spectra.append((np.asarray(self._view.white, dtype=np.float64)[:n], (200, 120, 0)))
+        if self._view.show_csv_sensitivity and self._view.sensitivity is not None:
+            spectra.append((np.asarray(self._view.sensitivity, dtype=np.float64)[:n], (80, 200, 80)))
         if not spectra:
             return []
         global_max = max(float(np.max(s[0])) for s in spectra)
@@ -336,6 +416,27 @@ class CsvViewerMode(BaseMode):
             (np.clip(arr / global_max, 0, 1).astype(np.float32), color)
             for arr, color in spectra
         ]
+
+    def _build_illuminant_overlays(
+        self,
+        wavelengths: np.ndarray,
+        graph_height: int,
+    ) -> list[tuple[np.ndarray, tuple[int, int, int]]]:
+        """SPD overlays for each active illuminant, each normalised to its own peak."""
+        overlays: list[tuple[np.ndarray, tuple[int, int, int]]] = []
+        for source in SOURCES:
+            if source not in self._view.active_sources:
+                continue
+            spd = get_reference_spectrum(source, wavelengths)
+            if spd is None:
+                continue
+            spd = np.asarray(spd, dtype=np.float32)
+            peak = float(np.max(spd))
+            if peak > 1e-6:
+                spd = spd / peak
+            color = _ILLUM_COLOR.get(source, (200, 200, 200))
+            overlays.append((np.clip(spd, 0, 1), color))
+        return overlays
 
     def _status(self, ctx: "ModeContext | None" = None) -> dict[str, str]:
         s: dict[str, str] = {}
@@ -347,8 +448,11 @@ class CsvViewerMode(BaseMode):
             s["Refs"] = "OFF"
         if self._view.show_absorption:
             s["ABS"] = "ON"
-        if ctx is not None and ctx.reference_manager is not None:
-            name = ctx.reference_manager.current_name
-            if name != "None":
-                s["Illum"] = name
+        if self._view.show_sensitivity_curve:
+            s["Sens"] = "OV"
+        if self._view.show_csv_sensitivity:
+            s["SensRef"] = "CSV"
+        if self._view.active_sources:
+            names = "+".join(src.name for src in SOURCES if src in self._view.active_sources)
+            s["Illum"] = names
         return s

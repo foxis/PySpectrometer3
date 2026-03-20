@@ -44,6 +44,15 @@ class LoadedCsv:
     metadata: dict[str, str] = field(default_factory=dict)
 
 
+def make_empty(n: int = 1280) -> LoadedCsv:
+    """Return a blank spectrum covering 350–950 nm for use before any CSV is loaded."""
+    return LoadedCsv(
+        csv_type=CsvType.SPECTRUM,
+        intensity=np.zeros(n, dtype=np.float32),
+        wavelengths=np.linspace(350.0, 950.0, n),
+    )
+
+
 def load_csv(path: Path) -> LoadedCsv:
     """Parse a CSV file exported by CSVExporter and return a LoadedCsv.
 

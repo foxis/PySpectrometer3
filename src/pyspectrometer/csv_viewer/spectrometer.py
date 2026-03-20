@@ -18,7 +18,6 @@ from ..export.csv_exporter import (
     trim_optional_intensity_row,
     trim_spectrum_data_for_export_min_wavelength,
 )
-from ..core.reference_spectrum import ReferenceSpectrumManager
 from ..processing.auto_controls import AutoExposureController, AutoGainController
 from ..processing.extraction import ExtractionMethod, SpectrumExtractor
 from ..processing.filters import SavitzkyGolayFilter
@@ -26,7 +25,7 @@ from ..processing.peak_detection import PeakDetector, detect_peaks_in_region
 from ..processing.pipeline import ProcessingPipeline
 from ..processing.sensitivity_correction import SensitivityCorrection
 from ..utils.dialog import prompt_label
-from .loader import LoadedCsv, load_csv
+from .loader import LoadedCsv, load_csv, make_empty
 from .mode import CsvViewerMode
 from .stubs import NullCamera
 
@@ -66,17 +65,8 @@ class CsvViewerSpectrometer:
         # Align the window title so _check_window_closed matches the actual OpenCV window.
         self.config.spectrograph_title = self.WINDOW_TITLE
 
-        if csv_path is None:
-            output_dir = self.config.export.output_dir
-            if str(output_dir) == ".":
-                output_dir = Path("output")
-            csv_path = prompt_csv_path(output_dir)
-            if csv_path is None:
-                raise SystemExit(0)
-
-        self._csv_path = csv_path
-
-        loaded = load_csv(csv_path)
+        self._csv_path: Path | None = csv_path
+        loaded = load_csv(csv_path) if csv_path is not None else make_empty()
         n = len(loaded.wavelengths)
 
         self._camera = NullCamera(
@@ -106,6 +96,7 @@ class CsvViewerSpectrometer:
         self._exporter = CSVExporter(output_dir=output_dir)
         self._auto_gain = AutoGainController()
         self._auto_exposure = AutoExposureController()
+        self._sensitivity = SensitivityCorrection(config=self.config.sensitivity)
 
         self._mode = CsvViewerMode(loaded)
         self._display = DisplayManager(
@@ -114,8 +105,6 @@ class CsvViewerSpectrometer:
             mode="measurement",
             mode_instance=self._mode,
         )
-        self._sensitivity = SensitivityCorrection(config=self.config.sensitivity)
-        self._reference_manager = ReferenceSpectrumManager()
         self._ctx = self._build_context()
         self._mode.setup(self._ctx)
 
@@ -125,17 +114,16 @@ class CsvViewerSpectrometer:
 
     def run(self) -> None:
         """Display loop — feeds static data each frame, handles UI events."""
-        print(f"[CSV Viewer] {self._csv_path.name}")
         self._camera.start()
         self._display.setup_windows()
         self._ctx.running = True
         self._mode.on_start(self._ctx)
+        if self._csv_path is not None:
+            print(f"[CSV Viewer] {self._csv_path.name}")
 
         try:
             while self._ctx.running:
-                loaded = self._mode.loaded
-                if loaded is None:
-                    break
+                loaded = self._mode.loaded or make_empty()
                 processed = self._build_spectrum(loaded)
                 processed = self._mode.transform_spectrum_data(processed)
                 processed = self._expand_peaks(processed)
@@ -182,7 +170,6 @@ class CsvViewerSpectrometer:
         ctx.quit_app = lambda: setattr(ctx, "running", False)
         ctx.save_snapshot = self._save_snapshot
         ctx.sensitivity_engine = self._sensitivity
-        ctx.reference_manager = self._reference_manager
         ctx.sensitivity_correction_enabled = True
         ctx.pending_csv_reload = False  # type: ignore[attr-defined]
         return ctx
@@ -240,7 +227,12 @@ class CsvViewerSpectrometer:
 
     def _prompt_reload(self) -> None:
         """Ask user for a new CSV path and swap the loaded data."""
-        default_dir = self._csv_path.parent if self._csv_path else None
+        output_dir = self.config.export.output_dir
+        default_dir = (
+            self._csv_path.parent
+            if self._csv_path is not None
+            else (output_dir if str(output_dir) != "." else Path("output"))
+        )
         path = prompt_csv_path(default_dir)
         if path is None:
             return

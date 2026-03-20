@@ -126,8 +126,8 @@ def view_csv() -> int:
     """Open a spectrum CSV in the viewer.
 
     Usage:
-      poetry run viewer              # opens file-browser dialog (defaults to output dir)
-      poetry run viewer spectrum.csv # open directly
+      poetry run viewer              # open empty viewer, click Load to pick a CSV
+      poetry run viewer spectrum.csv # open directly with the given CSV
     """
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     csv_path_arg = args[0] if args else None
@@ -153,8 +153,6 @@ def view_csv() -> int:
         )
         viewer.run()
         return 0
-    except SystemExit as exc:
-        return int(exc.code) if exc.code is not None else 0
     except KeyboardInterrupt:
         return 130
     except Exception as exc:

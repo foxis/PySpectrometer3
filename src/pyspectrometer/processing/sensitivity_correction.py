@@ -8,7 +8,6 @@ import numpy as np
 
 from ..config import SensitivityConfig
 from .sensitivity_curve_fit import fit_sensitivity_values
-from ..utils.graph_scale import scale_intensity_to_graph
 
 _DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 _DEFAULT_CSV = Path("sensor_sensitivity") / "OV9281_spectral_sensitivity_extracted.csv"
@@ -151,18 +150,23 @@ class SensitivityCorrection:
         intensity: np.ndarray,
         wavelengths: np.ndarray,
     ) -> np.ndarray:
-        """Divide intensity by active sensitivity curve."""
+        """Divide intensity by the sensitivity curve, normalised to its peak.
+
+        Normalising to the peak means the correction only reshapes the spectral
+        response — it does not change the overall brightness level.
+        """
         sensitivity = self.interpolate(wavelengths)
         if sensitivity is None:
             return intensity
 
-        n_wl = len(wavelengths)
-        n_int = len(intensity)
-        n = min(n_wl, n_int)
-        intensity = intensity[:n]
+        n = min(len(wavelengths), len(intensity))
+        intensity_f = np.asarray(intensity[:n], dtype=np.float32)
         sensitivity = sensitivity[:n]
 
-        intensity_f = np.asarray(intensity, dtype=np.float32)
+        peak = float(np.max(sensitivity))
+        if peak > 1e-6:
+            sensitivity = sensitivity / peak
+
         corrected = np.zeros(n, dtype=np.float32)
         mask = sensitivity > 1e-6
         corrected[mask] = intensity_f[mask] / sensitivity[mask]
@@ -175,9 +179,17 @@ class SensitivityCorrection:
         wavelengths: np.ndarray,
         graph_height: int,
     ) -> tuple[np.ndarray, tuple[int, int, int]] | None:
-        """Scale active sensitivity for graph overlay."""
+        """Return peak-normalised sensitivity (0–1) for graph overlay.
+
+        Normalising to peak ensures the curve fills the graph vertically
+        and is consistent with how corrections are applied (apply() also
+        normalises to peak before dividing).
+        """
         sensitivity = self.interpolate(wavelengths)
         if sensitivity is None:
             return None
-        scaled = scale_intensity_to_graph(sensitivity, graph_height)
-        return (scaled, (100, 255, 100))
+        sensitivity = np.asarray(sensitivity, dtype=np.float32)
+        peak = float(np.max(sensitivity))
+        if peak > 1e-6:
+            sensitivity = sensitivity / peak
+        return (np.clip(sensitivity, 0.0, 1.0), (100, 255, 100))

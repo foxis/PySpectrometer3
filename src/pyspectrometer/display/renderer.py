@@ -1038,20 +1038,17 @@ class DisplayManager:
 
     def _render_sensitivity_overlay(self, graph: np.ndarray) -> None:
         """Render CMOS sensitivity curve overlay.
-        Resamples overlay to graph width so it always matches the spectrum axis.
+
+        Intensity is already 0–1 (peak-normalised by get_curve_for_display).
+        Uses viewport so x-axis matches the spectrum exactly.
         """
         if self._sensitivity_overlay is None:
             return
         intensity, color = self._sensitivity_overlay
-        width = graph.shape[1]
-        height = graph.shape[0]
-        eff = max(1, height - 1)
-        intensity_01 = np.asarray(intensity, dtype=np.float32) / eff
         render_polyline_overlay(
             graph,
-            intensity_01,
+            np.asarray(intensity, dtype=np.float32),
             color,
-            resample_to_width=width,
             thickness=1,
             viewport=self._viewport,
         )

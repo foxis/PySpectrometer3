@@ -375,6 +375,11 @@ class ReferenceSpectrumManager:
             print(f"  - {s.name}")
 
     @property
+    def current_index(self) -> int:
+        """Currently selected index, or -1 if none selected."""
+        return self._current_index
+
+    @property
     def current(self) -> ReferenceSpectrum | None:
         """Get currently selected reference spectrum, or None if disabled."""
         if self._current_index < 0 or self._current_index >= len(self._spectrums):
@@ -401,6 +406,17 @@ class ReferenceSpectrumManager:
         if self._current_index >= len(self._spectrums):
             self._current_index = -1
 
+        return self.current_name
+
+    def select(self, index: int) -> str:
+        """Select illuminant by index, or -1 to deselect.
+
+        Returns:
+            Name of the new current reference spectrum (or "None")
+        """
+        if index < -1 or index >= len(self._spectrums):
+            return self.current_name
+        self._current_index = index
         return self.current_name
 
     def get_interpolated(
