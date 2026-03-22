@@ -8,6 +8,11 @@ import tomli_w
 import tomllib
 
 
+def app_config_dir() -> Path:
+    """Base directory for user config (~/.config/itohio/spectral)."""
+    return Path.home() / ".config" / "itohio" / "spectral"
+
+
 def config_search_paths(explicit: Path | None = None) -> list[Path]:
     """Return paths to try for config, in order. Primary: user config dir."""
     if explicit is not None:
@@ -15,7 +20,7 @@ def config_search_paths(explicit: Path | None = None) -> list[Path]:
     paths = []
     if p := os.environ.get("PYSPECTROMETER_CONFIG"):
         paths.append(Path(p).expanduser())
-    paths.append(Path.home() / ".config" / "pyspectrometer" / "config.toml")
+    paths.append(app_config_dir() / "config.toml")
     paths.append(Path.cwd() / "pyspectrometer.toml")
     return paths
 
@@ -46,12 +51,12 @@ def load_config(path: Path | None = None) -> tuple["Config", Path | None]:
 
 def default_main_config_path() -> Path:
     """Canonical path for the main (measurement) config."""
-    return (Path.home() / ".config" / "pyspectrometer" / "config.toml").resolve()
+    return (app_config_dir() / "config.toml").resolve()
 
 
 def csv_viewer_config_path() -> Path:
     """Canonical path for the CSV viewer config (separate from main config)."""
-    return (Path.home() / ".config" / "pyspectrometer" / "csv_viewer.toml").resolve()
+    return (app_config_dir() / "csv_viewer.toml").resolve()
 
 
 def load_csv_viewer_config() -> tuple["Config", Path]:
@@ -82,7 +87,7 @@ def save_config(config: "Config", config_path: Path | None) -> bool:
     """Write config to file including calibration data.
 
     Saves to *config_path* when provided, otherwise to the default main config
-    location (~/.config/pyspectrometer/config.toml).
+    location (~/.config/itohio/spectral/config.toml).
 
     Args:
         config: Config to save.

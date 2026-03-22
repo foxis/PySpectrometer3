@@ -5,17 +5,20 @@ to support any wavelength spacing (colour.sd_to_XYZ requires strict 1/5/10/20 nm
 intervals per ASTM E308-15, which calibrated spectrometers rarely satisfy).
 
 Illumination (self-luminous sources):
-  1. Normalize SPD by total integral → spectral shape only (removes absolute brightness)
-     S_norm(λ) = S(λ) / ∫S(λ)dλ
-  2. Scale by equal-energy factor k so equal-energy E gives Y = 100
-     k = 100 / ∫(1/Δλ)·ȳ(λ)dλ
-  3. X = k·∫S_norm·x̄dλ,  Y = k·∫S_norm·ȳdλ,  Z = k·∫S_norm·z̄dλ
-  4. Reference white for L*a*b*: equal-energy E → X_E = Y_E = Z_E = 100
-     (CIE defines E at x=y=1/3, which yields X=Y=Z for any Y-normalization)
+  Per CIE / Bruce Lindbloom: integrate SPD directly with CMFs, no pre-normalization.
+  X = ∫ S(λ)·x̄(λ)dλ,  Y = ∫ S(λ)·ȳ(λ)dλ,  Z = ∫ S(λ)·z̄(λ)dλ
+
+  Two modes:
+  (a) Shape-only (no white ref): Normalize S by ∫S so chromaticity is comparable.
+      k = 100 / Y_E, then XYZ = k·∫(S/∫S)·CMF. Equal-energy → Y=100.
+  (b) With white ref: Scale so reference SPD gives Y=100.
+      k = 100 / ∫ W·ȳ,  XYZ = k·∫ S·CMF. Preserves relative luminance.
 
 Reflectance/Transmittance (spectrum is already white-corrected ≈ R(λ)):
   X = k · ∫ R(λ)·W(λ)·x̄(λ)dλ,  k = 100 / ∫ W(λ)·ȳ(λ)dλ
   where W(λ) is the raw white-reference capture.
+  L*a*b* reference white must be the tristimulus of R=T=1 under the same W(λ),
+  not the “illumination” shape-normalized XYZ of W alone.
 """
 
 from typing import Literal
@@ -94,6 +97,10 @@ def calculate_XYZ(
         S = _interp_to_cmf(spectrum, wavelengths, wl_cmf)
 
         if measurement_type == "illumination":
+            if illuminant_spectrum is not None:
+                wl_ill = illuminant_wavelengths if illuminant_wavelengths is not None else wavelengths
+                E = _interp_to_cmf(illuminant_spectrum, wl_ill, wl_cmf)
+                return _xyz_illuminant_reference(S, E, cmf_xyz, wl_cmf)
             return _xyz_illuminant(S, cmf_xyz, wl_cmf)
 
         if illuminant_spectrum is None:
@@ -134,6 +141,27 @@ def _xyz_illuminant(
     X = k * float(np.trapezoid(S_norm * cmf_xyz[:, 0], wl))
     Y = k * float(np.trapezoid(S_norm * cmf_xyz[:, 1], wl))
     Z = k * float(np.trapezoid(S_norm * cmf_xyz[:, 2], wl))
+    return (X, Y, Z)
+
+
+def _xyz_illuminant_reference(
+    S: np.ndarray,
+    W: np.ndarray,
+    cmf_xyz: np.ndarray,
+    wl: np.ndarray,
+) -> tuple[float, float, float]:
+    """Integrate SPD directly with CMFs; scale so reference W gives Y=100.
+
+    Per CIE/Bruce Lindbloom: emissive case uses direct integration.
+    k = 100 / ∫W·ȳ, then XYZ = k·∫S·CMF. Preserves relative luminance.
+    """
+    denom = float(np.trapezoid(W * cmf_xyz[:, 1], wl))
+    if denom < 1e-12:
+        return (0.0, 0.0, 0.0)
+    k = 100.0 / denom
+    X = k * float(np.trapezoid(S * cmf_xyz[:, 0], wl))
+    Y = k * float(np.trapezoid(S * cmf_xyz[:, 1], wl))
+    Z = k * float(np.trapezoid(S * cmf_xyz[:, 2], wl))
     return (X, Y, Z)
 
 

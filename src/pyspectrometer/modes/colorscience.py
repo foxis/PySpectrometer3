@@ -301,6 +301,7 @@ class ColorScienceMode(BaseMode):
         ctx.display.set_sensitivity_overlay(None)
 
         xyz_lab = self._compute_xyz_lab(processed.intensity, processed.wavelengths)
+        cat_white = self._display_cat_white_point(processed.wavelengths)
         power_ratio = None
         if (
             refl_trans
@@ -356,6 +357,7 @@ class ColorScienceMode(BaseMode):
                     current_xyz_lab=current,
                     current_wavelengths=processed.wavelengths,
                     current_spectrum=processed.intensity,
+                    current_illuminant_xyz=cat_white,
                 )
                 ctx.display.set_graph_override(grid)
                 ctx.display.set_preview_override(
@@ -369,7 +371,10 @@ class ColorScienceMode(BaseMode):
                 ctx.display.set_graph_override(None)
                 xyz = xyz_lab[0] if xyz_lab else None
                 ctx.display.set_preview_override(
-                    render_color_preview(width, p_height, xyz, info_lines)
+                    render_color_preview(
+                        width, p_height, xyz, info_lines,
+                        illuminant_xyz=cat_white,
+                    )
                 )
 
     # ------------------------------------------------------------------
@@ -520,12 +525,14 @@ class ColorScienceMode(BaseMode):
             return
         (X, Y, Z), (L, a, b) = xyz_lab
         letter = _MODE_LETTER[self.color_state.measurement_type]
+        ill_xyz = self._display_cat_white_point(data.wavelengths)
         swatch = ColorSwatch(
             X=X, Y=Y, Z=Z, L=L, a=a, b=b,
             mode=letter,
             wavelengths=data.wavelengths.copy(),
             spectrum=data.intensity.copy(),
             label=f"S{len(self.color_state.swatches) + 1}",
+            illuminant_xyz=ill_xyz,
         )
         self.color_state.swatches.append(swatch)
         print(f"[COLOR] Swatch added: L*={L:.1f} a*={a:.1f} b*={b:.1f}  [{letter}]")
@@ -620,7 +627,8 @@ class ColorScienceMode(BaseMode):
         is_illum = self.color_state.measurement_type == ColorMeasurementType.ILLUMINATION
         white = None if is_illum else self.color_state.white_spectrum
         metadata = self.snapshot_metadata(ctx)
-        measured = getattr(self, "_last_measured_pre_correction", None) or ctx.last_raw_intensity
+        measured_pre = getattr(self, "_last_measured_pre_correction", None)
+        measured = measured_pre if measured_pre is not None else ctx.last_raw_intensity
         ctx.save_snapshot(
             ctx.last_data,
             dark_intensity=self.color_state.dark_spectrum,
@@ -698,6 +706,26 @@ class ColorScienceMode(BaseMode):
     # Colorimetry
     # ------------------------------------------------------------------
 
+    def _display_cat_white_point(
+        self,
+        wavelengths: np.ndarray,
+    ) -> tuple[float, float, float] | None:
+        """Tristimulus of the reference white for CAT → D65.
+
+        Reflectance/transmittance only. Illumination: no CAT — show physical
+        chromaticity of the light.
+        """
+        m = self.color_state.measurement_type
+        white = self.color_state.white_spectrum
+        if white is None:
+            return None
+        if m in (
+            ColorMeasurementType.REFLECTANCE,
+            ColorMeasurementType.TRANSMITTANCE,
+        ):
+            return _white_point_xyz_reflective(white, wavelengths, m)
+        return None
+
     def _compute_xyz_lab(
         self,
         intensity: np.ndarray,
@@ -708,33 +736,61 @@ class ColorScienceMode(BaseMode):
             mtype = _TO_XYZ_TYPE[self.color_state.measurement_type]
             white = self.color_state.white_spectrum
             white_wl = wavelengths
-            if mtype == "illumination":
-                white = white_wl = None
-            elif white is None:
-                return None
 
-            X, Y, Z = calculate_XYZ(
-                spectrum=intensity,
-                wavelengths=wavelengths,
-                measurement_type=mtype,
-                illuminant_spectrum=white,
-                illuminant_wavelengths=white_wl,
-            )
             if mtype == "illumination":
-                ref_white = _illumination_ref_white(
-                    self.color_state.white_level_xyz,
-                    self.color_state.white_max,
-                )
-                X, Y, Z = _apply_white_level(
-                    X, Y, Z,
-                    self.color_state.white_level_xyz,
-                    self.color_state.white_max,
-                )
+                if white is not None:
+                    white_arr = np.asarray(white, dtype=np.float64)
+                    dark = self.color_state.dark_spectrum
+                    if dark is not None:
+                        white_arr = white_arr - np.asarray(dark, dtype=np.float64)
+                    white_arr = np.maximum(white_arr, 0)
+                    w_max = self.color_state.white_max
+                    raw_sample = (
+                        intensity.astype(np.float64) * w_max
+                        if w_max >= 1e-10
+                        else intensity.astype(np.float64)
+                    )
+                    X, Y, Z = calculate_XYZ(
+                        spectrum=raw_sample,
+                        wavelengths=wavelengths,
+                        measurement_type="illumination",
+                        illuminant_spectrum=white_arr,
+                        illuminant_wavelengths=white_wl,
+                    )
+                    ref_white = _illumination_ref_white_from_spectrum(
+                        white_arr, wavelengths
+                    )
+                else:
+                    X, Y, Z = calculate_XYZ(
+                        spectrum=intensity,
+                        wavelengths=wavelengths,
+                        measurement_type="illumination",
+                        illuminant_spectrum=None,
+                        illuminant_wavelengths=None,
+                    )
+                    ref_white = _illumination_ref_white(
+                        self.color_state.white_level_xyz,
+                        self.color_state.white_max,
+                    )
+                    X, Y, Z = _apply_white_level(
+                        X, Y, Z,
+                        self.color_state.white_level_xyz,
+                        self.color_state.white_max,
+                    )
             else:
-                ref_white = tuple(
-                    float(v) for v in
-                    calculate_XYZ(white, wavelengths, "illumination", None, None)
+                if white is None:
+                    return None
+                X, Y, Z = calculate_XYZ(
+                    spectrum=intensity,
+                    wavelengths=wavelengths,
+                    measurement_type=mtype,
+                    illuminant_spectrum=white,
+                    illuminant_wavelengths=white_wl,
                 )
+                ref_white = _white_point_xyz_reflective(
+                    white, wavelengths, self.color_state.measurement_type
+                )
+
             L, a, b = xyz_to_lab(X, Y, Z, reference_white_XYZ=ref_white)
             return ((X, Y, Z), (L, a, b))
         except (FileNotFoundError, ValueError):
@@ -744,6 +800,32 @@ class ColorScienceMode(BaseMode):
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
+def _illumination_ref_white_from_spectrum(
+    white_arr: np.ndarray,
+    wavelengths: np.ndarray,
+) -> tuple[float, float, float]:
+    """Reference white for L*a*b* when using _xyz_illuminant_reference (Y=100)."""
+    return tuple(
+        float(v)
+        for v in calculate_XYZ(
+            white_arr, wavelengths, "illumination",
+            illuminant_spectrum=white_arr,
+            illuminant_wavelengths=wavelengths,
+        )
+    )
+
+
+def _white_point_xyz_reflective(
+    white: np.ndarray,
+    wavelengths: np.ndarray,
+    mtype: ColorMeasurementType,
+) -> tuple[float, float, float]:
+    """CIE XYZ for R=T=1 under the captured white reference (same basis as sample XYZ)."""
+    key = _TO_XYZ_TYPE[mtype]
+    ones = np.ones(len(wavelengths), dtype=np.float64)
+    return tuple(float(v) for v in calculate_XYZ(ones, wavelengths, key, white, wavelengths))
+
 
 def _get_raw(ctx: ModeContext) -> np.ndarray | None:
     if ctx.last_raw_intensity is not None:

@@ -402,7 +402,11 @@ class Spectrometer:
         white_e = white_intensity
         # Fall back to pre-sensitivity intensity so modes that don't explicitly
         # pass raw data (e.g. calibration) still export uncorrected SPD.
-        measured_e = measured_raw_intensity or self._ctx.last_intensity_pre_sensitivity
+        measured_e = (
+            measured_raw_intensity
+            if measured_raw_intensity is not None
+            else self._ctx.last_intensity_pre_sensitivity
+        )
         min_wl = self._ctx.min_wavelength
         if min_wl > 0:
             data_e = trim_spectrum_data_for_export_min_wavelength(data, min_wl)
@@ -618,6 +622,7 @@ class Spectrometer:
             (x0, y0, z0), (l0, a0, b0) = xyz_lab
             xyz_t = (x0, y0, z0)
             lab_t = (l0, a0, b0)
+        cat_w = cm._display_cat_white_point(data_e.wavelengths)
         req = ViewExportRequest(
             path=Path(path_str),
             wavelengths=wl,
@@ -634,6 +639,7 @@ class Spectrometer:
             sensitivity_display=sens_disp,
             xyz=xyz_t,
             cie_lab=lab_t,
+            illuminant_xyz=cat_w,
         )
         out = export_view_vector(req)
         print(f"[Export] Vector graph saved: {out}")

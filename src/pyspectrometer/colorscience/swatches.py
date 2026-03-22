@@ -37,6 +37,8 @@ class ColorSwatch:
     spectrum: np.ndarray
     label: str = ""
     selected: bool = False
+    # Tristimulus of unity R/T under the white reference, or scaled ref for illumination+WL
+    illuminant_xyz: tuple[float, float, float] | None = None
 
     @property
     def lab(self) -> tuple[float, float, float]:
@@ -44,22 +46,37 @@ class ColorSwatch:
 
     @property
     def bgr(self) -> tuple[int, int, int]:
-        return xyz_to_display_bgr(self.X, self.Y, self.Z)
+        return xyz_to_display_bgr(self.X, self.Y, self.Z, self.illuminant_xyz)
 
 
 # ---------------------------------------------------------------------------
 # Color conversion
 # ---------------------------------------------------------------------------
 
-def xyz_to_display_bgr(X: float, Y: float, Z: float) -> tuple[int, int, int]:
-    """XYZ → gamut-clipped sRGB for display, returned as BGR."""
+def xyz_to_display_bgr(
+    X: float,
+    Y: float,
+    Z: float,
+    illuminant_xyz: tuple[float, float, float] | None = None,
+) -> tuple[int, int, int]:
+    """XYZ → gamut-clipped sRGB for display, returned as BGR.
+
+    Reflectance/transmittance XYZ is under the captured illuminant. sRGB assumes
+    D65-relative tristimulus, so when ``illuminant_xyz`` is the white under that
+    same model (unity R/T or illumination white-level reference), Bradford CAT to
+    D65 is applied before ``XYZ_to_sRGB``.
+    """
     try:
+        xyz = np.array([X, Y, Z], dtype=float) / 100.0
+        if _COLOUR and illuminant_xyz is not None:
+            src_w = np.asarray(illuminant_xyz, dtype=float) / 100.0
+            d65_xy = colour.CCS_ILLUMINANTS["CIE 1964 10 Degree Standard Observer"]["D65"]
+            dst_w = colour.xy_to_XYZ(d65_xy)
+            xyz = colour.chromatic_adaptation(xyz, src_w, dst_w, method="Von Kries")
         if _COLOUR:
             with colour.domain_range_scale("1"):
-                rgb = np.asarray(colour.XYZ_to_sRGB(np.array([X, Y, Z]) / 100.0),
-                                 dtype=float)
+                rgb = np.asarray(colour.XYZ_to_sRGB(xyz), dtype=float)
         else:
-            xyz = np.array([X, Y, Z]) / 100.0
             M = np.array([[ 3.2406, -1.5372, -0.4986],
                           [-0.9689,  1.8758,  0.0415],
                           [ 0.0557, -0.2040,  1.0570]])
@@ -92,10 +109,14 @@ def render_color_preview(
     height: int,
     xyz: tuple[float, float, float] | None,
     info_lines: list[str] | None = None,
+    illuminant_xyz: tuple[float, float, float] | None = None,
 ) -> np.ndarray:
     """Solid color fill from XYZ for the preview strip, with optional text."""
     img = np.zeros((height, width, 3), dtype=np.uint8)
-    img[:] = xyz_to_display_bgr(*xyz) if xyz is not None else (20, 20, 20)
+    if xyz is not None:
+        img[:] = xyz_to_display_bgr(*xyz, illuminant_xyz)
+    else:
+        img[:] = (20, 20, 20)
 
     for i, line in enumerate(info_lines or []):
         y = 15 + i * 18
@@ -169,6 +190,7 @@ def render_swatch_grid(
     current_xyz_lab: tuple[tuple[float, float, float], tuple[float, float, float]] | None = None,
     current_wavelengths: np.ndarray | None = None,
     current_spectrum: np.ndarray | None = None,
+    current_illuminant_xyz: tuple[float, float, float] | None = None,
     cols: int = GRID_COLS,
     rows: int = GRID_ROWS,
 ) -> np.ndarray:
@@ -189,6 +211,7 @@ def render_swatch_grid(
             X=X, Y=Y, Z=Z, L=L, a=a, b=b, mode="+",
             wavelengths=current_wavelengths if current_wavelengths is not None else np.array([]),
             spectrum=current_spectrum if current_spectrum is not None else np.array([]),
+            illuminant_xyz=current_illuminant_xyz,
         )
         _draw_cell(img, (n % cols) * sw, (n // cols) * sh, sw, sh,
                    pending, is_pending=True)

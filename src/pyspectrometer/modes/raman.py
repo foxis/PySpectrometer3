@@ -143,7 +143,8 @@ class RamanMode(BaseMode):
             ctx.last_data.peaks,
         )
         metadata.update(markers_peaks)
-        measured = getattr(self, "_last_measured_pre_correction", None) or ctx.last_raw_intensity
+        measured_pre = getattr(self, "_last_measured_pre_correction", None)
+        measured = measured_pre if measured_pre is not None else ctx.last_raw_intensity
         ctx.save_snapshot(
             ctx.last_data,
             metadata=metadata,

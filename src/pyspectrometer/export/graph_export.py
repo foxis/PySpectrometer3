@@ -64,6 +64,8 @@ class ViewExportRequest:
     # Color Science: optional CIE values for annotation + sRGB patch
     xyz: tuple[float, float, float] | None = None
     cie_lab: tuple[float, float, float] | None = None
+    # Bradford CAT source white (same basis as xyz) for sRGB patch in refl/trans/illum+WL
+    illuminant_xyz: tuple[float, float, float] | None = None
 
 
 @dataclass
@@ -244,7 +246,7 @@ def export_view_vector(req: ViewExportRequest) -> Path:
         if req.xyz is not None:
             from ..colorscience.swatches import xyz_to_display_bgr
 
-            bgr = xyz_to_display_bgr(*req.xyz)
+            bgr = xyz_to_display_bgr(*req.xyz, req.illuminant_xyz)
             rgb = (bgr[2] / 255.0, bgr[1] / 255.0, bgr[0] / 255.0)
             ax_patch = ax.inset_axes([0.02, 0.62, 0.12, 0.28])
             ax_patch.imshow(np.full((1, 1, 3), rgb, dtype=float), aspect="auto")
