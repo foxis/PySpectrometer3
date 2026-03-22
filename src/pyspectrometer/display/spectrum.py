@@ -107,7 +107,7 @@ class SpectrogramRenderer:
             idx = max(0, min(n - 1, int(round(data_x))))
             wl_idx = min(idx, n_wl - 1)
             bgr = rgb_to_bgr(wavelength_to_rgb(round(float(data.wavelengths[wl_idx]))))
-            val = float(intensity[idx])
+            val = max(0.0, min(1.0, float(intensity[idx])))
             image[:, x] = tuple(int(c * val) for c in bgr)
         return image
 

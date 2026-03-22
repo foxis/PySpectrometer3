@@ -11,18 +11,38 @@ Features:
 
 import math
 import time
-from dataclasses import dataclass
+from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..core.spectrum import SpectrumData
+    from ..csv_viewer.loader import LoadedCsv
 import numpy as np
 
 from ..core.mode_context import ModeContext
+from ..core.spectrum_overlay import (
+    SpectrumOverlay,
+    overlay_display_intensity,
+    overlay_from_loaded_csv,
+)
+from ..csv_viewer.loader import load_csv
 from ..export.csv_exporter import build_absorption_metadata, build_markers_peaks_metadata
+from ..export.csv_exporter import _slugify as export_slugify
 from ..processing.reference_correction import apply_dark_white_correction
 from ..utils.graph_scale import scale_intensity_to_graph
 from .base import BaseMode, ButtonDefinition, ModeType
+
+# Load+ overlay line colours (BGR)
+_EXTRA_OVERLAY_BGR: tuple[tuple[int, int, int], ...] = (
+    (255, 255, 100),
+    (255, 180, 100),
+    (180, 255, 255),
+    (200, 130, 255),
+    (100, 255, 100),
+    (255, 100, 200),
+)
 
 
 @dataclass
@@ -51,7 +71,8 @@ class MeasurementState:
 
     # Loaded spectrum info
     loaded_spectrum_name: str = ""
-    load_as: str = "overlay"  # overlay, black, white
+    # Load+ overlays (raw SPD columns; display follows S toggle)
+    extra_overlays: list[SpectrumOverlay] = field(default_factory=list)
 
 
 class MeasurementMode(BaseMode):
@@ -76,8 +97,12 @@ class MeasurementMode(BaseMode):
         self.register_callback("set_white", lambda: self._on_set_white(ctx))
         self.register_callback("clear_refs", lambda: self._on_clear_refs(ctx))
         self.register_callback("save", lambda: self._on_save(ctx))
+        self.register_callback("export_vector", lambda: self._on_export_vector(ctx))
+        self.register_callback("export_pdf", lambda: self._on_export_pdf(ctx))
         self.register_callback("load", lambda: self._on_load(ctx))
-        self.register_callback("cycle_load_as", lambda: self._on_cycle_load_as(ctx))
+        self.register_callback("load_overlay_csv", lambda: self._on_load_overlay(ctx))
+        self.register_callback("push_overlay", lambda: self._on_push_overlay(ctx))
+        self.register_callback("clear_overlay_csv", lambda: self._on_clear_overlay_csv(ctx))
         self.register_callback("show_reference", lambda: self._on_toggle_show_reference(ctx))
         self.register_callback("normalize", lambda: self._on_toggle_normalize(ctx))
         self.register_callback("show_raw_overlay", lambda: self._on_toggle_raw_overlay(ctx))
@@ -87,7 +112,6 @@ class MeasurementMode(BaseMode):
         self.register_callback("clear_markers", lambda: self._on_clear_markers(ctx))
         self.register_callback("clear_all", lambda: self._on_clear_all(ctx))
         self.register_callback("show_peak_delta", lambda: self._on_toggle_peak_delta(ctx))
-        self.register_callback("export_csv", lambda: self._on_export_csv(ctx))
 
     def _on_toggle_peak_delta(self, ctx: ModeContext) -> None:
         """Toggle peak/marker width (FWHM) below wavelength label."""
@@ -112,10 +136,6 @@ class MeasurementMode(BaseMode):
         ctx.display.clear_peak_include_region()
         print("[MARKERS] Markers and peak region cleared")
 
-    def _on_export_csv(self, ctx: ModeContext) -> None:
-        """Export current spectrum to CSV (same as Save: CSV + PNG)."""
-        self._on_save(ctx)
-
     def _on_capture(self, ctx: ModeContext) -> None:
         """Toggle freeze (like calibration Play): active = live (red circle), inactive = frozen (gray square). Click when live → freeze; when frozen → unfreeze."""
         btn = ctx.display.control_bar.get_button("capture")
@@ -128,7 +148,9 @@ class MeasurementMode(BaseMode):
             assert frozen
             ctx.frozen_spectrum = True
             ctx.frozen_intensity = (
-                ctx.last_raw_intensity.copy()
+                ctx.last_intensity_accumulated.copy()
+                if ctx.last_intensity_accumulated is not None
+                else ctx.last_raw_intensity.copy()
                 if ctx.last_raw_intensity is not None
                 else ctx.last_data.intensity.copy()
             )
@@ -213,11 +235,8 @@ class MeasurementMode(BaseMode):
         ctx.display.set_button_active("normalize", False)
         ctx.display.set_button_active("show_raw_overlay", False)
 
-    def _on_save(self, ctx: ModeContext) -> None:
-        """Handle save button."""
-        if ctx.last_data is None:
-            print("[SAVE] No spectrum data available")
-            return
+    def snapshot_metadata(self, ctx: ModeContext) -> dict:
+        """CSV/PDF/graph header fields (same keys as spectrum save). Note may be empty."""
         light_on = self.state.lamp_enabled
         led_pct = ctx.display.get_led_intensity_value() if light_on else None
         pwm_log = (
@@ -239,6 +258,8 @@ class MeasurementMode(BaseMode):
             "White_acq": self.meas_state.white_acq or None,
             "Note": "",
         }
+        if ctx.last_data is None:
+            return metadata
         markers_peaks = build_markers_peaks_metadata(
             ctx.display.state.marker_lines,
             ctx.last_data.wavelengths,
@@ -246,38 +267,127 @@ class MeasurementMode(BaseMode):
             ctx.last_data.peaks,
         )
         metadata.update(markers_peaks)
-        measured = getattr(self, "_last_measured_pre_correction", None) or ctx.last_raw_intensity
         if (
             self.meas_state.white_spectrum is not None
-            and measured is not None
+            and ctx.last_intensity_accumulated is not None
         ):
             absorption_meta = build_absorption_metadata(
-                measured,
+                ctx.last_intensity_accumulated,
                 self.meas_state.dark_spectrum,
                 self.meas_state.white_spectrum,
             )
             metadata.update(absorption_meta)
+        return metadata
+
+    def _on_save(self, ctx: ModeContext) -> None:
+        """Handle save button."""
+        if ctx.last_data is None:
+            print("[SAVE] No spectrum data available")
+            return
+        metadata = self.snapshot_metadata(ctx)
+        wl = ctx.last_data.wavelengths
+        extras = self.overlay_export_columns(ctx, wl)
+        extra_spectra = [(name, wl, sp) for name, sp in extras] if extras else None
         ctx.save_snapshot(
             ctx.last_data,
             dark_intensity=self.meas_state.dark_spectrum,
             white_intensity=self.meas_state.white_spectrum,
             metadata=metadata,
-            measured_raw_intensity=measured,
+            extra_spectra=extra_spectra,
         )
 
-    def _on_cycle_load_as(self, ctx: ModeContext) -> None:
-        """Cycle load target: overlay -> black -> white -> overlay."""
-        order = ["overlay", "black", "white"]
-        idx = order.index(self.meas_state.load_as)
-        self.meas_state.load_as = order[(idx + 1) % len(order)]
-        ctx.display.set_status("LoadAs", self.meas_state.load_as.capitalize())
-        print(f"[LOAD] Load as: {self.meas_state.load_as}")
+    def _on_export_vector(self, ctx: ModeContext) -> None:
+        """SVG/EPS export of the current graph view."""
+        ctx.export_vector_graph()
+
+    def _on_export_pdf(self, ctx: ModeContext) -> None:
+        """Multi-page PDF report (metadata + curves)."""
+        ctx.export_pdf_report()
 
     def _on_load(self, ctx: ModeContext) -> None:
-        """Load spectrum into overlay, black, or white per load_as."""
-        print(
-            f"[LOAD] Load spectrum as {self.meas_state.load_as} (file dialog not implemented yet)"
+        """Load a CSV spectrum as a reference overlay.
+
+        Applies the CSV's own sensitivity curve (or falls back to the engine),
+        and applies the UI's dark/white references if they are set.
+        """
+        path_str = _pick_csv_file()
+        if not path_str:
+            return
+
+        try:
+            loaded = load_csv(Path(path_str))
+        except Exception as exc:
+            print(f"[LOAD] Failed to read {path_str}: {exc}")
+            return
+
+        if ctx.last_data is None:
+            print("[LOAD] No current wavelength range available")
+            return
+
+        target_wl = np.asarray(ctx.last_data.wavelengths, dtype=np.float64)
+        trace = _trace_from_loaded_csv(loaded, target_wl, ctx, self.meas_state)
+
+        name = Path(path_str).stem
+        self.set_reference_spectrum(trace, name)
+        ctx.display.state.reference_spectrum = self.meas_state.reference_spectrum.copy()
+        ctx.display.state.reference_name = name
+        self.meas_state.show_reference = True
+        ctx.display.set_button_active("show_reference", True)
+        print(f"[LOAD] Overlay loaded: {Path(path_str).name}")
+
+    def _on_load_overlay(self, ctx: ModeContext) -> None:
+        """Add a CSV trace as Load+ (does not replace Ref from Load)."""
+        from ..csv_viewer.loader import load_csv
+
+        path_str = _pick_csv_file()
+        if not path_str:
+            return
+        try:
+            loaded = load_csv(Path(path_str))
+        except Exception as exc:
+            print(f"[LOAD+] Failed to read {path_str}: {exc}")
+            return
+        if ctx.last_data is None:
+            print("[LOAD+] No current wavelength range available")
+            return
+        label = Path(path_str).stem
+        self.meas_state.extra_overlays.append(overlay_from_loaded_csv(loaded, label))
+        ctx.display.set_button_disabled("clear_overlay_csv", False)
+        print(f"[LOAD+] Added overlay: {Path(path_str).name}")
+
+    def _on_push_overlay(self, ctx: ModeContext) -> None:
+        """Snapshot current live SPD as Load+ (same ``SpectrumOverlay`` storage as Load+ CSV)."""
+        if ctx.last_data is None:
+            print("[Cap+] No current spectrum")
+            return
+        acc = ctx.last_intensity_accumulated
+        if acc is None:
+            print("[Cap+] No accumulated intensity")
+            return
+        wl = np.asarray(ctx.last_data.wavelengths, dtype=np.float64)
+        n = len(wl)
+        measured = np.asarray(acc, dtype=np.float64).ravel()[:n]
+        if measured.size < n:
+            measured = np.pad(measured, (0, n - int(measured.size)))
+        stamp = datetime.now(timezone.utc).strftime("%H%M%S_%f")
+        label = f"Cap_{stamp}"
+        self.meas_state.extra_overlays.append(
+            SpectrumOverlay(
+                label=label,
+                source_wavelengths=wl.copy(),
+                measured=measured.copy(),
+                dark=None,
+                white=None,
+                sensitivity=None,
+            )
         )
+        ctx.display.set_button_disabled("clear_overlay_csv", False)
+        print(f"[Cap+] Added overlay: {label}")
+
+    def _on_clear_overlay_csv(self, ctx: ModeContext) -> None:
+        """Clear Load+ traces only."""
+        self.meas_state.extra_overlays.clear()
+        ctx.display.set_button_disabled("clear_overlay_csv", True)
 
     def _on_toggle_show_reference(self, ctx: ModeContext) -> None:
         """Toggle reference overlay."""
@@ -322,17 +432,22 @@ class MeasurementMode(BaseMode):
             self.meas_state.show_absorption = False
             ctx.display.set_button_active("show_absorption", False)
         ctx.display.set_button_active("show_absorption", self.meas_state.show_absorption)
+        ctx.display.set_button_disabled(
+            "clear_overlay_csv",
+            len(self.meas_state.extra_overlays) == 0,
+        )
         ctx.display.state.graph_click_behavior = (
             "marker" if not ctx.display.state.peaks_visible else "default"
         )
+        wl = processed.wavelengths
         if self.meas_state.show_raw_overlay:
-            ctx.display.set_raw_overlays(
-                self._build_raw_overlays(ctx, processed.wavelengths, graph_height)
-            )
+            raw_list = self._build_raw_overlays(ctx, wl, graph_height)
+            raw_list.extend(self._build_extra_overlay_polylines(wl, ctx))
+            ctx.display.set_raw_overlays(raw_list)
             ctx.display.set_mode_overlay(None)
         else:
-            ctx.display.set_raw_overlays([])
-            overlay = self.get_overlay(processed.wavelengths, graph_height)
+            ctx.display.set_raw_overlays(self._build_extra_overlay_polylines(wl, ctx))
+            overlay = self.get_overlay(wl, graph_height)
             ctx.display.set_mode_overlay(overlay)
         ctx.display.set_sensitivity_overlay(None)
         for key, value in self.get_status().items():
@@ -359,50 +474,57 @@ class MeasurementMode(BaseMode):
         white_set = self.meas_state.white_spectrum is not None
         ctx.display.set_button_disabled("show_absorption", not white_set)
         ctx.display.set_button_active("show_absorption", self.meas_state.show_absorption)
+        ctx.display.set_button_disabled(
+            "clear_overlay_csv",
+            len(self.meas_state.extra_overlays) == 0,
+        )
 
     def get_buttons(self) -> list[ButtonDefinition]:
         """Get measurement mode buttons. Grouped with gaps; Quit right-aligned."""
         return [
             # Row 1: Rec (capture + progress) | Avg/Max/Acc | Dark/White | Bars | ZX/ZY | VIEW
             ButtonDefinition("Rec", "capture", is_toggle=True, row=1, icon_type="playback"),
-            ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=1),
+            ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=1, icon_type="sensitivity"),
             ButtonDefinition("__gap__", "__gap__", row=1),
-            ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=1),
-            ButtonDefinition("Max", "capture_peak", is_toggle=True, shortcut="h", row=1),
-            ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=1),
+            ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=1, icon_type="avg"),
+            ButtonDefinition("Max", "capture_peak", is_toggle=True, shortcut="h", row=1, icon_type="peak_hold"),
+            ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=1, icon_type="acc"),
             ButtonDefinition("__gap__", "__gap__2", row=1),
-            ButtonDefinition("Dark", "set_dark", is_toggle=True, row=1),
-            ButtonDefinition("White", "set_white", is_toggle=True, row=1),
-            ButtonDefinition("ABS", "show_absorption", is_toggle=True, row=1),
+            ButtonDefinition("Drk", "set_dark", is_toggle=True, row=1, icon_type="dark"),
+            ButtonDefinition("Wht", "set_white", is_toggle=True, row=1, icon_type="white"),
+            ButtonDefinition("ABS", "show_absorption", is_toggle=True, row=1, icon_type="absorption"),
             ButtonDefinition("__gap__", "__gap__3", row=1),
-            ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=1),
+            ButtonDefinition("Brs", "show_spectrum_bars", is_toggle=True, row=1, icon_type="bars"),
             ButtonDefinition("__gap__", "__gap__4", row=1),
-            ButtonDefinition("ZX", "show_zoom_x_slider", is_toggle=True, row=1),
-            ButtonDefinition("ZY", "show_zoom_y_slider", is_toggle=True, row=1),
+            ButtonDefinition("ZX", "show_zoom_x_slider", is_toggle=True, row=1, icon_type="zoom_x"),
+            ButtonDefinition("ZY", "show_zoom_y_slider", is_toggle=True, row=1, icon_type="zoom_y"),
             ButtonDefinition("__gap__", "__gap__5", row=1),
-            ButtonDefinition("VIEW", "cycle_preview", shortcut="v", row=1),
+            ButtonDefinition("VIEW", "cycle_preview", shortcut="v", row=1, icon_type="eye"),
+            ButtonDefinition("__spacer__", "__spacer_right__", row=1),
+            ButtonDefinition("Quit", "quit", row=1, icon_type="quit"),
             # Row 2: Lamp | Peaks/Snap/Pkd/Clr | Ref | G/E/AG/AE | Save/Load | Export | spacer | Quit
-            ButtonDefinition("Lamp", "lamp_toggle", is_toggle=True, row=2),
+            ButtonDefinition("Lamp", "lamp_toggle", is_toggle=True, row=2, icon_type="lamp"),
             ButtonDefinition("__gap__", "__gap__6", row=2),
-            ButtonDefinition("Peaks", "show_peaks", is_toggle=True, row=2),
-            ButtonDefinition("Snap", "snap_to_peaks", is_toggle=True, row=2),
-            ButtonDefinition("Pkd", "show_peak_delta", is_toggle=True, row=2),
-            ButtonDefinition("Clr", "clear_all", shortcut="z", row=2),
+            ButtonDefinition("Pks", "show_peaks", is_toggle=True, row=2, icon_type="peaks"),
+            ButtonDefinition("Snp", "snap_to_peaks", is_toggle=True, row=2, icon_type="snap"),
+            ButtonDefinition("Pkd", "show_peak_delta", is_toggle=True, row=2, icon_type="delta"),
+            ButtonDefinition("Clr", "clear_all", shortcut="z", row=2, icon_type="clear"),
             ButtonDefinition("__gap__", "__gap__7", row=2),
-            ButtonDefinition("Ref", "show_reference", is_toggle=True, row=2),
-            ButtonDefinition("Overlay", "show_raw_overlay", is_toggle=True, row=2),
+            ButtonDefinition("Ref", "show_reference", is_toggle=True, row=2, icon_type="reference"),
+            ButtonDefinition("Ovrl", "show_raw_overlay", is_toggle=True, row=2, icon_type="overlay"),
             ButtonDefinition("__gap__", "__gap__8", row=2),
-            ButtonDefinition("G", "show_gain_slider", is_toggle=True, row=2),
-            ButtonDefinition("E", "show_exposure_slider", is_toggle=True, row=2),
-            ButtonDefinition("AG", "auto_gain", is_toggle=True, row=2),
-            ButtonDefinition("AE", "auto_exposure", is_toggle=True, row=2),
+            ButtonDefinition("G", "show_gain_slider", is_toggle=True, row=2, icon_type="gain"),
+            ButtonDefinition("E", "show_exposure_slider", is_toggle=True, row=2, icon_type="exposure"),
+            ButtonDefinition("AG", "auto_gain", is_toggle=True, row=2, icon_type="auto_gain"),
+            ButtonDefinition("AE", "auto_exposure", is_toggle=True, row=2, icon_type="auto_exposure"),
             ButtonDefinition("__gap__", "__gap__9", row=2),
-            ButtonDefinition("Save", "save", shortcut="s", row=2),
-            ButtonDefinition("Load", "load", row=2),
-            ButtonDefinition("__gap__", "__gap__10", row=2),
-            ButtonDefinition("Export", "export_csv", row=2),
-            ButtonDefinition("__spacer__", "__spacer_right__", row=2),
-            ButtonDefinition("Quit", "quit", row=2),
+            ButtonDefinition("Save", "save", shortcut="s", row=2, icon_type="save"),
+            ButtonDefinition("SVG", "export_vector", shortcut="g", row=2),
+            ButtonDefinition("Pdf", "export_pdf", shortcut="p", row=2, icon_type="pdf"),
+            ButtonDefinition("Load", "load", row=2, icon_type="load"),
+            ButtonDefinition("Load+", "load_overlay_csv", row=2, icon_type="load_plus"),
+            ButtonDefinition("Cap+", "push_overlay", row=2, icon_type="acc"),
+            ButtonDefinition("ClrOv", "clear_overlay_csv", row=2, icon_type="clear"),
         ]
 
     def process_spectrum(
@@ -482,6 +604,59 @@ class MeasurementMode(BaseMode):
         for arr, color in spectra:
             norm = np.clip(arr / global_max, 0, 1).astype(np.float32)
             out.append((norm, color))
+        return out
+
+    def overlay_export_columns(
+        self,
+        ctx: ModeContext,
+        wavelengths: np.ndarray,
+    ) -> list[tuple[str, np.ndarray]]:
+        """Extra CSV columns for Load+ traces (matches graph for current S toggle)."""
+        wl = np.asarray(wavelengths, dtype=np.float64)
+        rows: list[tuple[str, np.ndarray]] = []
+        sens_on = ctx.sensitivity_correction_enabled
+        dk = self.meas_state.dark_spectrum
+        wh = self.meas_state.white_spectrum
+        for ov in self.meas_state.extra_overlays:
+            col = overlay_display_intensity(
+                ov,
+                wl,
+                ctx,
+                sensitivity_enabled=sens_on,
+                dark_session=dk,
+                white_session=wh,
+            )
+            slug = export_slugify(ov.label) or "overlay"
+            rows.append((f"Overlay_{slug}", np.asarray(col, dtype=np.float64)))
+        return rows
+
+    def _build_extra_overlay_polylines(
+        self,
+        wavelengths: np.ndarray,
+        ctx: ModeContext,
+    ) -> list[tuple[np.ndarray, tuple[int, int, int]]]:
+        """Load+ traces in the same units as the main measurement line."""
+        n = len(wavelengths)
+        out: list[tuple[np.ndarray, tuple[int, int, int]]] = []
+        sens_on = ctx.sensitivity_correction_enabled
+        dk = self.meas_state.dark_spectrum
+        wh = self.meas_state.white_spectrum
+        wl = np.asarray(wavelengths, dtype=np.float64)
+        for i, ov in enumerate(self.meas_state.extra_overlays):
+            row = overlay_display_intensity(
+                ov,
+                wl,
+                ctx,
+                sensitivity_enabled=sens_on,
+                dark_session=dk,
+                white_session=wh,
+            )
+            if len(row) != n:
+                row = np.asarray(row, dtype=np.float32).ravel()[:n]
+                if len(row) < n:
+                    row = np.pad(row, (0, n - len(row)))
+            color = _EXTRA_OVERLAY_BGR[i % len(_EXTRA_OVERLAY_BGR)]
+            out.append((row.astype(np.float32), color))
         return out
 
     def get_overlay(
@@ -568,18 +743,57 @@ class MeasurementMode(BaseMode):
             status["Ref"] = self.meas_state.loaded_spectrum_name or "SET"
         if self.meas_state.show_absorption:
             status["ABS"] = "ON"
-        status["LoadAs"] = self.meas_state.load_as.capitalize()
 
         if self.state.integration_mode != "none":
             status[self.state.integration_mode.capitalize()] = str(self.state.accumulated_frames)
 
+        n_extra = len(self.meas_state.extra_overlays)
+        if n_extra:
+            status["Ov+"] = str(n_extra)
+
         return status
 
 
+def _trace_from_loaded_csv(
+    loaded: "LoadedCsv",
+    target_wl: np.ndarray,
+    ctx: ModeContext,
+    meas_state: MeasurementState,
+) -> np.ndarray:
+    """Interpolate CSV to current axis; dark/white + sensitivity match Load+ rules."""
+    ov = overlay_from_loaded_csv(loaded, "")
+    return overlay_display_intensity(
+        ov,
+        np.asarray(target_wl, dtype=np.float64),
+        ctx,
+        sensitivity_enabled=ctx.sensitivity_correction_enabled,
+        dark_session=meas_state.dark_spectrum,
+        white_session=meas_state.white_spectrum,
+    )
+
+
+def _pick_csv_file() -> str:
+    """Show an OS file-open dialog and return the chosen path, or empty string."""
+    import tkinter as tk
+    from tkinter import filedialog
+
+    root = tk.Tk()
+    root.withdraw()
+    root.lift()
+    root.attributes("-topmost", True)
+    path = filedialog.askopenfilename(
+        title="Load spectrum overlay",
+        filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        parent=root,
+    )
+    root.destroy()
+    return path
+
+
 def _get_raw(ctx: ModeContext) -> np.ndarray | None:
-    """Get the most recent raw spectrum intensity."""
+    """Return post-accumulation, pre-dark/white intensity for dark/white capture."""
+    if ctx.last_intensity_accumulated is not None:
+        return ctx.last_intensity_accumulated
     if ctx.last_raw_intensity is not None:
         return ctx.last_raw_intensity
-    if ctx.last_data is not None:
-        return ctx.last_data.intensity
     return None

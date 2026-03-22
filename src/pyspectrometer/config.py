@@ -44,21 +44,54 @@ def load_config(path: Path | None = None) -> tuple["Config", Path | None]:
     return config, None
 
 
+def default_main_config_path() -> Path:
+    """Canonical path for the main (measurement) config."""
+    return (Path.home() / ".config" / "pyspectrometer" / "config.toml").resolve()
+
+
+def csv_viewer_config_path() -> Path:
+    """Canonical path for the CSV viewer config (separate from main config)."""
+    return (Path.home() / ".config" / "pyspectrometer" / "csv_viewer.toml").resolve()
+
+
+def load_csv_viewer_config() -> tuple["Config", Path]:
+    """Load config for the CSV viewer.
+
+    Loads the main config as baseline (calibration, sensitivity, processing),
+    then overlays any previously-saved CSV viewer settings, then enforces the
+    CSV viewer display preset.  Saves always go to csv_viewer.toml so the main
+    config (used by measure/calibrate modes) is never touched.
+
+    Returns:
+        (config, save_path) where save_path is csv_viewer_config_path().
+    """
+    config, _ = load_config(None)
+    config.apply_csv_viewer_preset()
+
+    csv_path = csv_viewer_config_path()
+    if csv_path.exists():
+        with open(csv_path, "rb") as f:
+            data = tomllib.load(f)
+        _apply_config(config, data)
+        config.apply_csv_viewer_preset()
+
+    return config, csv_path
+
+
 def save_config(config: "Config", config_path: Path | None) -> bool:
     """Write config to file including calibration data.
 
-    Always saves to user config directory (~/.config/pyspectrometer/config.toml)
-    so project directory is not polluted. config_path is ignored for write location.
+    Saves to *config_path* when provided, otherwise to the default main config
+    location (~/.config/pyspectrometer/config.toml).
 
     Args:
-        config: Config to save
-        config_path: Ignored; kept for API compatibility.
+        config: Config to save.
+        config_path: Explicit destination path. None → default main config.
 
     Returns:
-        True if saved successfully
+        True if saved successfully.
     """
-    path = Path.home() / ".config" / "pyspectrometer" / "config.toml"
-    path = path.expanduser().resolve()
+    path = config_path.resolve() if config_path else default_main_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     doc = _config_to_dict(config)
     try:

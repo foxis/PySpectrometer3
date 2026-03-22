@@ -39,3 +39,37 @@ def prompt_calibrate() -> None:
         root.destroy()
     except Exception:
         print("Calibration data could not be loaded. Run: poetry run calibrate")
+
+
+def prompt_save_file_path(
+    title: str,
+    defaultextension: str,
+    filetypes: list[tuple[str, str]],
+    *,
+    initialdir: str | None = None,
+    initialfile: str | None = None,
+) -> str | None:
+    """Native save dialog; returns path string or None if cancelled."""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.lift()
+        root.attributes("-topmost", True)
+        kwargs: dict[str, str] = {
+            "title": title,
+            "defaultextension": defaultextension,
+            "filetypes": filetypes,
+            "parent": root,
+        }
+        if initialdir:
+            kwargs["initialdir"] = initialdir
+        if initialfile:
+            kwargs["initialfile"] = initialfile
+        path = filedialog.asksaveasfilename(**kwargs)
+        root.destroy()
+        return path if path else None
+    except Exception:
+        return None

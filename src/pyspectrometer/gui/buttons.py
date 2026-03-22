@@ -7,6 +7,8 @@ from enum import Enum, auto
 import cv2
 import numpy as np
 
+from . import icons as _icons
+
 
 class ButtonState(Enum):
     """Visual state of a button."""
@@ -139,6 +141,8 @@ class Button:
                     cv2.circle(image, (cx, cy), max(2, r), (80, 80, 80), 1)
                 else:
                     cv2.circle(image, (cx, cy), max(2, r), (0, 0, 255), -1)
+        elif self.icon_type and _icons.draw(image, x1, y1, self.width, self.height, self.icon_type, fg):
+            pass  # icon drawn successfully
         else:
             display_text = self.label
             font = cv2.FONT_HERSHEY_SIMPLEX
@@ -236,11 +240,15 @@ class ButtonBar:
             The created button
         """
         if width is None:
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            (text_w, _), _ = cv2.getTextSize(
-                label, font, self.style.font_scale, self.style.font_thickness
-            )
-            width = text_w + self.style.padding_x * 2
+            if icon_type and icon_type != "playback" and _icons.known(icon_type):
+                # Square button for icon-only rendering
+                width = self.height
+            else:
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                (text_w, _), _ = cv2.getTextSize(
+                    label, font, self.style.font_scale, self.style.font_thickness
+                )
+                width = text_w + self.style.padding_x * 2
 
         button = Button(
             label=label,

@@ -142,14 +142,23 @@ def view_csv() -> int:
             config_arg = sys.argv[i + 1]
             break
 
-    from .config import load_config
+    from .config import load_csv_viewer_config
     from .csv_viewer.spectrometer import CsvViewerSpectrometer
 
-    config, _ = load_config(Path(config_arg) if config_arg else None)
+    if config_arg:
+        from .config import load_config
+        config, _ = load_config(Path(config_arg))
+        config.apply_csv_viewer_preset()
+        from .config import csv_viewer_config_path
+        save_path = csv_viewer_config_path()
+    else:
+        config, save_path = load_csv_viewer_config()
+
     try:
         viewer = CsvViewerSpectrometer(
             Path(csv_path_arg) if csv_path_arg else None,
             config=config,
+            config_path=save_path,
         )
         viewer.run()
         return 0

@@ -155,8 +155,8 @@ class SpectrumExtractor:
         y_end = min(gray.shape[0], self.spectrum_y_center + half_perp + 1)
         roi = gray[y_start:y_end, :]
         # Max in spectrum strip (AE for spectrum); max in full frame (AE for preview).
-        max_in_roi = np.float32(np.max(roi) / max_val_used)
-        max_in_frame = np.float32(np.max(gray) / max_val_used)
+        max_in_roi = np.float32(roi.max() / max_val_used) if roi.size > 0 else np.float32(0)
+        max_in_frame = np.float32(gray.max() / max_val_used) if gray.size > 0 else np.float32(0)
 
         # Use rotated frame for preview so lines appear straight
         cropped = self._create_cropped_preview(rotated_frame)
@@ -337,7 +337,13 @@ class SpectrumExtractor:
 
     def _create_cropped_preview(self, frame: np.ndarray) -> np.ndarray:
         """Create cropped preview region centered on spectrum. Uses spectrum_transform."""
+        if frame.size == 0:
+            return np.zeros((self.crop_height, self.frame_width, 3), dtype=np.uint8)
+
         cropped = crop_region(frame, self.spectrum_y_center, self.crop_height)
+
+        if cropped.size == 0:
+            return np.zeros((self.crop_height, self.frame_width, 3), dtype=np.uint8)
 
         # Convert monochrome to 3-channel for display
         if cropped.ndim == 2:

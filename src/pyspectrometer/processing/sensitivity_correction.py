@@ -150,10 +150,11 @@ class SensitivityCorrection:
         intensity: np.ndarray,
         wavelengths: np.ndarray,
     ) -> np.ndarray:
-        """Divide intensity by the sensitivity curve, normalised to its peak.
+        """Divide intensity by the sensitivity curve and renormalise to the input peak.
 
-        Normalising to the peak means the correction only reshapes the spectral
-        response — it does not change the overall brightness level.
+        Dividing by the peak-normalised sensitivity reshapes the spectral
+        response without clipping. Renormalising to the corrected peak
+        keeps the output in the same amplitude range as the input.
         """
         sensitivity = self.interpolate(wavelengths)
         if sensitivity is None:
@@ -171,6 +172,10 @@ class SensitivityCorrection:
         mask = sensitivity > 1e-6
         corrected[mask] = intensity_f[mask] / sensitivity[mask]
         corrected[~mask] = intensity_f[~mask]
+
+        corrected_peak = float(np.max(corrected))
+        if corrected_peak > 1e-6:
+            corrected /= corrected_peak
 
         return corrected
 

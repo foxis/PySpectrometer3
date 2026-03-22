@@ -38,6 +38,10 @@ def _noop_waterfall_save(*args: object, **kwargs: object) -> None:
     pass
 
 
+def _noop_export() -> None:
+    pass
+
+
 @dataclass
 class ModeContext:
     """Shared context passed to modes for implementing handlers.
@@ -64,12 +68,18 @@ class ModeContext:
     save_snapshot: Callable[..., None] = _noop_save
     # Save waterfall buffer (rows of raw SPD) with dark/white in comments; used by waterfall mode
     save_waterfall_snapshot: Callable[..., None] = _noop_waterfall_save
+    # Vector graph (SVG/EPS) and multi-page PDF report (measurement mode)
+    export_vector_graph: Callable[[], None] = _noop_export
+    export_pdf_report: Callable[[], None] = _noop_export
 
     # Frame state (orchestrator updates each frame; modes read)
     last_data: SpectrumData | None = None
     last_frame: np.ndarray | None = None
     last_intensity_pre_sensitivity: np.ndarray | None = None
-    last_raw_intensity: np.ndarray | None = None  # Pre-process_spectrum for dark capture
+    # Post-accumulation (avg/max/acc), pre-dark/white-correction raw intensity.
+    # Use this as the input for capturing dark/white references and for frozen-spectrum input.
+    last_intensity_accumulated: np.ndarray | None = None
+    last_raw_intensity: np.ndarray | None = None  # single-frame pre-accumulation raw
     last_raw_extraction_max: float = 0.0  # Max pixel in extraction ROI (0-1) for AE/AG
 
     # Mutable state (modes read/write; orchestrator reads for loop logic)

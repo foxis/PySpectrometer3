@@ -92,7 +92,65 @@ flowchart LR
 - **Waveshare 3.5"** — Optimized layout for touchscreen
 - **Fullscreen** — 800×480 for benchtop setups
 - **CSV export** — Spectrum data with metadata
+- **PDF report** — Measurement mode and **CSV viewer**: multi-page report (matplotlib); saved under the same dated directory as CSV (`output/<date>/spectrum-<time>[-label].pdf`), optional label like save
 - **CSV wavelength floor** — Measurement and Waterfall use `[export].min_wavelength` (nm, default **300**): points below that are omitted from CSV. Set to **0** for the full axis. Other modes use **0** on context; a mode can set `ctx.min_wavelength` in `on_start` to trim.
+
+#### Control bar (icon buttons)
+
+The bottom control bar uses **OpenCV-drawn icons** (no image assets or icon fonts) so it stays lightweight on a Raspberry Pi Zero and small displays. Each mode assigns an optional `icon_type` on `ButtonDefinition`; the bar renders **square** buttons when a known icon name is set, and **falls back to the text label** if `icon_type` is empty or unknown.
+
+- **Implementation** — `src/pyspectrometer/gui/icons.py` (draw functions + registry), `src/pyspectrometer/gui/buttons.py` (`Button.render`, auto width = height for known icons), `src/pyspectrometer/gui/control_bar.py` (spacer width uses the same square sizing).
+- **Special case** — `icon_type="playback"` is handled in `Button` (live red circle / frozen gray square / capture progress pie); it is not in the generic icon registry.
+- **Labels** — `label` on each `ButtonDefinition` is kept for logs and debugging; on-screen, known icons replace visible text.
+- **Text kept as-is** — Buttons whose meaning is a **proper name** (e.g. calibration reference sources **Hg**, **D65**, **FL12**, CSV viewer illuminant names) stay as short text.
+
+```mermaid
+flowchart LR
+  BD[ButtonDefinition]
+  IT{icon_type set?}
+  KN{Known in icons.py?}
+  SQ[Square button + draw icon]
+  TX[Text-sized button + putText]
+  BD --> IT
+  IT -->|no or empty| TX
+  IT -->|yes| KN
+  KN -->|yes| SQ
+  KN -->|no| TX
+```
+
+**Registered icon names** (add new ones in `icons.py` and wire them in the mode’s `get_buttons()`):
+
+| `icon_type` | Meaning |
+|-------------|---------|
+| `save` | Save / export to file |
+| `pdf` | PDF report (measurement mode; same output folder as CSV) |
+| `load` | Load from file |
+| `quit` | Exit application |
+| `sensitivity` | Spectral sensitivity correction (S-curve) |
+| `avg` | Averaging |
+| `peak_hold` | Peak hold / Max |
+| `acc` | Accumulation |
+| `dark` | Dark reference |
+| `white` | White reference |
+| `absorption` | Absorption view |
+| `bars` | Spectrum bars |
+| `zoom_x` | Horizontal zoom slider |
+| `zoom_y` | Vertical zoom slider |
+| `lamp` | Lamp / illuminant control |
+| `peaks` | Peak detection |
+| `snap` | Snap to peaks |
+| `delta` | Peak delta / separation |
+| `clear` | Clear / erase |
+| `reference` | Reference spectrum overlay |
+| `overlay` | Raw / stacked overlay |
+| `gain` | Gain slider |
+| `exposure` | Exposure |
+| `auto_gain` | Auto gain |
+| `auto_exposure` | Auto exposure |
+| `eye` | Cycle preview (camera vs graph) |
+| `calibrate` | Wavelength calibration / ruler |
+| `level` | Auto level |
+| `reset` | Reset calibration or sensitivity |
 
 ---
 
@@ -125,6 +183,7 @@ python3 -m pyspectrometer --waveshare --mode measurement
 |-----|--------|
 | `q` | Quit |
 | `s` | Save spectrum (PNG + CSV) |
+| `p` | Export PDF report (measurement mode; same folder as CSV) |
 | `h` | Toggle peak hold |
 | `m` | Toggle measure mode (wavelength cursor) |
 | `c` | Calibration (in Calibration mode) |

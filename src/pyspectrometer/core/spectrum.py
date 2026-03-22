@@ -53,6 +53,8 @@ class SpectrumData:
         cropped_frame: Optional cropped region used for spectrum extraction
         gain: Camera gain at capture (None if unknown or N/A)
         exposure_us: Camera exposure in µs at capture (None if unknown or N/A)
+        y_axis_intensity: Vertical autoscale source when set (e.g. SPD before sensitivity);
+            when None, Y range uses ``intensity`` min/max.
     """
 
     intensity: np.ndarray
@@ -64,6 +66,7 @@ class SpectrumData:
     x_axis_label: str = "Wavelength (nm)"
     gain: float | None = field(default=None, repr=False)
     exposure_us: int | None = field(default=None, repr=False)
+    y_axis_intensity: np.ndarray | None = field(default=None, repr=False)
 
     @property
     def width(self) -> int:
@@ -127,6 +130,7 @@ class SpectrumData:
             x_axis_label=self.x_axis_label,
             gain=self.gain,
             exposure_us=self.exposure_us,
+            y_axis_intensity=self.y_axis_intensity,
         )
 
     def with_peaks(self, peaks: list[Peak]) -> "SpectrumData":
@@ -141,6 +145,7 @@ class SpectrumData:
             x_axis_label=self.x_axis_label,
             gain=self.gain,
             exposure_us=self.exposure_us,
+            y_axis_intensity=self.y_axis_intensity,
         )
 
     def to_csv_rows(self) -> list[tuple[float, float]]:

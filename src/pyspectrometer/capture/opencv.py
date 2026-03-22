@@ -178,7 +178,10 @@ class Capture(CameraInterface):
         self._running = False
 
     def capture(self) -> np.ndarray:
-        """Capture one frame as 10-bit grayscale.
+        """Capture one valid frame as 10-bit grayscale.
+
+        Skips corrupt/empty frames (MJPG boundary errors, zero-size decodes)
+        until a real frame arrives. Never returns an invalid frame.
 
         Returns:
             2D uint16 array (height, width), values 0-1023.
@@ -186,13 +189,10 @@ class Capture(CameraInterface):
         if not self._running or self._cap is None:
             raise RuntimeError("Camera is not running. Call start() first.")
 
-        max_retries = 5
-        for attempt in range(max_retries):
+        while True:
             ret, frame = self._cap.read()
-            if ret and frame is not None:
+            if ret and frame is not None and frame.size > 0:
                 break
-            if attempt == max_retries - 1:
-                raise RuntimeError("Failed to read frame from camera after 5 retries")
 
         # Convert to grayscale if color
         if frame.ndim == 3:

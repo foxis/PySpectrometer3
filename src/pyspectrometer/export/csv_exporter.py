@@ -134,6 +134,8 @@ def _spectrum_data_with_mask(data: SpectrumData, mask: np.ndarray, n: int) -> Sp
     m = np.asarray(mask[:n], dtype=bool)
     wl = np.asarray(data.wavelengths[:n])
     iy = np.asarray(data.intensity[:n])
+    ya = getattr(data, "y_axis_intensity", None)
+    ya_trim = np.asarray(ya[:n], dtype=np.float32)[m] if ya is not None and len(ya) >= n else None
     kept = np.flatnonzero(m)
     old_to_new = {int(old_i): j for j, old_i in enumerate(kept)}
     new_peaks: list[Peak] = []
@@ -157,6 +159,7 @@ def _spectrum_data_with_mask(data: SpectrumData, mask: np.ndarray, n: int) -> Sp
         x_axis_label=data.x_axis_label,
         gain=data.gain,
         exposure_us=data.exposure_us,
+        y_axis_intensity=ya_trim,
     )
 
 
@@ -267,21 +270,15 @@ def build_sensitivity_for_export(
     wavelengths: np.ndarray,
     sens_cfg: "SensitivityConfig",
 ) -> tuple[np.ndarray | None, dict[str, str]]:
-    """Header strings and optional per-pixel sensitivity column for CSV export.
+    """Header strings and per-pixel sensitivity column when the engine can supply values.
 
-    When correction is off: no column; header states correction was not applied.
-    When on: column holds active curve (datasheet or user) at each wavelength.
+    The sensitivity *curve* is exported whenever available so archives always record
+    the sensor response; ``Sensitivity_correction_applied`` reflects the UI toggle for
+    the measured trace only.
     """
     meta: dict[str, str] = {}
-    if not correction_enabled:
-        meta["Sensitivity_correction_applied"] = "false"
-        meta["Sensitivity_curve_exported"] = "false"
-        meta["Sensitivity_curve"] = "not_applied"
-        meta["Sensitivity_calibration_reference"] = "n/a"
-        return None, meta
+    meta["Sensitivity_correction_applied"] = "true" if correction_enabled else "false"
 
-    meta["Sensitivity_correction_applied"] = "true"
-    meta["Sensitivity_curve_exported"] = "true"
     if sens_cfg.use_custom_curve and sens_cfg.custom_wavelengths:
         meta["Sensitivity_curve"] = "user_calibrated"
         ref = (sens_cfg.calibration_reference or "").strip()
@@ -291,19 +288,30 @@ def build_sensitivity_for_export(
         meta["Sensitivity_calibration_reference"] = "n/a"
 
     if engine is None:
+        meta["Sensitivity_curve_exported"] = "false"
         meta["Sensitivity_curve_values"] = "unavailable"
         return None, meta
 
     interpolate = getattr(engine, "interpolate", None)
     if not callable(interpolate):
+        meta["Sensitivity_curve_exported"] = "false"
         meta["Sensitivity_curve_values"] = "unavailable"
         return None, meta
 
-    sens = interpolate(np.asarray(wavelengths, dtype=np.float64))
+    wl_arr = np.asarray(wavelengths, dtype=np.float64)
+    sens = interpolate(wl_arr)
     if sens is None or len(sens) == 0:
-        meta["Sensitivity_curve_values"] = "unavailable"
-        return None, meta
+        datasheet = getattr(engine, "_interpolate_cmos_only", None)
+        if callable(datasheet):
+            sens = datasheet(wl_arr)
+        if sens is None or len(sens) == 0:
+            meta["Sensitivity_curve_exported"] = "false"
+            meta["Sensitivity_curve_values"] = "unavailable"
+            return None, meta
+        meta["Sensitivity_curve"] = "datasheet_CMOS_fallback"
+        meta["Sensitivity_calibration_reference"] = "n/a"
 
+    meta["Sensitivity_curve_exported"] = "true"
     return np.asarray(sens, dtype=np.float64), meta
 
 
@@ -395,6 +403,7 @@ class CSVExporter(ExporterInterface):
                 path,
                 reference_intensity,
                 metadata,
+                measured_raw_intensity=measured_raw_intensity,
                 sensitivity_intensity=sensitivity_intensity,
             )
 
@@ -528,9 +537,14 @@ class CSVExporter(ExporterInterface):
         reference_intensity: np.ndarray,
         metadata: "dict[str, Any] | None",
         *,
+        measured_raw_intensity: "np.ndarray | None" = None,
         sensitivity_intensity: np.ndarray | None = None,
     ) -> Path:
-        """Export calibration format with reference columns."""
+        """Export calibration format with reference columns.
+
+        Uses measured_raw_intensity (pre-sensitivity) for the intensity column when
+        provided; falls back to data.intensity only when nothing else is available.
+        """
         n = min(
             len(data.intensity),
             len(data.wavelengths),
@@ -539,6 +553,7 @@ class CSVExporter(ExporterInterface):
         meta = metadata.copy() if metadata else {}
         meta.setdefault("Mode", "Calibration")
         meta.setdefault("Date", time.strftime("%Y-%m-%d %H:%M:%S"))
+        measured = _align(measured_raw_intensity, n) if measured_raw_intensity is not None else None
         sens = _align(sensitivity_intensity, n) if sensitivity_intensity is not None else None
 
         with open(path, "w", newline="\n", encoding="utf-8") as f:
@@ -558,7 +573,10 @@ class CSVExporter(ExporterInterface):
             for i in range(n):
                 wl = float(data.wavelengths[i])
                 ref_val = float(reference_intensity[i]) if i < len(reference_intensity) else 0.0
-                intensity_val = float(data.intensity[i]) if i < len(data.intensity) else 0.0
+                if measured is not None and i < len(measured):
+                    intensity_val = float(measured[i])
+                else:
+                    intensity_val = float(data.intensity[i]) if i < len(data.intensity) else 0.0
                 row = [i, intensity_val, wl, ref_val, wl, intensity_val]
                 if sens is not None:
                     row.append(float(sens[i]))

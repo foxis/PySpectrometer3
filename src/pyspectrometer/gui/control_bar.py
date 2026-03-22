@@ -9,11 +9,15 @@ if TYPE_CHECKING:
 import cv2
 import numpy as np
 
+from . import icons as _icons
 from .buttons import Button, ButtonBar, ButtonState, ButtonStyle
 
 
-def _estimate_button_width(label: str, shortcut: str, style: ButtonStyle) -> int:
-    """Estimate button width from label (shortcut not displayed in button)."""
+def _estimate_button_width(label: str, shortcut: str, style: ButtonStyle,
+                           icon_type: str = "", row_height: int = 24) -> int:
+    """Estimate button width. Icon buttons are square; text buttons use text size."""
+    if icon_type and icon_type != "playback" and _icons.known(icon_type):
+        return row_height
     (text_w, _), _ = cv2.getTextSize(
         label,
         cv2.FONT_HERSHEY_SIMPLEX,
@@ -147,7 +151,10 @@ class ControlBar:
                 ]
                 right_width = 0
                 for rd in right_defs:
-                    w = _estimate_button_width(rd.label, rd.shortcut, self._button_style)
+                    w = _estimate_button_width(
+                        rd.label, rd.shortcut, self._button_style,
+                        getattr(rd, "icon_type", ""), cfg.row_height,
+                    )
                     right_width += w + cfg.button_spacing
                 if right_defs:
                     right_width -= cfg.button_spacing

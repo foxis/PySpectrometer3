@@ -29,9 +29,17 @@ from .export.csv_exporter import (
     trim_spectrum_data_for_export_min_wavelength,
     trim_waterfall_export_arrays,
 )
+from .export.graph_export import (
+    ColorSciencePdfBundle,
+    MeasurementPdfBundle,
+    ViewExportRequest,
+    export_colorscience_pdf,
+    export_measurement_pdf,
+    export_view_vector,
+)
 from .modes.base import BaseMode
 from .modes.calibration import CalibrationMode
-from .modes.colorscience import ColorScienceMode
+from .modes.colorscience import ColorMeasurementType, ColorScienceMode
 from .modes.measurement import MeasurementMode
 from .modes.raman import RamanMode
 from .modes.waterfall import WaterfallMode
@@ -41,7 +49,7 @@ from .processing.filters import SavitzkyGolayFilter
 from .processing.peak_detection import PeakDetector, detect_peaks_in_region
 from .processing.pipeline import ProcessingPipeline
 from .processing.sensitivity_correction import SensitivityCorrection
-from .utils.dialog import prompt_calibrate, prompt_label
+from .utils.dialog import prompt_calibrate, prompt_label, prompt_save_file_path
 
 
 class Spectrometer:
@@ -144,6 +152,7 @@ class Spectrometer:
         self._mode_instance: BaseMode
         self._calibration_mode: CalibrationMode | None = None
         self._measurement_mode: MeasurementMode | None = None
+        self._colorscience_mode: ColorScienceMode | None = None
         match mode:
             case "calibration":
                 self._calibration_mode = CalibrationMode()
@@ -154,7 +163,8 @@ class Spectrometer:
             case "raman":
                 self._mode_instance = RamanMode(laser_nm=self.laser_nm)
             case "colorscience":
-                self._mode_instance = ColorScienceMode()
+                self._colorscience_mode = ColorScienceMode()
+                self._mode_instance = self._colorscience_mode
             case "waterfall":
                 self._mode_instance = WaterfallMode()
                 self.config.waterfall.enabled = True
@@ -183,6 +193,8 @@ class Spectrometer:
         ctx.quit_app = lambda: setattr(ctx, "running", False)
         ctx.save_snapshot = self._save_snapshot
         ctx.save_waterfall_snapshot = self._save_waterfall_snapshot
+        ctx.export_vector_graph = self._export_vector_graph
+        ctx.export_pdf_report = self._export_measurement_pdf
         ctx.clear_autolevel_overlay = self._clear_autolevel_overlay
         ctx.auto_calibrate_debounce_sec = 1.5
         ctx.sensitivity_engine = self._sensitivity
@@ -241,10 +253,16 @@ class Spectrometer:
             and not self._ctx.frozen_spectrum
         ):
             intensity = self._calibration_mode.accumulate_spectrum(intensity)
+            self._ctx.last_intensity_accumulated = intensity.copy()
         else:
             self._ctx.last_raw_intensity = intensity.copy()
             intensity = self._mode_instance.process_spectrum(
                 intensity, self._calibration.wavelengths
+            )
+            # Grab the post-accumulation, pre-dark/white value the mode stored internally.
+            accumulated = getattr(self._mode_instance, "_last_measured_pre_correction", None)
+            self._ctx.last_intensity_accumulated = (
+                accumulated.copy() if accumulated is not None else self._ctx.last_raw_intensity
             )
 
         self._ctx.last_intensity_pre_sensitivity = intensity.copy()
@@ -267,6 +285,11 @@ class Spectrometer:
         wl = self._calibration.wavelengths[:n]
         gain = getattr(self._camera, "gain", None)
         exposure_us = getattr(self._camera, "exposure", None)
+        pre_sens = self._ctx.last_intensity_pre_sensitivity
+        if pre_sens is not None and len(pre_sens) >= n:
+            y_axis = np.asarray(pre_sens[:n], dtype=np.float32)
+        else:
+            y_axis = np.asarray(intensity[:n], dtype=np.float32)
         data = SpectrumData(
             intensity=intensity[:n],
             wavelengths=wl,
@@ -274,6 +297,7 @@ class Spectrometer:
             cropped_frame=cropped,
             gain=float(gain) if gain is not None else None,
             exposure_us=int(exposure_us) if exposure_us is not None else None,
+            y_axis_intensity=y_axis,
         )
         return self._pipeline.run(data)
 
@@ -376,14 +400,16 @@ class Spectrometer:
         data_e = data
         dark_e = dark_intensity
         white_e = white_intensity
-        measured_e = measured_raw_intensity
+        # Fall back to pre-sensitivity intensity so modes that don't explicitly
+        # pass raw data (e.g. calibration) still export uncorrected SPD.
+        measured_e = measured_raw_intensity or self._ctx.last_intensity_pre_sensitivity
         min_wl = self._ctx.min_wavelength
         if min_wl > 0:
             data_e = trim_spectrum_data_for_export_min_wavelength(data, min_wl)
             n = min(len(data.wavelengths), len(data.intensity))
             mask = export_wavelength_mask(data.wavelengths, n, min_wl)
             if not np.all(mask):
-                measured_e = trim_optional_intensity_row(measured_raw_intensity, n, mask)
+                measured_e = trim_optional_intensity_row(measured_e, n, mask)
                 dark_e = trim_optional_intensity_row(dark_intensity, n, mask)
                 white_e = trim_optional_intensity_row(white_intensity, n, mask)
         sens_col, sens_meta = build_sensitivity_for_export(
@@ -457,6 +483,261 @@ class Spectrometer:
         if waterfall_img is not None:
             cv2.imwrite(str(csv_path.with_suffix(".png")), waterfall_img)
 
+    def _trim_export_bundle(
+        self,
+        data: SpectrumData,
+        measured_pre: np.ndarray | None,
+        dark: np.ndarray | None,
+        white: np.ndarray | None,
+        reference: np.ndarray | None,
+    ) -> tuple[SpectrumData, np.ndarray | None, np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+        """Apply ``min_wavelength`` trim consistently with CSV export."""
+        measured_e = (
+            measured_pre if measured_pre is not None else self._ctx.last_intensity_pre_sensitivity
+        )
+        data_e = data
+        dark_e = dark
+        white_e = white
+        ref_e = reference
+        min_wl = self._ctx.min_wavelength
+        if min_wl > 0:
+            data_e = trim_spectrum_data_for_export_min_wavelength(data, min_wl)
+            n = min(len(data.wavelengths), len(data.intensity))
+            mask = export_wavelength_mask(data.wavelengths, n, min_wl)
+            if not np.all(mask):
+                measured_e = trim_optional_intensity_row(measured_e, n, mask)
+                dark_e = trim_optional_intensity_row(dark, n, mask)
+                white_e = trim_optional_intensity_row(white, n, mask)
+                ref_e = trim_optional_intensity_row(reference, n, mask)
+        return data_e, measured_e, dark_e, white_e, ref_e
+
+    def _export_vector_graph(self) -> None:
+        """Measurement mode: export current graph viewport to SVG or EPS."""
+        if self.mode != "measurement" or self._measurement_mode is None:
+            print("[Export] Vector graph is only available in measurement mode")
+            return
+        ctx = self._ctx
+        if ctx.last_data is None:
+            print("[Export] No spectrum data")
+            return
+        note = prompt_label("Export graph", "Label (optional):")
+        default_path = self._exporter.generate_filename("graph", label=note).with_suffix(".svg")
+        path_str = prompt_save_file_path(
+            "Export graph (SVG or EPS)",
+            ".svg",
+            [("SVG vector", "*.svg"), ("EPS vector", "*.eps"), ("All files", "*.*")],
+            initialdir=str(default_path.parent),
+            initialfile=default_path.name,
+        )
+        if not path_str:
+            return
+        mm = self._measurement_mode
+        data = ctx.last_data
+        dark = mm.meas_state.dark_spectrum
+        white = mm.meas_state.white_spectrum
+        ref = ctx.display.state.reference_spectrum
+        data_e, pre_e, _, _, ref_e = self._trim_export_bundle(
+            data,
+            ctx.last_intensity_pre_sensitivity,
+            dark,
+            white,
+            ref,
+        )
+        vp = ctx.display.viewport
+        wl = data_e.wavelengths
+        sens_disp = None
+        eng = ctx.sensitivity_engine
+        if ctx.sensitivity_correction_enabled and eng is not None:
+            curve = eng.get_curve_for_display(np.asarray(wl, dtype=np.float64), 256)
+            if curve is not None:
+                sens_disp = curve[0]
+        ref_name = ctx.display.state.reference_name
+        if ref_name in ("None", ""):
+            ref_name = "Reference"
+        meta = mm.snapshot_metadata(ctx)
+        req = ViewExportRequest(
+            path=Path(path_str),
+            wavelengths=wl,
+            intensity=data_e.intensity,
+            x_axis_label=getattr(data_e, "x_axis_label", "Wavelength (nm)"),
+            x_start=vp.x_start,
+            x_end=vp.x_end,
+            y_min=vp.y_min,
+            y_max=vp.y_max,
+            peaks=list(data_e.peaks),
+            metadata=meta,
+            reference=ref_e,
+            reference_name=ref_name,
+            sensitivity_display=sens_disp,
+        )
+        out = export_view_vector(req)
+        print(f"[Export] Vector graph saved: {out}")
+
+    def _export_colorscience_vector(self) -> None:
+        """Color Science: viewport export with XYZ/L*a*b* and sRGB patch."""
+        ctx = self._ctx
+        cm = self._colorscience_mode
+        if cm is None or ctx.last_data is None:
+            print("[Export] No spectrum data")
+            return
+        note = prompt_label("Export graph", "Label (optional):")
+        default_path = self._exporter.generate_filename("graph", label=note).with_suffix(".svg")
+        path_str = prompt_save_file_path(
+            "Export graph (SVG or EPS)",
+            ".svg",
+            [("SVG vector", "*.svg"), ("EPS vector", "*.eps"), ("All files", "*.*")],
+            initialdir=str(default_path.parent),
+            initialfile=default_path.name,
+        )
+        if not path_str:
+            return
+        data = ctx.last_data
+        dark = cm.color_state.dark_spectrum
+        is_illum = cm.color_state.measurement_type == ColorMeasurementType.ILLUMINATION
+        white = None if is_illum else cm.color_state.white_spectrum
+        data_e, _, _, _, _ = self._trim_export_bundle(
+            data,
+            ctx.last_intensity_pre_sensitivity,
+            dark,
+            white,
+            None,
+        )
+        vp = ctx.display.viewport
+        wl = data_e.wavelengths
+        sens_disp = None
+        eng = ctx.sensitivity_engine
+        if ctx.sensitivity_correction_enabled and eng is not None:
+            curve = eng.get_curve_for_display(np.asarray(wl, dtype=np.float64), 256)
+            if curve is not None:
+                sens_disp = curve[0]
+        meta = cm.snapshot_metadata(ctx)
+        xyz_t: tuple[float, float, float] | None = None
+        lab_t: tuple[float, float, float] | None = None
+        xyz_lab = cm._compute_xyz_lab(data_e.intensity, data_e.wavelengths)
+        if xyz_lab is not None:
+            (x0, y0, z0), (l0, a0, b0) = xyz_lab
+            xyz_t = (x0, y0, z0)
+            lab_t = (l0, a0, b0)
+        req = ViewExportRequest(
+            path=Path(path_str),
+            wavelengths=wl,
+            intensity=data_e.intensity,
+            x_axis_label=getattr(data_e, "x_axis_label", "Wavelength (nm)"),
+            x_start=vp.x_start,
+            x_end=vp.x_end,
+            y_min=vp.y_min,
+            y_max=vp.y_max,
+            peaks=list(data_e.peaks),
+            metadata=meta,
+            reference=None,
+            reference_name="Reference",
+            sensitivity_display=sens_disp,
+            xyz=xyz_t,
+            cie_lab=lab_t,
+        )
+        out = export_view_vector(req)
+        print(f"[Export] Vector graph saved: {out}")
+
+    def _export_colorscience_pdf(self) -> None:
+        """Color Science: metadata + one page per swatch (400–700 nm corrected spectrum)."""
+        ctx = self._ctx
+        cm = self._colorscience_mode
+        if cm is None:
+            return
+        if not cm.color_state.swatches:
+            print("[Export] No swatches — use Add to store colors, then export PDF")
+            return
+        note = prompt_label("Export PDF", "Label for this color science export (optional):")
+        pdf_path = self._exporter.generate_filename("colors", label=note).with_suffix(".pdf")
+        wl_s = (
+            ctx.last_data.wavelengths
+            if ctx.last_data is not None
+            else np.asarray(self._calibration.wavelengths, dtype=np.float64)
+        )
+        sens_col, sens_meta = build_sensitivity_for_export(
+            correction_enabled=ctx.sensitivity_correction_enabled,
+            engine=ctx.sensitivity_engine,
+            wavelengths=wl_s,
+            sens_cfg=self.config.sensitivity,
+        )
+        meta = cm.snapshot_metadata(ctx) if ctx.last_data is not None else {
+            "Mode": "Color Science",
+            "Date": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        meta["Note"] = note
+        bundle = ColorSciencePdfBundle(
+            path=pdf_path,
+            metadata=meta,
+            sensitivity_meta=dict(sens_meta),
+            swatches=list(cm.color_state.swatches),
+        )
+        out = export_colorscience_pdf(bundle)
+        time_display = time.strftime(self.config.export.time_format)
+        self._display.state.save_message = f"Last PDF: {time_display}"
+        print(f"[Export] PDF report saved: {out}")
+
+    def _export_measurement_pdf(self) -> None:
+        """Measurement mode: multi-page PDF (metadata, references, sensitivity, peaks)."""
+        if self.mode == "colorscience" and self._colorscience_mode is not None:
+            self._export_colorscience_pdf()
+            return
+        if self.mode != "measurement" or self._measurement_mode is None:
+            print("[Export] PDF report is only available in measurement or color science mode")
+            return
+        ctx = self._ctx
+        if ctx.last_data is None:
+            print("[Export] No spectrum data")
+            return
+        note = prompt_label("Export PDF", "Label for this measurement (optional):")
+        pdf_path = self._exporter.generate_filename("spectrum", label=note).with_suffix(".pdf")
+        mm = self._measurement_mode
+        data = ctx.last_data
+        dark = mm.meas_state.dark_spectrum
+        white = mm.meas_state.white_spectrum
+        ref = ctx.display.state.reference_spectrum
+        data_e, pre_e, d_e, w_e, ref_e = self._trim_export_bundle(
+            data,
+            ctx.last_intensity_pre_sensitivity,
+            dark,
+            white,
+            ref,
+        )
+        if pre_e is None or len(pre_e) == 0:
+            print("[Export] No pre-sensitivity spectrum available for PDF")
+            return
+        sens_col, sens_meta = build_sensitivity_for_export(
+            correction_enabled=ctx.sensitivity_correction_enabled,
+            engine=ctx.sensitivity_engine,
+            wavelengths=data_e.wavelengths,
+            sens_cfg=self.config.sensitivity,
+        )
+        ref_name = ctx.display.state.reference_name
+        if ref_name in ("None", ""):
+            ref_name = "Reference"
+        meta = mm.snapshot_metadata(ctx)
+        meta["Note"] = note
+        overlay_series = mm.overlay_export_columns(ctx, data_e.wavelengths)
+        bundle = MeasurementPdfBundle(
+            path=pdf_path,
+            wavelengths=data_e.wavelengths,
+            measured_pre_sensitivity=np.asarray(pre_e, dtype=np.float64),
+            measured_corrected=np.asarray(data_e.intensity, dtype=np.float64),
+            dark=d_e,
+            white=w_e,
+            reference=ref_e,
+            reference_name=ref_name,
+            sensitivity=sens_col,
+            sensitivity_meta=dict(sens_meta),
+            peaks=list(data_e.peaks),
+            metadata=meta,
+            x_axis_label=getattr(data_e, "x_axis_label", "Wavelength (nm)"),
+            overlay_series=overlay_series or None,
+        )
+        out = export_measurement_pdf(bundle)
+        time_display = time.strftime(self.config.export.time_format)
+        self._display.state.save_message = f"Last PDF: {time_display}"
+        print(f"[Export] PDF report saved: {out}")
+
     def run(self) -> None:
         """Run the main loop."""
         mode_names = {
@@ -501,7 +782,7 @@ class Spectrometer:
                     except Empty:
                         pass
 
-                if frame is not None:
+                if frame is not None and frame.size > 0:
                     self._ctx.last_frame = frame
                     intensity, cropped = self._process_intensity(frame)
                     processed = self._run_pipeline(frame, intensity, cropped)

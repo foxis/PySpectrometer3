@@ -298,6 +298,7 @@ class BaseMode(ABC):
             return
         ctx.sensitivity_correction_enabled = not ctx.sensitivity_correction_enabled
         ctx.display.set_button_active("toggle_sensitivity", ctx.sensitivity_correction_enabled)
+        ctx.display.reset_graph_y_autoscale()
         print(f"[SENSITIVITY] Correction: {'ON' if ctx.sensitivity_correction_enabled else 'OFF'}")
 
     def register_callback(self, action_name: str, callback: Callable[[], None]) -> None:

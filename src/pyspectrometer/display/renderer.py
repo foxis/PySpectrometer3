@@ -200,6 +200,10 @@ class DisplayManager:
         self._graph_info: list[str] = []
         # Optional callback for left-clicks in the graph area: fn(x, rel_y)
         self._on_graph_click: Callable[[int, int], None] | None = None
+        # Optional callback for right-clicks in the graph area: fn(data_x_float)
+        self._on_graph_right_click: Callable[[float], None] | None = None
+        # Optional post-draw hook called after all graph rendering: fn(graph_img, data)
+        self._graph_post_draw: Callable[["np.ndarray", "SpectrumData"], None] | None = None
 
         self._font = cv2.FONT_HERSHEY_SIMPLEX
         self._graph_font = config.display.graph_label_font
@@ -363,6 +367,24 @@ class DisplayManager:
         """Set callback for click-to-dismiss on autolevel overlay."""
         self._on_autolevel_click = callback
 
+    def set_graph_right_click(self, fn: Callable[[float], None] | None) -> None:
+        """Register a right-click handler for the graph area; receives data-space x."""
+        self._on_graph_right_click = fn
+
+    def set_graph_post_draw(self, fn: "Callable[[np.ndarray, SpectrumData], None] | None") -> None:
+        """Register a post-draw hook called after all graph rendering with (graph_img, data)."""
+        self._graph_post_draw = fn
+
+    @property
+    def viewport(self) -> Viewport:
+        """Expose the active viewport for external coordinate transforms."""
+        return self._viewport
+
+    def reset_graph_y_autoscale(self) -> None:
+        """Restore default Y range so the next render expands from ``y_axis_intensity`` / intensity."""
+        self._viewport.y_min = 0.0
+        self._viewport.y_max = 1.0
+
     def clear_peak_include_region(self) -> None:
         """Clear the click-to-include peak region."""
         self.state.peak_include_region = None
@@ -482,6 +504,11 @@ class DisplayManager:
             self._zoom_vertical.handle_mouse_up()
             self._zoom_horizontal.handle_mouse_up()
             self._panning = False
+
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            if in_graph and self._on_graph_right_click is not None:
+                data_x = self._viewport.screen_x_to_data(x, width)
+                self._on_graph_right_click(data_x)
 
     def _is_zoomed(self) -> bool:
         """True if viewport is zoomed (not full view)."""
@@ -690,8 +717,13 @@ class DisplayManager:
 
         # Auto-rescale Y to data range when view is at default 0-1 and data exceeds it
         if data_width > 0:
-            i_min = float(np.min(data.intensity))
-            i_max = float(np.max(data.intensity))
+            scale_src = (
+                data.y_axis_intensity
+                if getattr(data, "y_axis_intensity", None) is not None
+                else data.intensity
+            )
+            i_min = float(np.min(scale_src))
+            i_max = float(np.max(scale_src))
             if self._viewport.y_min == 0.0 and self._viewport.y_max == 1.0:
                 margin = 0.02
                 self._viewport.y_min = min(0.0, i_min) - margin
@@ -757,6 +789,8 @@ class DisplayManager:
                     spectrum_screen_y=spectrum_screen_y,
                     graph_height=graph_height,
                 )
+            if self._graph_post_draw is not None:
+                self._graph_post_draw(graph, data)
 
         if self._graph_info:
             self._render_graph_info(graph)
@@ -777,7 +811,7 @@ class DisplayManager:
         messages = self._control_bar.render()
 
         # Handle preview mode
-        if self._preview_override is not None:
+        if self._preview_override is not None and preview_height > 0:
             # Mode has supplied a custom strip (e.g. solid color, spectrum bar)
             src = self._preview_override
             if src.shape[1] != width or src.shape[0] != preview_height:
@@ -787,7 +821,7 @@ class DisplayManager:
         else:
             cropped = data.cropped_frame
             # Scale camera crop to fit preview area, then apply horizontal viewport zoom
-            if cropped is not None:
+            if cropped is not None and preview_height > 0:
                 if cropped.shape[1] != width or cropped.shape[0] != preview_height:
                     cropped = _scale_to_fit(cropped, width, preview_height)
                 cropped = self._apply_viewport_to_preview(cropped, width)
@@ -1462,6 +1496,8 @@ class DisplayManager:
         range [0, data_width-1]. We crop to the viewport x range and resize back
         so the preview aligns with the spectrum graph and waterfall when zoomed.
         """
+        if img.size == 0 or img.shape[0] == 0:
+            return img
         data_width = max(1, self._last_data_width)
         col_start = int(round(self._viewport.x_start * width / data_width))
         col_end = int(round(self._viewport.x_end * width / data_width)) + 1

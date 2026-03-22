@@ -22,18 +22,15 @@ if TYPE_CHECKING:
 import numpy as np
 
 from ..colorscience.chromaticity import render_chromaticity
+from ..colorscience.illumination_metrics import cct_from_xyz, cri_from_spectrum
 from ..colorscience.swatches import (
-    GRID_COLS,
-    GRID_ROWS,
     ColorSwatch,
     delta_e_cie76,
     render_color_preview,
     render_spectrum_strip,
     render_swatch_grid,
     swatch_index_at,
-    xyz_to_display_bgr,
 )
-from ..colorscience.illumination_metrics import cct_from_xyz, cri_from_spectrum
 from ..colorscience.xyz import calculate_XYZ, xyz_to_lab
 from ..core.mode_context import ModeContext
 from ..export.csv_exporter import build_markers_peaks_metadata
@@ -113,44 +110,46 @@ class ColorScienceMode(BaseMode):
         return [
             # Row 1: Play | Refl/Trans/Illum | Dark/White | Add/Del/CLR | Save/Load
             ButtonDefinition("Play", "freeze", is_toggle=True, row=1, icon_type="playback"),
-            ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=1),
+            ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=1, icon_type="sensitivity"),
             ButtonDefinition("__gap__", "__gap__", row=1),
             ButtonDefinition("Refl",  "type_reflectance",   is_toggle=True, row=1),
             ButtonDefinition("Trans", "type_transmittance", is_toggle=True, row=1),
             ButtonDefinition("Illum", "type_illumination",  is_toggle=True, row=1),
             ButtonDefinition("__gap__", "__gap__2", row=1),
-            ButtonDefinition("Dark",  "set_dark",  is_toggle=True, row=1),
-            ButtonDefinition("White", "set_white", is_toggle=True, row=1),
-            ButtonDefinition("Overlay", "show_raw_overlay", is_toggle=True, row=1),
-            ButtonDefinition("ABS", "show_absorption", is_toggle=True, row=1),
+            ButtonDefinition("Dark",  "set_dark",  is_toggle=True, row=1, icon_type="dark"),
+            ButtonDefinition("White", "set_white", is_toggle=True, row=1, icon_type="white"),
+            ButtonDefinition("Overlay", "show_raw_overlay", is_toggle=True, row=1, icon_type="overlay"),
+            ButtonDefinition("ABS", "show_absorption", is_toggle=True, row=1, icon_type="absorption"),
             ButtonDefinition("__gap__", "__gap__3", row=1),
             ButtonDefinition("Add", "add_swatch",   row=1),
             ButtonDefinition("Del", "del_swatch",   row=1),
-            ButtonDefinition("CLR", "clear_swatches", row=1),
+            ButtonDefinition("CLR", "clear_swatches", row=1, icon_type="clear"),
             ButtonDefinition("__gap__", "__gap__4", row=1),
-            ButtonDefinition("Save", "save", shortcut="s", row=1),
-            ButtonDefinition("Load", "load", row=1),
+            ButtonDefinition("Save", "save", shortcut="s", row=1, icon_type="save"),
+            ButtonDefinition("SVG", "export_vector", shortcut="g", row=1),
+            ButtonDefinition("Pdf", "export_pdf", shortcut="p", row=1),
+            ButtonDefinition("Load", "load", row=1, icon_type="load"),
             # Row 2: Avg/Peak/Acc/Peaks | Bars | ZX/ZY | G/E/AG/AE | VIEW | Lamp | spacer | Quit
-            ButtonDefinition("Avg",  "toggle_averaging",    is_toggle=True, row=2),
-            ButtonDefinition("Max", "capture_peak",        is_toggle=True, shortcut="h", row=2),
-            ButtonDefinition("Acc",  "toggle_accumulation", is_toggle=True, row=2),
-            ButtonDefinition("Peaks", "show_peaks",         is_toggle=True, row=2),
+            ButtonDefinition("Avg",  "toggle_averaging",    is_toggle=True, row=2, icon_type="avg"),
+            ButtonDefinition("Max", "capture_peak",        is_toggle=True, shortcut="h", row=2, icon_type="peak_hold"),
+            ButtonDefinition("Acc",  "toggle_accumulation", is_toggle=True, row=2, icon_type="acc"),
+            ButtonDefinition("Peaks", "show_peaks",         is_toggle=True, row=2, icon_type="peaks"),
             ButtonDefinition("__gap__", "__gap__5", row=2),
-            ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=2),
+            ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=2, icon_type="bars"),
             ButtonDefinition("__gap__", "__gap__6", row=2),
-            ButtonDefinition("ZX",   "show_zoom_x_slider",  is_toggle=True, row=2),
-            ButtonDefinition("ZY",   "show_zoom_y_slider", is_toggle=True, row=2),
+            ButtonDefinition("ZX",   "show_zoom_x_slider",  is_toggle=True, row=2, icon_type="zoom_x"),
+            ButtonDefinition("ZY",   "show_zoom_y_slider", is_toggle=True, row=2, icon_type="zoom_y"),
             ButtonDefinition("__gap__", "__gap__7", row=2),
-            ButtonDefinition("G",    "show_gain_slider",    is_toggle=True, row=2),
-            ButtonDefinition("E",    "show_exposure_slider", is_toggle=True, row=2),
-            ButtonDefinition("AG",   "auto_gain",           is_toggle=True, row=2),
-            ButtonDefinition("AE",   "auto_exposure",      is_toggle=True, row=2),
+            ButtonDefinition("G",    "show_gain_slider",    is_toggle=True, row=2, icon_type="gain"),
+            ButtonDefinition("E",    "show_exposure_slider", is_toggle=True, row=2, icon_type="exposure"),
+            ButtonDefinition("AG",   "auto_gain",           is_toggle=True, row=2, icon_type="auto_gain"),
+            ButtonDefinition("AE",   "auto_exposure",      is_toggle=True, row=2, icon_type="auto_exposure"),
             ButtonDefinition("__gap__", "__gap__8", row=2),
-            ButtonDefinition("VIEW", "cycle_preview", shortcut="v", row=2),
+            ButtonDefinition("VIEW", "cycle_preview", shortcut="v", row=2, icon_type="eye"),
             ButtonDefinition("__gap__", "__gap__9", row=2),
-            ButtonDefinition("Lamp", "lamp_toggle",        is_toggle=True, row=2),
+            ButtonDefinition("Lamp", "lamp_toggle",        is_toggle=True, row=2, icon_type="lamp"),
             ButtonDefinition("__spacer__", "__spacer_right__", row=2),
-            ButtonDefinition("Quit", "quit", row=2),
+            ButtonDefinition("Quit", "quit", row=2, icon_type="quit"),
         ]
 
     def on_start(self, ctx: ModeContext) -> None:
@@ -196,6 +195,8 @@ class ColorScienceMode(BaseMode):
         self.register_callback("show_raw_overlay",   lambda: self._on_toggle_raw_overlay(ctx))
         self.register_callback("show_absorption",    lambda: self._on_toggle_absorption(ctx))
         self.register_callback("save",               lambda: self._on_save(ctx))
+        self.register_callback("export_vector",      lambda: self._on_export_vector(ctx))
+        self.register_callback("export_pdf",         lambda: self._on_export_pdf(ctx))
         self.register_callback("load",               lambda: self._on_load(ctx))
         self.register_callback("add_swatch",         lambda: self._on_add_swatch(ctx))
         self.register_callback("del_swatch",         lambda: self._on_del_swatch(ctx))
@@ -550,35 +551,33 @@ class ColorScienceMode(BaseMode):
         self.color_state.selected.clear()
         print("[COLOR] All swatches cleared")
 
-    def _on_save(self, ctx: ModeContext) -> None:
-        """Save spectrum + swatch spectra as columns."""
-        if ctx.last_data is None:
-            print("[COLOR] No spectrum data available")
-            return
+    def snapshot_metadata(self, ctx: ModeContext) -> dict:
+        """CSV/PDF/SVG header fields (same keys as Save). Requires ``ctx.last_data``."""
         light_on = self.state.lamp_enabled
-        led_pct  = ctx.display.get_led_intensity_value() if light_on else None
-        pwm_log  = (
+        led_pct = ctx.display.get_led_intensity_value() if light_on else None
+        pwm_log = (
             f"{math.log10(0.01 + led_pct / 100):.4f}"
-            if led_pct is not None and light_on else None
+            if led_pct is not None and light_on
+            else None
         )
         is_illum = self.color_state.measurement_type == ColorMeasurementType.ILLUMINATION
-        white    = None if is_illum else self.color_state.white_spectrum
+        metadata = {
+            "Mode": "Color Science",
+            "Date": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "Measurement": self.color_state.measurement_type.name,
+            "Light": "Lamp" if light_on else "off",
+            "PWM%": f"{led_pct:.1f}" if led_pct is not None and light_on else None,
+            "PWM_log10": pwm_log,
+            "Gain": f"{ctx.camera.gain:.1f}",
+            "Exposure": f"{getattr(ctx.camera, 'exposure', 0)}",
+            "Measured_acq": self.acq_label(ctx.display.state.hold_peaks),
+            "Dark_acq": self.color_state.dark_acq or None,
+            "White_acq": self.color_state.white_acq or None,
+        }
+        if ctx.last_data is None:
+            return metadata
 
         xyz_lab = self._compute_xyz_lab(ctx.last_data.intensity, ctx.last_data.wavelengths)
-        measured_acq = self.acq_label(ctx.display.state.hold_peaks)
-        metadata = {
-            "Mode":        "Color Science",
-            "Date":        time.strftime("%Y-%m-%d %H:%M:%S"),
-            "Measurement": self.color_state.measurement_type.name,
-            "Light":       "Lamp" if light_on else "off",
-            "PWM%":        f"{led_pct:.1f}" if led_pct is not None and light_on else None,
-            "PWM_log10":   pwm_log,
-            "Gain":        f"{ctx.camera.gain:.1f}",
-            "Exposure":    f"{getattr(ctx.camera, 'exposure', 0)}",
-            "Measured_acq": measured_acq,
-            "Dark_acq":    self.color_state.dark_acq or None,
-            "White_acq":   self.color_state.white_acq or None,
-        }
         if xyz_lab is not None:
             (X, Y, Z), (L, a, b) = xyz_lab
             metadata["XYZ"] = f"X={X:.2f} Y={Y:.2f} Z={Z:.2f}"
@@ -600,7 +599,7 @@ class ColorScienceMode(BaseMode):
             metadata["WhiteLevel"] = f"X={wl[0]:.2f} Y={wl[1]:.2f} Z={wl[2]:.2f}"
 
         for i, sw in enumerate(self.color_state.swatches):
-            metadata[f"Swatch_{i+1}"] = (
+            metadata[f"Swatch_{i + 1}"] = (
                 f"{sw.label} {sw.mode} L*={sw.L:.1f} a*={sw.a:.1f} b*={sw.b:.1f}"
             )
 
@@ -611,7 +610,16 @@ class ColorScienceMode(BaseMode):
             ctx.last_data.peaks,
         )
         metadata.update(markers_peaks)
+        return metadata
 
+    def _on_save(self, ctx: ModeContext) -> None:
+        """Save spectrum + swatch spectra as columns."""
+        if ctx.last_data is None:
+            print("[COLOR] No spectrum data available")
+            return
+        is_illum = self.color_state.measurement_type == ColorMeasurementType.ILLUMINATION
+        white = None if is_illum else self.color_state.white_spectrum
+        metadata = self.snapshot_metadata(ctx)
         measured = getattr(self, "_last_measured_pre_correction", None) or ctx.last_raw_intensity
         ctx.save_snapshot(
             ctx.last_data,
@@ -619,9 +627,14 @@ class ColorScienceMode(BaseMode):
             white_intensity=white,
             metadata=metadata,
             measured_raw_intensity=measured,
-            extra_spectra=[(sw.label, sw.wavelengths, sw.spectrum)
-                           for sw in self.color_state.swatches],
+            extra_spectra=[(sw.label, sw.wavelengths, sw.spectrum) for sw in self.color_state.swatches],
         )
+
+    def _on_export_vector(self, ctx: ModeContext) -> None:
+        ctx.export_vector_graph()
+
+    def _on_export_pdf(self, ctx: ModeContext) -> None:
+        ctx.export_pdf_report()
 
     def _on_load(self, ctx: ModeContext) -> None:
         print("[COLOR] Load spectrum (file dialog not implemented yet)")
