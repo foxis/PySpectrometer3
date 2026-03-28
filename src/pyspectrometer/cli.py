@@ -1,10 +1,51 @@
-"""CLI entry points for Poetry scripts: calibrate, measure, colors, raman, lint, format, stream, waterfall."""
+"""CLI entry points for Poetry scripts: calibrate, measure, colors, raman, lint, format, stream, waterfall, led."""
 
 import subprocess
 import sys
 from pathlib import Path
 
 import numpy as np
+
+
+def _led_pin_from_argv() -> int:
+    """Parse optional `--pin N` from argv; default BCM pin from hardware.led."""
+    from .hardware.led import DEFAULT_PIN
+
+    args = sys.argv[1:]
+    if "--pin" in args:
+        i = args.index("--pin")
+        if i + 1 < len(args):
+            return int(args[i + 1])
+    return DEFAULT_PIN
+
+
+def _led_freq_from_argv(default: int = 100) -> int:
+    args = sys.argv[1:]
+    if "--freq" in args:
+        i = args.index("--freq")
+        if i + 1 < len(args):
+            return int(args[i + 1])
+    return default
+
+
+def _led_duty_positional() -> float | None:
+    """First numeric argv token that is not a flag or flag value."""
+    args = sys.argv[1:]
+    skip = False
+    for a in args:
+        if skip:
+            skip = False
+            continue
+        if a in ("--pin", "--freq"):
+            skip = True
+            continue
+        if a.startswith("-"):
+            continue
+        try:
+            return float(a)
+        except ValueError:
+            continue
+    return None
 
 
 def _camera_arg() -> str | None:
@@ -100,6 +141,55 @@ def format_src() -> int:
     return subprocess.call(["ruff", "format", "src/"])
 
 
+def led_on() -> int:
+    """Drive LED fully on via gpiozero. Usage: poetry run led-on [--pin N]"""
+    from .hardware.led import turn_on
+
+    try:
+        turn_on(_led_pin_from_argv())
+        return 0
+    except (RuntimeError, ValueError, OSError) as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+
+def led_off() -> int:
+    """Drive LED off via gpiozero. Usage: poetry run led-off [--pin N]"""
+    from .hardware.led import turn_off
+
+    try:
+        turn_off(_led_pin_from_argv())
+        return 0
+    except (RuntimeError, ValueError, OSError) as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+
+def led_pwm() -> int:
+    """Hold software PWM until Ctrl+C. Usage: poetry run led-pwm <duty> [--pin N] [--freq Hz]
+
+    duty: 0–1 (fraction) or 2–100 (percent); e.g. 0.5 or 50 for half brightness.
+    """
+    from .hardware.led import hold_pwm
+
+    duty = _led_duty_positional()
+    if duty is None:
+        print(
+            "Usage: poetry run led-pwm <duty> [--pin N] [--freq Hz]",
+            file=sys.stderr,
+        )
+        print("  duty: 0–1 (fraction) or 2–100 (percent, e.g. 50)", file=sys.stderr)
+        return 1
+    pin = _led_pin_from_argv()
+    freq = _led_freq_from_argv()
+    try:
+        hold_pwm(duty, pin=pin, frequency=freq)
+        return 0
+    except (RuntimeError, ValueError, OSError) as exc:
+        print(exc, file=sys.stderr)
+        return 1
+
+
 def stream() -> int:
     """Stream MJPEG from camera. Usage: poetry run stream [camera] [port] [--config PATH]"""
     camera = _camera_arg()
@@ -147,9 +237,11 @@ def view_csv() -> int:
 
     if config_arg:
         from .config import load_config
+
         config, _ = load_config(Path(config_arg))
         config.apply_csv_viewer_preset()
         from .config import csv_viewer_config_path
+
         save_path = csv_viewer_config_path()
     else:
         config, save_path = load_csv_viewer_config()
@@ -166,6 +258,7 @@ def view_csv() -> int:
         return 130
     except Exception as exc:
         import traceback
+
         print(f"Error: {exc}", file=sys.stderr)
         traceback.print_exc()
         return 1
