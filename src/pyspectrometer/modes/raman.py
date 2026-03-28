@@ -61,16 +61,21 @@ class RamanMode(BaseMode):
         """Hide camera preview by default and sync Play (freeze) button."""
         ctx.display.preview_mode = "none"
         ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
+        self._sync_lamp_control_bar(ctx)
 
     def get_buttons(self) -> list[ButtonDefinition]:
         """Layout aligned with Measurement: Play first, grouped with gaps, Quit right-aligned."""
         return [
             # Row 1: Play | Avg/Max/Acc | Dark/Ref | Bars | ZX/ZY | VIEW
             ButtonDefinition("Play", "freeze", is_toggle=True, row=1, icon_type="playback"),
-            ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=1, icon_type="sensitivity"),
+            ButtonDefinition(
+                "S", "toggle_sensitivity", is_toggle=True, row=1, icon_type="sensitivity"
+            ),
             ButtonDefinition("__gap__", "__gap__", row=1),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=1, icon_type="avg"),
-            ButtonDefinition("Max", "capture_peak", is_toggle=True, shortcut="h", row=1, icon_type="peak_hold"),
+            ButtonDefinition(
+                "Max", "capture_peak", is_toggle=True, shortcut="h", row=1, icon_type="peak_hold"
+            ),
             ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=1, icon_type="acc"),
             ButtonDefinition("__gap__", "__gap__2", row=1),
             ButtonDefinition("Dark", "set_dark", is_toggle=True, row=1, icon_type="dark"),
@@ -88,9 +93,13 @@ class RamanMode(BaseMode):
             ButtonDefinition("Peaks", "show_peaks", is_toggle=True, row=2, icon_type="peaks"),
             ButtonDefinition("__gap__", "__gap__7", row=2),
             ButtonDefinition("G", "show_gain_slider", is_toggle=True, row=2, icon_type="gain"),
-            ButtonDefinition("E", "show_exposure_slider", is_toggle=True, row=2, icon_type="exposure"),
+            ButtonDefinition(
+                "E", "show_exposure_slider", is_toggle=True, row=2, icon_type="exposure"
+            ),
             ButtonDefinition("AG", "auto_gain", is_toggle=True, row=2, icon_type="auto_gain"),
-            ButtonDefinition("AE", "auto_exposure", is_toggle=True, row=2, icon_type="auto_exposure"),
+            ButtonDefinition(
+                "AE", "auto_exposure", is_toggle=True, row=2, icon_type="auto_exposure"
+            ),
             ButtonDefinition("__gap__", "__gap__8", row=2),
             ButtonDefinition("Save", "save", shortcut="s", row=2, icon_type="save"),
             ButtonDefinition("Load", "load", row=2, icon_type="load"),

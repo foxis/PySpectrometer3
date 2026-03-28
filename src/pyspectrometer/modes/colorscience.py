@@ -57,7 +57,7 @@ _MODE_LETTER = {
 }
 
 _PREVIEW_MODES = ["cs_color", "cs_xy", "cs_swatches"]
-_VIS_RANGE = (400.0, 750.0)   # wavelength window for preview strip
+_VIS_RANGE = (400.0, 750.0)  # wavelength window for preview strip
 
 
 @dataclass
@@ -110,19 +110,25 @@ class ColorScienceMode(BaseMode):
         return [
             # Row 1: Play | Refl/Trans/Illum | Dark/White | Add/Del/CLR | Save/Load
             ButtonDefinition("Play", "freeze", is_toggle=True, row=1, icon_type="playback"),
-            ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=1, icon_type="sensitivity"),
+            ButtonDefinition(
+                "S", "toggle_sensitivity", is_toggle=True, row=1, icon_type="sensitivity"
+            ),
             ButtonDefinition("__gap__", "__gap__", row=1),
-            ButtonDefinition("Refl",  "type_reflectance",   is_toggle=True, row=1),
+            ButtonDefinition("Refl", "type_reflectance", is_toggle=True, row=1),
             ButtonDefinition("Trans", "type_transmittance", is_toggle=True, row=1),
-            ButtonDefinition("Illum", "type_illumination",  is_toggle=True, row=1),
+            ButtonDefinition("Illum", "type_illumination", is_toggle=True, row=1),
             ButtonDefinition("__gap__", "__gap__2", row=1),
-            ButtonDefinition("Dark",  "set_dark",  is_toggle=True, row=1, icon_type="dark"),
+            ButtonDefinition("Dark", "set_dark", is_toggle=True, row=1, icon_type="dark"),
             ButtonDefinition("White", "set_white", is_toggle=True, row=1, icon_type="white"),
-            ButtonDefinition("Overlay", "show_raw_overlay", is_toggle=True, row=1, icon_type="overlay"),
-            ButtonDefinition("ABS", "show_absorption", is_toggle=True, row=1, icon_type="absorption"),
+            ButtonDefinition(
+                "Overlay", "show_raw_overlay", is_toggle=True, row=1, icon_type="overlay"
+            ),
+            ButtonDefinition(
+                "ABS", "show_absorption", is_toggle=True, row=1, icon_type="absorption"
+            ),
             ButtonDefinition("__gap__", "__gap__3", row=1),
-            ButtonDefinition("Add", "add_swatch",   row=1),
-            ButtonDefinition("Del", "del_swatch",   row=1),
+            ButtonDefinition("Add", "add_swatch", row=1),
+            ButtonDefinition("Del", "del_swatch", row=1),
             ButtonDefinition("CLR", "clear_swatches", row=1, icon_type="clear"),
             ButtonDefinition("__gap__", "__gap__4", row=1),
             ButtonDefinition("Save", "save", shortcut="s", row=1, icon_type="save"),
@@ -130,24 +136,30 @@ class ColorScienceMode(BaseMode):
             ButtonDefinition("Pdf", "export_pdf", shortcut="p", row=1),
             ButtonDefinition("Load", "load", row=1, icon_type="load"),
             # Row 2: Avg/Peak/Acc/Peaks | Bars | ZX/ZY | G/E/AG/AE | VIEW | Lamp | spacer | Quit
-            ButtonDefinition("Avg",  "toggle_averaging",    is_toggle=True, row=2, icon_type="avg"),
-            ButtonDefinition("Max", "capture_peak",        is_toggle=True, shortcut="h", row=2, icon_type="peak_hold"),
-            ButtonDefinition("Acc",  "toggle_accumulation", is_toggle=True, row=2, icon_type="acc"),
-            ButtonDefinition("Peaks", "show_peaks",         is_toggle=True, row=2, icon_type="peaks"),
+            ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=2, icon_type="avg"),
+            ButtonDefinition(
+                "Max", "capture_peak", is_toggle=True, shortcut="h", row=2, icon_type="peak_hold"
+            ),
+            ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=2, icon_type="acc"),
+            ButtonDefinition("Peaks", "show_peaks", is_toggle=True, row=2, icon_type="peaks"),
             ButtonDefinition("__gap__", "__gap__5", row=2),
             ButtonDefinition("Bars", "show_spectrum_bars", is_toggle=True, row=2, icon_type="bars"),
             ButtonDefinition("__gap__", "__gap__6", row=2),
-            ButtonDefinition("ZX",   "show_zoom_x_slider",  is_toggle=True, row=2, icon_type="zoom_x"),
-            ButtonDefinition("ZY",   "show_zoom_y_slider", is_toggle=True, row=2, icon_type="zoom_y"),
+            ButtonDefinition("ZX", "show_zoom_x_slider", is_toggle=True, row=2, icon_type="zoom_x"),
+            ButtonDefinition("ZY", "show_zoom_y_slider", is_toggle=True, row=2, icon_type="zoom_y"),
             ButtonDefinition("__gap__", "__gap__7", row=2),
-            ButtonDefinition("G",    "show_gain_slider",    is_toggle=True, row=2, icon_type="gain"),
-            ButtonDefinition("E",    "show_exposure_slider", is_toggle=True, row=2, icon_type="exposure"),
-            ButtonDefinition("AG",   "auto_gain",           is_toggle=True, row=2, icon_type="auto_gain"),
-            ButtonDefinition("AE",   "auto_exposure",      is_toggle=True, row=2, icon_type="auto_exposure"),
+            ButtonDefinition("G", "show_gain_slider", is_toggle=True, row=2, icon_type="gain"),
+            ButtonDefinition(
+                "E", "show_exposure_slider", is_toggle=True, row=2, icon_type="exposure"
+            ),
+            ButtonDefinition("AG", "auto_gain", is_toggle=True, row=2, icon_type="auto_gain"),
+            ButtonDefinition(
+                "AE", "auto_exposure", is_toggle=True, row=2, icon_type="auto_exposure"
+            ),
             ButtonDefinition("__gap__", "__gap__8", row=2),
             ButtonDefinition("VIEW", "cycle_preview", shortcut="v", row=2, icon_type="eye"),
             ButtonDefinition("__gap__", "__gap__9", row=2),
-            ButtonDefinition("Lamp", "lamp_toggle",        is_toggle=True, row=2, icon_type="lamp"),
+            ButtonDefinition("Lamp", "lamp_toggle", is_toggle=True, row=2, icon_type="lamp"),
             ButtonDefinition("__spacer__", "__spacer_right__", row=2),
             ButtonDefinition("Quit", "quit", row=2, icon_type="quit"),
         ]
@@ -158,7 +170,7 @@ class ColorScienceMode(BaseMode):
             ctx.display.set_button_active(
                 f"type_{t.name.lower()}", t == self.color_state.measurement_type
             )
-        ctx.display.set_button_active("set_dark",  self.color_state.dark_spectrum is not None)
+        ctx.display.set_button_active("set_dark", self.color_state.dark_spectrum is not None)
         ctx.display.set_button_active("set_white", self._is_white_set())
         ctx.display.set_button_active("show_raw_overlay", self.color_state.show_raw_overlay)
         refl_trans = self.color_state.measurement_type in (
@@ -174,6 +186,7 @@ class ColorScienceMode(BaseMode):
         ctx.display.set_button_active("capture_peak", ctx.display.state.hold_peaks)
         ctx.display.preview_mode = "cs_crop"
         ctx.display.set_graph_click_callback(self._make_swatch_click_cb(ctx))
+        self._sync_lamp_control_bar(ctx)
 
     def on_stop(self, ctx: ModeContext) -> None:
         """Clear overrides and callbacks when leaving the mode."""
@@ -184,27 +197,29 @@ class ColorScienceMode(BaseMode):
     def setup(self, ctx: ModeContext) -> None:
         """Register all button callbacks."""
         super().setup(ctx)
-        self.register_callback("type_reflectance",
-                               lambda: self._on_type(ctx, ColorMeasurementType.REFLECTANCE))
-        self.register_callback("type_transmittance",
-                               lambda: self._on_type(ctx, ColorMeasurementType.TRANSMITTANCE))
-        self.register_callback("type_illumination",
-                               lambda: self._on_type(ctx, ColorMeasurementType.ILLUMINATION))
-        self.register_callback("set_dark",           lambda: self._on_toggle_dark(ctx))
-        self.register_callback("set_white",          lambda: self._on_toggle_white(ctx))
-        self.register_callback("show_raw_overlay",   lambda: self._on_toggle_raw_overlay(ctx))
-        self.register_callback("show_absorption",    lambda: self._on_toggle_absorption(ctx))
-        self.register_callback("save",               lambda: self._on_save(ctx))
-        self.register_callback("export_vector",      lambda: self._on_export_vector(ctx))
-        self.register_callback("export_pdf",         lambda: self._on_export_pdf(ctx))
-        self.register_callback("load",               lambda: self._on_load(ctx))
-        self.register_callback("add_swatch",         lambda: self._on_add_swatch(ctx))
-        self.register_callback("del_swatch",         lambda: self._on_del_swatch(ctx))
-        self.register_callback("clear_swatches",     lambda: self._on_clear_swatches(ctx))
-        self.register_callback("toggle_averaging",   lambda: self._on_toggle_averaging(ctx))
-        self.register_callback("toggle_accumulation",lambda: self._on_toggle_accumulation(ctx))
-        self.register_callback("freeze",             lambda: self._on_toggle_freeze(ctx))
-        self.register_callback("lamp_toggle",        lambda: self._on_toggle_light(ctx))
+        self.register_callback(
+            "type_reflectance", lambda: self._on_type(ctx, ColorMeasurementType.REFLECTANCE)
+        )
+        self.register_callback(
+            "type_transmittance", lambda: self._on_type(ctx, ColorMeasurementType.TRANSMITTANCE)
+        )
+        self.register_callback(
+            "type_illumination", lambda: self._on_type(ctx, ColorMeasurementType.ILLUMINATION)
+        )
+        self.register_callback("set_dark", lambda: self._on_toggle_dark(ctx))
+        self.register_callback("set_white", lambda: self._on_toggle_white(ctx))
+        self.register_callback("show_raw_overlay", lambda: self._on_toggle_raw_overlay(ctx))
+        self.register_callback("show_absorption", lambda: self._on_toggle_absorption(ctx))
+        self.register_callback("save", lambda: self._on_save(ctx))
+        self.register_callback("export_vector", lambda: self._on_export_vector(ctx))
+        self.register_callback("export_pdf", lambda: self._on_export_pdf(ctx))
+        self.register_callback("load", lambda: self._on_load(ctx))
+        self.register_callback("add_swatch", lambda: self._on_add_swatch(ctx))
+        self.register_callback("del_swatch", lambda: self._on_del_swatch(ctx))
+        self.register_callback("clear_swatches", lambda: self._on_clear_swatches(ctx))
+        self.register_callback("toggle_averaging", lambda: self._on_toggle_averaging(ctx))
+        self.register_callback("toggle_accumulation", lambda: self._on_toggle_accumulation(ctx))
+        self.register_callback("freeze", lambda: self._on_toggle_freeze(ctx))
 
     # ------------------------------------------------------------------
     # Spectrum processing
@@ -303,11 +318,7 @@ class ColorScienceMode(BaseMode):
         xyz_lab = self._compute_xyz_lab(processed.intensity, processed.wavelengths)
         cat_white = self._display_cat_white_point(processed.wavelengths)
         power_ratio = None
-        if (
-            refl_trans
-            and white_set
-            and not self.color_state.show_absorption
-        ):
+        if refl_trans and white_set and not self.color_state.show_absorption:
             power_ratio = _power_ratio(
                 processed.intensity,
                 self.color_state.dark_spectrum,
@@ -315,7 +326,10 @@ class ColorScienceMode(BaseMode):
             )
         cct_duv = None
         cri_ra = None
-        if self.color_state.measurement_type == ColorMeasurementType.ILLUMINATION and xyz_lab is not None:
+        if (
+            self.color_state.measurement_type == ColorMeasurementType.ILLUMINATION
+            and xyz_lab is not None
+        ):
             X, Y, Z = xyz_lab[0]
             cct_duv = cct_from_xyz(X, Y, Z)
             cri_ra = cri_from_spectrum(processed.wavelengths, processed.intensity)
@@ -327,7 +341,7 @@ class ColorScienceMode(BaseMode):
             power_ratio=power_ratio,
         )
 
-        width  = ctx.display.config.display.window_width
+        width = ctx.display.config.display.window_width
         p_height = ctx.display.config.display.preview_height
 
         pm = ctx.display.preview_mode
@@ -340,9 +354,13 @@ class ColorScienceMode(BaseMode):
                 diagram = render_chromaticity(width, graph_height, xy_current=xy)
                 ctx.display.set_graph_override(diagram)
                 ctx.display.set_preview_override(
-                    render_spectrum_strip(width, p_height,
-                                         processed.wavelengths, processed.intensity,
-                                         wl_range=_VIS_RANGE)
+                    render_spectrum_strip(
+                        width,
+                        p_height,
+                        processed.wavelengths,
+                        processed.intensity,
+                        wl_range=_VIS_RANGE,
+                    )
                 )
 
             case "cs_swatches":
@@ -352,7 +370,8 @@ class ColorScienceMode(BaseMode):
                 lab = xyz_lab[1] if xyz_lab else None
                 current = (xyz, lab) if (xyz and lab) else None
                 grid = render_swatch_grid(
-                    width, graph_height,
+                    width,
+                    graph_height,
                     self.color_state.swatches,
                     current_xyz_lab=current,
                     current_wavelengths=processed.wavelengths,
@@ -361,9 +380,13 @@ class ColorScienceMode(BaseMode):
                 )
                 ctx.display.set_graph_override(grid)
                 ctx.display.set_preview_override(
-                    render_spectrum_strip(width, p_height,
-                                         processed.wavelengths, processed.intensity,
-                                         wl_range=_VIS_RANGE)
+                    render_spectrum_strip(
+                        width,
+                        p_height,
+                        processed.wavelengths,
+                        processed.intensity,
+                        wl_range=_VIS_RANGE,
+                    )
                 )
 
             case _:
@@ -372,7 +395,10 @@ class ColorScienceMode(BaseMode):
                 xyz = xyz_lab[0] if xyz_lab else None
                 ctx.display.set_preview_override(
                     render_color_preview(
-                        width, p_height, xyz, info_lines,
+                        width,
+                        p_height,
+                        xyz,
+                        info_lines,
                         illuminant_xyz=cat_white,
                     )
                 )
@@ -527,7 +553,12 @@ class ColorScienceMode(BaseMode):
         letter = _MODE_LETTER[self.color_state.measurement_type]
         ill_xyz = self._display_cat_white_point(data.wavelengths)
         swatch = ColorSwatch(
-            X=X, Y=Y, Z=Z, L=L, a=a, b=b,
+            X=X,
+            Y=Y,
+            Z=Z,
+            L=L,
+            a=a,
+            b=b,
             mode=letter,
             wavelengths=data.wavelengths.copy(),
             spectrum=data.intensity.copy(),
@@ -563,9 +594,7 @@ class ColorScienceMode(BaseMode):
         light_on = self.state.lamp_enabled
         led_pct = ctx.display.get_led_intensity_value() if light_on else None
         pwm_log = (
-            f"{math.log10(0.01 + led_pct / 100):.4f}"
-            if led_pct is not None and light_on
-            else None
+            f"{math.log10(0.01 + led_pct / 100):.4f}" if led_pct is not None and light_on else None
         )
         is_illum = self.color_state.measurement_type == ColorMeasurementType.ILLUMINATION
         metadata = {
@@ -591,7 +620,7 @@ class ColorScienceMode(BaseMode):
             metadata["LAB"] = f"L*={L:.2f} a*={a:.2f} b*={b:.2f}"
             s = X + Y + Z
             if s > 0:
-                metadata["xy"] = f"x={X/s:.4f} y={Y/s:.4f}"
+                metadata["xy"] = f"x={X / s:.4f} y={Y / s:.4f}"
             if is_illum:
                 cct_duv = cct_from_xyz(X, Y, Z)
                 if cct_duv is not None:
@@ -635,7 +664,9 @@ class ColorScienceMode(BaseMode):
             white_intensity=white,
             metadata=metadata,
             measured_raw_intensity=measured,
-            extra_spectra=[(sw.label, sw.wavelengths, sw.spectrum) for sw in self.color_state.swatches],
+            extra_spectra=[
+                (sw.label, sw.wavelengths, sw.spectrum) for sw in self.color_state.swatches
+            ],
         )
 
     def _on_export_vector(self, ctx: ModeContext) -> None:
@@ -649,16 +680,13 @@ class ColorScienceMode(BaseMode):
 
     def _on_toggle_averaging(self, ctx: ModeContext) -> None:
         enabled = self.toggle_averaging()
-        ctx.display.set_button_active("toggle_averaging",   enabled)
+        ctx.display.set_button_active("toggle_averaging", enabled)
         ctx.display.set_button_active("toggle_accumulation", False)
 
     def _on_toggle_accumulation(self, ctx: ModeContext) -> None:
         enabled = self.toggle_accumulation()
         ctx.display.set_button_active("toggle_accumulation", enabled)
-        ctx.display.set_button_active("toggle_averaging",    False)
-
-    def _on_toggle_light(self, ctx: ModeContext) -> None:
-        print("[COLOR] Lamp toggle (GPIO not implemented yet)")
+        ctx.display.set_button_active("toggle_averaging", False)
 
     # ------------------------------------------------------------------
     # Swatch click handling (registered as graph-click callback)
@@ -666,6 +694,7 @@ class ColorScienceMode(BaseMode):
 
     def _make_swatch_click_cb(self, ctx: ModeContext):
         """Return a closure that handles swatch-grid clicks."""
+
         def _click(x: int, rel_y: int) -> None:
             if ctx.display.preview_mode != "cs_swatches":
                 return
@@ -681,7 +710,7 @@ class ColorScienceMode(BaseMode):
     def _toggle_swatch_selection(self, idx: int) -> None:
         """Toggle selection of a swatch; at most 2 selected at once."""
         swatches = self.color_state.swatches
-        sel      = self.color_state.selected
+        sel = self.color_state.selected
         if idx in sel:
             sel.discard(idx)
             swatches[idx].selected = False
@@ -699,8 +728,10 @@ class ColorScienceMode(BaseMode):
         if len(sel) == 2:
             idxs = list(sel)
             de = delta_e_cie76(swatches[idxs[0]].lab, swatches[idxs[1]].lab)
-            print(f"[COLOR] ΔE76 between {swatches[idxs[0]].label} and "
-                  f"{swatches[idxs[1]].label}: {de:.2f}")
+            print(
+                f"[COLOR] ΔE76 between {swatches[idxs[0]].label} and "
+                f"{swatches[idxs[1]].label}: {de:.2f}"
+            )
 
     # ------------------------------------------------------------------
     # Colorimetry
@@ -757,9 +788,7 @@ class ColorScienceMode(BaseMode):
                         illuminant_spectrum=white_arr,
                         illuminant_wavelengths=white_wl,
                     )
-                    ref_white = _illumination_ref_white_from_spectrum(
-                        white_arr, wavelengths
-                    )
+                    ref_white = _illumination_ref_white_from_spectrum(white_arr, wavelengths)
                 else:
                     X, Y, Z = calculate_XYZ(
                         spectrum=intensity,
@@ -773,7 +802,9 @@ class ColorScienceMode(BaseMode):
                         self.color_state.white_max,
                     )
                     X, Y, Z = _apply_white_level(
-                        X, Y, Z,
+                        X,
+                        Y,
+                        Z,
                         self.color_state.white_level_xyz,
                         self.color_state.white_max,
                     )
@@ -801,6 +832,7 @@ class ColorScienceMode(BaseMode):
 # Module-level helpers
 # ---------------------------------------------------------------------------
 
+
 def _illumination_ref_white_from_spectrum(
     white_arr: np.ndarray,
     wavelengths: np.ndarray,
@@ -809,7 +841,9 @@ def _illumination_ref_white_from_spectrum(
     return tuple(
         float(v)
         for v in calculate_XYZ(
-            white_arr, wavelengths, "illumination",
+            white_arr,
+            wavelengths,
+            "illumination",
             illuminant_spectrum=white_arr,
             illuminant_wavelengths=wavelengths,
         )
@@ -860,10 +894,7 @@ def _build_raw_overlays(
         return []
     global_max = max(float(np.max(s[0])) for s in spectra)
     global_max = max(global_max, 1.0)
-    return [
-        (np.clip(arr / global_max, 0, 1).astype(np.float32), color)
-        for arr, color in spectra
-    ]
+    return [(np.clip(arr / global_max, 0, 1).astype(np.float32), color) for arr, color in spectra]
 
 
 def _power_ratio(
@@ -888,7 +919,9 @@ def _power_ratio(
 
 
 def _apply_white_level(
-    X: float, Y: float, Z: float,
+    X: float,
+    Y: float,
+    Z: float,
     white_level_xyz: tuple[float, float, float] | None,
     white_max: float = 1.0,
 ) -> tuple[float, float, float]:

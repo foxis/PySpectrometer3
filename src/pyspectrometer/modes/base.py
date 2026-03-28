@@ -189,9 +189,11 @@ class BaseMode(ABC):
         self.register_callback("auto_gain", lambda: self._on_toggle_auto_gain())
         self.register_callback("auto_exposure", lambda: self._on_toggle_auto_exposure())
         self.register_callback("toggle_sensitivity", lambda: self._on_toggle_sensitivity())
+        self.register_callback("lamp_toggle", self._on_toggle_lamp_common)
         ctx.display.register_slider_callbacks(
             gain_cb=lambda v: setattr(ctx.camera, "gain", v),
             exposure_cb=lambda v: setattr(ctx.camera, "exposure", int(v)),
+            led_intensity_cb=self._on_led_intensity_hw,
         )
         ctx.display.set_gain_value(ctx.camera.gain)
         ctx.display.set_exposure_value(getattr(ctx.camera, "exposure", 10000))
@@ -199,6 +201,36 @@ class BaseMode(ABC):
         ctx.display.set_button_active("show_zoom_x_slider", ctx.display.is_zoom_x_slider_visible())
         ctx.display.set_button_active("show_zoom_y_slider", ctx.display.is_zoom_y_slider_visible())
         ctx.display.set_button_active("toggle_sensitivity", ctx.sensitivity_correction_enabled)
+
+    def _sync_lamp_control_bar(self, ctx: "ModeContext") -> None:
+        """Match Lamp button and LED slider to ``self.state.lamp_enabled`` (modes with a Lamp control)."""
+        bar = ctx.display.control_bar
+        if bar.get_button("lamp_toggle") is None:
+            return
+        ctx.display.set_button_active("lamp_toggle", self.state.lamp_enabled)
+        ctx.display.show_led_slider(self.state.lamp_enabled)
+
+    def _on_toggle_lamp_common(self) -> None:
+        """Toggle lamp UI and drive BCM LED on Raspberry Pi Zero only."""
+        ctx = self._ctx
+        if ctx is None:
+            return
+        self.state.lamp_enabled = not self.state.lamp_enabled
+        ctx.display.show_led_slider(self.state.lamp_enabled)
+        ctx.display.set_button_active("lamp_toggle", self.state.lamp_enabled)
+        pct = ctx.display.get_led_intensity_value() if self.state.lamp_enabled else 0.0
+        from ..hardware.led import apply_board_lamp
+
+        apply_board_lamp(self.state.lamp_enabled, pct)
+        print(f"[LAMP] {'ON' if self.state.lamp_enabled else 'OFF'}")
+
+    def _on_led_intensity_hw(self, value: float) -> None:
+        """Update hardware PWM when the LED slider moves while the lamp is on."""
+        if not self.state.lamp_enabled:
+            return
+        from ..hardware.led import apply_board_lamp
+
+        apply_board_lamp(True, value)
 
     def _on_toggle_hold(self) -> None:
         """Toggle peak hold."""

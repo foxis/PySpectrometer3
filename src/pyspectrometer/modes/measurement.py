@@ -10,8 +10,8 @@ Features:
 
 import math
 import time
-from datetime import datetime, timezone
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -26,8 +26,8 @@ from ..core.spectrum_overlay import (
     overlay_from_loaded_csv,
 )
 from ..csv_viewer.loader import load_csv
-from ..export.csv_exporter import build_absorption_metadata, build_markers_peaks_metadata
 from ..export.csv_exporter import _slugify as export_slugify
+from ..export.csv_exporter import build_absorption_metadata, build_markers_peaks_metadata
 from ..processing.reference_correction import apply_dark_white_correction
 from .base import BaseMode, ButtonDefinition, ModeType
 
@@ -96,7 +96,6 @@ class MeasurementMode(BaseMode):
         self.register_callback("clear_overlay_csv", lambda: self._on_clear_overlay_csv(ctx))
         self.register_callback("show_raw_overlay", lambda: self._on_toggle_raw_overlay(ctx))
         self.register_callback("show_absorption", lambda: self._on_toggle_absorption(ctx))
-        self.register_callback("lamp_toggle", lambda: self._on_toggle_light(ctx))
         self.register_callback("snap_to_peaks", lambda: self._on_toggle_snap_to_peaks(ctx))
         self.register_callback("clear_markers", lambda: self._on_clear_markers(ctx))
         self.register_callback("clear_all", lambda: self._on_clear_all(ctx))
@@ -221,9 +220,7 @@ class MeasurementMode(BaseMode):
         light_on = self.state.lamp_enabled
         led_pct = ctx.display.get_led_intensity_value() if light_on else None
         pwm_log = (
-            f"{math.log10(0.01 + led_pct / 100):.4f}"
-            if led_pct is not None and light_on
-            else None
+            f"{math.log10(0.01 + led_pct / 100):.4f}" if led_pct is not None and light_on else None
         )
         measured_acq = self.acq_label(ctx.display.state.hold_peaks)
         metadata = {
@@ -351,10 +348,6 @@ class MeasurementMode(BaseMode):
         ctx.display.set_button_active("show_absorption", self.meas_state.show_absorption)
         print(f"[Measurement] Absorption: {'ON' if self.meas_state.show_absorption else 'OFF'}")
 
-    def _on_toggle_light(self, ctx: ModeContext) -> None:
-        """Toggle light control - placeholder."""
-        print("[LIGHT] Toggle light (GPIO not implemented yet)")
-
     def update_display(
         self,
         ctx: ModeContext,
@@ -417,21 +410,28 @@ class MeasurementMode(BaseMode):
             "clear_overlay_csv",
             len(self.meas_state.extra_overlays) == 0,
         )
+        self._sync_lamp_control_bar(ctx)
 
     def get_buttons(self) -> list[ButtonDefinition]:
         """Get measurement mode buttons. Grouped with gaps; Quit right-aligned."""
         return [
             # Row 1: Rec (capture + progress) | Avg/Max/Acc | Dark/White | Bars | ZX/ZY | VIEW
             ButtonDefinition("Rec", "capture", is_toggle=True, row=1, icon_type="playback"),
-            ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=1, icon_type="sensitivity"),
+            ButtonDefinition(
+                "S", "toggle_sensitivity", is_toggle=True, row=1, icon_type="sensitivity"
+            ),
             ButtonDefinition("__gap__", "__gap__", row=1),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=1, icon_type="avg"),
-            ButtonDefinition("Max", "capture_peak", is_toggle=True, shortcut="h", row=1, icon_type="peak_hold"),
+            ButtonDefinition(
+                "Max", "capture_peak", is_toggle=True, shortcut="h", row=1, icon_type="peak_hold"
+            ),
             ButtonDefinition("Acc", "toggle_accumulation", is_toggle=True, row=1, icon_type="acc"),
             ButtonDefinition("__gap__", "__gap__2", row=1),
             ButtonDefinition("Drk", "set_dark", is_toggle=True, row=1, icon_type="dark"),
             ButtonDefinition("Wht", "set_white", is_toggle=True, row=1, icon_type="white"),
-            ButtonDefinition("ABS", "show_absorption", is_toggle=True, row=1, icon_type="absorption"),
+            ButtonDefinition(
+                "ABS", "show_absorption", is_toggle=True, row=1, icon_type="absorption"
+            ),
             ButtonDefinition("__gap__", "__gap__3", row=1),
             ButtonDefinition("Brs", "show_spectrum_bars", is_toggle=True, row=1, icon_type="bars"),
             ButtonDefinition("__gap__", "__gap__4", row=1),
@@ -449,12 +449,18 @@ class MeasurementMode(BaseMode):
             ButtonDefinition("Pkd", "show_peak_delta", is_toggle=True, row=2, icon_type="delta"),
             ButtonDefinition("Clr", "clear_all", shortcut="z", row=2, icon_type="clear"),
             ButtonDefinition("__gap__", "__gap__7", row=2),
-            ButtonDefinition("Ovrl", "show_raw_overlay", is_toggle=True, row=2, icon_type="overlay"),
+            ButtonDefinition(
+                "Ovrl", "show_raw_overlay", is_toggle=True, row=2, icon_type="overlay"
+            ),
             ButtonDefinition("__gap__", "__gap__8", row=2),
             ButtonDefinition("G", "show_gain_slider", is_toggle=True, row=2, icon_type="gain"),
-            ButtonDefinition("E", "show_exposure_slider", is_toggle=True, row=2, icon_type="exposure"),
+            ButtonDefinition(
+                "E", "show_exposure_slider", is_toggle=True, row=2, icon_type="exposure"
+            ),
             ButtonDefinition("AG", "auto_gain", is_toggle=True, row=2, icon_type="auto_gain"),
-            ButtonDefinition("AE", "auto_exposure", is_toggle=True, row=2, icon_type="auto_exposure"),
+            ButtonDefinition(
+                "AE", "auto_exposure", is_toggle=True, row=2, icon_type="auto_exposure"
+            ),
             ButtonDefinition("__gap__", "__gap__9", row=2),
             ButtonDefinition("Save", "save", shortcut="s", row=2, icon_type="save"),
             ButtonDefinition("SVG", "export_vector", shortcut="g", row=2),
@@ -519,9 +525,7 @@ class MeasurementMode(BaseMode):
             spectra.append((m, (0, 0, 200)))
         if not spectra:
             return []
-        global_max = max(
-            float(np.max(s[0])) for s in spectra
-        )
+        global_max = max(float(np.max(s[0])) for s in spectra)
         global_max = max(global_max, 1.0)
         out: list[tuple[np.ndarray, tuple[int, int, int]]] = []
         for arr, color in spectra:
