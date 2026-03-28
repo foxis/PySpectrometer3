@@ -100,6 +100,23 @@ def _pwm_led_type() -> Any:
     return PWMLED
 
 
+def _digital_led_type() -> Any:
+    """Digital on/off output for CLI full on/off (clean LOW; avoids PWM close leaving the line active)."""
+    _require_gpio_led()
+    try:
+        from gpiozero import LED
+    except ImportError as exc:
+        msg = "Install gpiozero on the Pi: poetry install (linux extras include gpiozero)."
+        raise RuntimeError(msg) from exc
+    return LED
+
+
+def _release_board_pwm_if_pin_matches(p: int) -> None:
+    """Stop GUI persistent PWM on this pin so CLI can take over the same GPIO."""
+    if p == effective_pin():
+        _close_board_pwm()
+
+
 def _normalize_duty(raw: float) -> float:
     """0–1 fraction, or percent > 1 (e.g. 50 -> 0.5). Values in (1, 100] are percent."""
     if raw < 0:
@@ -145,18 +162,20 @@ def apply_board_lamp(on: bool, brightness_pct: float) -> None:
 
 
 def turn_on(pin: int | None = None) -> None:
-    """Drive the LED fully on (software PWM)."""
+    """Drive the LED fully on (digital high; releases any GUI PWM on the same pin first)."""
     p = effective_pin() if pin is None else pin
-    PWMLED = _pwm_led_type()
-    with PWMLED(p, frequency=effective_frequency_hz()) as led:
+    _release_board_pwm_if_pin_matches(p)
+    LED = _digital_led_type()
+    with LED(p) as led:
         led.on()
 
 
 def turn_off(pin: int | None = None) -> None:
-    """Drive the LED off."""
+    """Drive the LED off (digital low; stops GUI persistent PWM if it uses this pin)."""
     p = effective_pin() if pin is None else pin
-    PWMLED = _pwm_led_type()
-    with PWMLED(p, frequency=effective_frequency_hz()) as led:
+    _release_board_pwm_if_pin_matches(p)
+    LED = _digital_led_type()
+    with LED(p) as led:
         led.off()
 
 
@@ -183,6 +202,7 @@ def hold_pwm(
     value = _normalize_duty(duty)
     p = effective_pin() if pin is None else pin
     f = effective_frequency_hz() if frequency is None else frequency
+    _release_board_pwm_if_pin_matches(p)
     PWMLED = _pwm_led_type()
     led = PWMLED(p, frequency=f)
     try:
