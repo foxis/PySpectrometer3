@@ -199,6 +199,36 @@ def led_off() -> int:
         return 1
 
 
+def led() -> int:
+    """Alias dispatcher so ``poetry run led off`` works (not only ``led-off``).
+
+    Usage: poetry run led <on|off|pwm> [...] — same extra args as led-on / led-off / led-pwm.
+    """
+    if len(sys.argv) < 2:
+        print(
+            "Usage: poetry run led <on|off|pwm> [...]\n"
+            "  Same options as: poetry run led-on | led-off | led-pwm",
+            file=sys.stderr,
+        )
+        return 1
+    sub = sys.argv[1].lower().replace("_", "-")
+    base = sys.argv[0]
+    sys.argv = [base, *sys.argv[2:]]
+    match sub:
+        case "on":
+            return led_on()
+        case "off":
+            return led_off()
+        case "pwm":
+            return led_pwm()
+        case _:
+            print(
+                f"Unknown subcommand {sub!r} (expected on, off, pwm).",
+                file=sys.stderr,
+            )
+            return 1
+
+
 def led_pwm() -> int:
     """Hold software PWM until Ctrl+C.
 
