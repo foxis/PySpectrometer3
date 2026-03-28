@@ -211,7 +211,7 @@ class BaseMode(ABC):
         ctx.display.show_led_slider(self.state.lamp_enabled)
 
     def _on_toggle_lamp_common(self) -> None:
-        """Toggle lamp UI and drive BCM LED on Raspberry Pi Zero only."""
+        """Toggle lamp UI and drive the spectrometer lamp GPIO on Raspberry Pi Zero only."""
         ctx = self._ctx
         if ctx is None:
             return

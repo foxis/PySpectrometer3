@@ -186,6 +186,10 @@ def _config_to_dict(config: "Config") -> dict:
             "peak_smoothing_period_sec": config.auto.peak_smoothing_period_sec,
             "max_adjust_rate_hz": config.auto.max_adjust_rate_hz,
         },
+        "hardware": {
+            "led_pin": config.hardware.led_pin,
+            "led_pwm_frequency_hz": config.hardware.led_pwm_frequency_hz,
+        },
         "sensitivity": {
             "use_custom_curve": config.sensitivity.use_custom_curve,
             "custom_wavelengths": [float(w) for w in config.sensitivity.custom_wavelengths],
@@ -250,6 +254,11 @@ def _apply_config(config: "Config", data: dict) -> None:
         apply(config.extraction, data["extraction"])
     if "auto" in data:
         apply(config.auto, data["auto"])
+    if "hardware" in data:
+        hw = dict(data["hardware"])
+        if "led_pin" not in hw and "led_bcm_pin" in hw:
+            hw["led_pin"] = hw["led_bcm_pin"]
+        apply(config.hardware, hw)
     if "sensitivity" in data:
         sens = data["sensitivity"]
         if "use_custom_curve" in sens:
@@ -420,6 +429,18 @@ class WaterfallConfig:
 
 
 @dataclass
+class HardwareConfig:
+    """GPIO / board peripherals (spectrometer lamp on Raspberry Pi Zero)."""
+
+    # Broadcom GPIO number (same scheme as gpiozero / `gpio readall`), not the physical header pin index.
+    # Default 22 is ordinary GPIO; PWM here is software-timed via gpiozero. GPIO 18 can use SoC hardware
+    # PWM when enabled in device tree; this app still drives brightness through PWMLED unless you change drivers.
+    led_pin: int = 22
+    # PWM frequency requested for gpiozero (Hz); on many pins this is implemented as software PWM.
+    led_pwm_frequency_hz: int = 3000
+
+
+@dataclass
 class AutoConfig:
     """Auto gain / auto exposure configuration."""
 
@@ -461,6 +482,7 @@ class Config:
     extraction: ExtractionConfig = field(default_factory=ExtractionConfig)
     auto: AutoConfig = field(default_factory=AutoConfig)
     sensitivity: SensitivityConfig = field(default_factory=SensitivityConfig)
+    hardware: HardwareConfig = field(default_factory=HardwareConfig)
 
     # Window titles
     spectrograph_title: str = "PySpectrometer 3 - Spectrograph"

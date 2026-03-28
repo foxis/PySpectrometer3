@@ -1,4 +1,9 @@
-"""Spectrometer lamp GPIO via gpiozero (Pi Zero only). Imports gpiozero only when used."""
+"""Spectrometer lamp GPIO via gpiozero (Pi Zero only). Imports gpiozero only when used.
+
+Pin numbers follow the Broadcom (SoC) GPIO index, like gpiozero and `gpio readall` — not the 1–40 physical
+header position. PWMLED uses software PWM on typical GPIOs (e.g. 22); GPIO 18 can be wired to hardware PWM
+on the SoC when the board is configured for it, but brightness control here is still through gpiozero's PWMLED.
+"""
 
 from __future__ import annotations
 
@@ -7,11 +12,14 @@ import time
 from pathlib import Path
 from typing import Any
 
-# BCM pin for spectrometer LED (see README / config.txt gpio=22).
+# Fallback when no config has been applied (matches HardwareConfig defaults).
 DEFAULT_PIN = 22
+DEFAULT_PWM_FREQUENCY_HZ = 3000
 
 _supported_cache: bool | None = None
 _board_pwm_led: Any = None
+_runtime_pin: int = DEFAULT_PIN
+_runtime_freq_hz: int = DEFAULT_PWM_FREQUENCY_HZ
 
 
 def _read_device_tree_model() -> str:
@@ -43,6 +51,34 @@ def reset_gpio_led_support_cache() -> None:
     """Clear cached board detection (for tests)."""
     global _supported_cache
     _supported_cache = None
+
+
+def effective_pin() -> int:
+    """Broadcom GPIO number for the lamp after config / CLI apply."""
+    return _runtime_pin
+
+
+def effective_frequency_hz() -> int:
+    """PWM frequency (Hz) after config / CLI apply (often software-timed on the chosen GPIO)."""
+    return _runtime_freq_hz
+
+
+def apply_led_config_from_values(pin: int, frequency_hz: int) -> None:
+    """Set runtime pin and PWM frequency; drop persistent board PWM if they change."""
+    global _runtime_pin, _runtime_freq_hz
+    p = int(max(0, min(40, int(pin))))
+    f = int(max(1, min(20_000, int(frequency_hz))))
+    if p != _runtime_pin or f != _runtime_freq_hz:
+        _close_board_pwm()
+    _runtime_pin, _runtime_freq_hz = p, f
+
+
+def reset_led_runtime() -> None:
+    """Restore code defaults and release board PWM (for tests)."""
+    global _runtime_pin, _runtime_freq_hz
+    _close_board_pwm()
+    _runtime_pin = DEFAULT_PIN
+    _runtime_freq_hz = DEFAULT_PWM_FREQUENCY_HZ
 
 
 def _require_gpio_led() -> None:
@@ -98,49 +134,57 @@ def apply_board_lamp(on: bool, brightness_pct: float) -> None:
             return
         duty = max(0.0, min(100.0, brightness_pct)) / 100.0
         PWMLED = _pwm_led_type()
+        pin = effective_pin()
+        freq = effective_frequency_hz()
         if _board_pwm_led is None:
-            _board_pwm_led = PWMLED(DEFAULT_PIN, frequency=100)
+            _board_pwm_led = PWMLED(pin, frequency=freq)
         _board_pwm_led.value = duty
     except Exception as exc:
         _close_board_pwm()
         print(f"[LED/HW] {exc}")
 
 
-def turn_on(pin: int = DEFAULT_PIN) -> None:
-    """Drive the LED fully on (software PWM at 100%)."""
+def turn_on(pin: int | None = None) -> None:
+    """Drive the LED fully on (software PWM)."""
+    p = effective_pin() if pin is None else pin
     PWMLED = _pwm_led_type()
-    with PWMLED(pin) as led:
+    with PWMLED(p, frequency=effective_frequency_hz()) as led:
         led.on()
 
 
-def turn_off(pin: int = DEFAULT_PIN) -> None:
+def turn_off(pin: int | None = None) -> None:
     """Drive the LED off."""
+    p = effective_pin() if pin is None else pin
     PWMLED = _pwm_led_type()
-    with PWMLED(pin) as led:
+    with PWMLED(p, frequency=effective_frequency_hz()) as led:
         led.off()
 
 
 def set_brightness(
     duty: float,
-    pin: int = DEFAULT_PIN,
-    frequency: int = 100,
+    pin: int | None = None,
+    frequency: int | None = None,
 ) -> None:
     """Set LED brightness once and release the pin (brief flash / sample)."""
     value = _normalize_duty(duty)
+    p = effective_pin() if pin is None else pin
+    f = effective_frequency_hz() if frequency is None else frequency
     PWMLED = _pwm_led_type()
-    with PWMLED(pin, frequency=frequency) as led:
+    with PWMLED(p, frequency=f) as led:
         led.value = value
 
 
 def hold_pwm(
     duty: float,
-    pin: int = DEFAULT_PIN,
-    frequency: int = 100,
+    pin: int | None = None,
+    frequency: int | None = None,
 ) -> None:
     """Hold software PWM until KeyboardInterrupt; use for `poetry run led-pwm`."""
     value = _normalize_duty(duty)
+    p = effective_pin() if pin is None else pin
+    f = effective_frequency_hz() if frequency is None else frequency
     PWMLED = _pwm_led_type()
-    led = PWMLED(pin, frequency=frequency)
+    led = PWMLED(p, frequency=f)
     try:
         led.value = value
         while True:

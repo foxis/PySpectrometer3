@@ -16,6 +16,7 @@ import numpy as np
 from .capture.base import CameraInterface
 from .capture.picamera import Capture
 from .config import Config
+from .hardware.led import apply_led_config_from_values
 from .core.calibration import Calibration
 from .core.mode_context import ModeContext
 from .core.reference_spectrum import ReferenceSpectrumManager
@@ -67,6 +68,10 @@ class Spectrometer:
         config_path: Path | None = None,
     ):
         self.config = config or Config()
+        apply_led_config_from_values(
+            self.config.hardware.led_pin,
+            self.config.hardware.led_pwm_frequency_hz,
+        )
         self.mode = mode if mode in self.VALID_MODES else "measurement"
         self.laser_nm = laser_nm
 

@@ -7,36 +7,61 @@ from pathlib import Path
 import numpy as np
 
 
+def _led_config_path_from_argv() -> Path | None:
+    """Optional `--config` / `-c` path for led-* commands (same search rules as the app)."""
+    args = sys.argv[1:]
+    for flag in ("--config", "-c"):
+        if flag in args:
+            i = args.index(flag)
+            if i + 1 < len(args):
+                return Path(args[i + 1])
+    return None
+
+
+def _apply_led_runtime_from_config() -> None:
+    from .config import load_config
+    from .hardware.led import apply_led_config_from_values
+
+    cfg, _ = load_config(_led_config_path_from_argv())
+    apply_led_config_from_values(
+        cfg.hardware.led_pin,
+        cfg.hardware.led_pwm_frequency_hz,
+    )
+
+
 def _led_pin_from_argv() -> int:
-    """Parse optional `--pin N` from argv; default BCM pin from hardware.led."""
-    from .hardware.led import DEFAULT_PIN
+    """Parse optional `--pin N` from argv; else effective pin from config.toml."""
+    from .hardware.led import effective_pin
 
     args = sys.argv[1:]
     if "--pin" in args:
         i = args.index("--pin")
         if i + 1 < len(args):
             return int(args[i + 1])
-    return DEFAULT_PIN
+    return effective_pin()
 
 
-def _led_freq_from_argv(default: int = 100) -> int:
+def _led_freq_from_argv() -> int:
+    from .hardware.led import effective_frequency_hz
+
     args = sys.argv[1:]
     if "--freq" in args:
         i = args.index("--freq")
         if i + 1 < len(args):
             return int(args[i + 1])
-    return default
+    return effective_frequency_hz()
 
 
 def _led_duty_positional() -> float | None:
     """First numeric argv token that is not a flag or flag value."""
     args = sys.argv[1:]
     skip = False
+    skip_flags = frozenset({"--pin", "--freq", "--config", "-c"})
     for a in args:
         if skip:
             skip = False
             continue
-        if a in ("--pin", "--freq"):
+        if a in skip_flags:
             skip = True
             continue
         if a.startswith("-"):
@@ -142,10 +167,15 @@ def format_src() -> int:
 
 
 def led_on() -> int:
-    """Drive LED fully on via gpiozero. Usage: poetry run led-on [--pin N]"""
+    """Drive LED fully on via gpiozero.
+
+    Usage: poetry run led-on [--pin N] [--config PATH]
+    Pin/frequency default from [hardware] in config when omitted.
+    """
     from .hardware.led import turn_on
 
     try:
+        _apply_led_runtime_from_config()
         turn_on(_led_pin_from_argv())
         return 0
     except (RuntimeError, ValueError, OSError) as exc:
@@ -154,10 +184,14 @@ def led_on() -> int:
 
 
 def led_off() -> int:
-    """Drive LED off via gpiozero. Usage: poetry run led-off [--pin N]"""
+    """Drive LED off via gpiozero.
+
+    Usage: poetry run led-off [--pin N] [--config PATH]
+    """
     from .hardware.led import turn_off
 
     try:
+        _apply_led_runtime_from_config()
         turn_off(_led_pin_from_argv())
         return 0
     except (RuntimeError, ValueError, OSError) as exc:
@@ -166,8 +200,9 @@ def led_off() -> int:
 
 
 def led_pwm() -> int:
-    """Hold software PWM until Ctrl+C. Usage: poetry run led-pwm <duty> [--pin N] [--freq Hz]
+    """Hold software PWM until Ctrl+C.
 
+    Usage: poetry run led-pwm <duty> [--pin N] [--freq Hz] [--config PATH]
     duty: 0–1 (fraction) or 2–100 (percent); e.g. 0.5 or 50 for half brightness.
     """
     from .hardware.led import hold_pwm
@@ -175,14 +210,15 @@ def led_pwm() -> int:
     duty = _led_duty_positional()
     if duty is None:
         print(
-            "Usage: poetry run led-pwm <duty> [--pin N] [--freq Hz]",
+            "Usage: poetry run led-pwm <duty> [--pin N] [--freq Hz] [--config PATH]",
             file=sys.stderr,
         )
         print("  duty: 0–1 (fraction) or 2–100 (percent, e.g. 50)", file=sys.stderr)
         return 1
-    pin = _led_pin_from_argv()
-    freq = _led_freq_from_argv()
     try:
+        _apply_led_runtime_from_config()
+        pin = _led_pin_from_argv()
+        freq = _led_freq_from_argv()
         hold_pwm(duty, pin=pin, frequency=freq)
         return 0
     except (RuntimeError, ValueError, OSError) as exc:

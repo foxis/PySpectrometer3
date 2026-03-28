@@ -1,14 +1,19 @@
 """Tests for lazy-import GPIO LED helpers (no gpiozero required on Windows)."""
 
 import sys
+from pathlib import Path
 
 import pytest
 
 from pyspectrometer.hardware.led import (
     DEFAULT_PIN,
     _normalize_duty,
+    apply_led_config_from_values,
+    effective_frequency_hz,
+    effective_pin,
     gpio_led_supported,
     reset_gpio_led_support_cache,
+    reset_led_runtime,
     turn_off,
     turn_on,
 )
@@ -17,12 +22,49 @@ from pyspectrometer.hardware.led import (
 @pytest.fixture(autouse=True)
 def _reset_led_support_cache() -> None:
     reset_gpio_led_support_cache()
+    reset_led_runtime()
     yield
     reset_gpio_led_support_cache()
+    reset_led_runtime()
 
 
 def test_default_pin() -> None:
     assert DEFAULT_PIN == 22
+
+
+def test_apply_led_config_from_values_updates_effective() -> None:
+    apply_led_config_from_values(17, 1500)
+    assert effective_pin() == 17
+    assert effective_frequency_hz() == 1500
+
+
+def test_apply_led_config_clamps_pin_and_frequency() -> None:
+    apply_led_config_from_values(99, 50_000)
+    assert effective_pin() == 40
+    assert effective_frequency_hz() == 20_000
+
+
+def test_load_config_hardware_led_pin(tmp_path: Path) -> None:
+    p = tmp_path / "cfg.toml"
+    p.write_text(
+        "[hardware]\nled_pin = 18\nled_pwm_frequency_hz = 2000\n",
+        encoding="utf-8",
+    )
+    from pyspectrometer.config import load_config
+
+    cfg, loaded = load_config(p)
+    assert loaded == p
+    assert cfg.hardware.led_pin == 18
+    assert cfg.hardware.led_pwm_frequency_hz == 2000
+
+
+def test_load_config_legacy_led_bcm_pin_alias(tmp_path: Path) -> None:
+    p = tmp_path / "old.toml"
+    p.write_text("[hardware]\nled_bcm_pin = 7\n", encoding="utf-8")
+    from pyspectrometer.config import load_config
+
+    cfg, _ = load_config(p)
+    assert cfg.hardware.led_pin == 7
 
 
 @pytest.mark.parametrize(
