@@ -114,6 +114,7 @@ class Spectrometer:
             spectrum_y_center=spectrum_y,
             crop_height=self.config.display.preview_height,
             background_percentile=self.config.extraction.background_percentile,
+            frame_black_strip_height=self.config.extraction.frame_black_strip_height,
         )
         self._savgol_filter = SavitzkyGolayFilter(
             window_size=self.config.processing.savgol_window,

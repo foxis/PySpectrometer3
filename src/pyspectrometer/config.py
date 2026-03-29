@@ -233,6 +233,7 @@ def _config_to_dict(config: "Config") -> dict:
             "perpendicular_width": config.extraction.perpendicular_width,
             "spectrum_y_center": config.extraction.spectrum_y_center,
             "background_percentile": config.extraction.background_percentile,
+            "frame_black_strip_height": config.extraction.frame_black_strip_height,
         },
         "auto": {
             "peak_smoothing_period_sec": config.auto.peak_smoothing_period_sec,
@@ -516,6 +517,8 @@ class ExtractionConfig:
     perpendicular_width_max: int = 100
     background_percentile: float = 10.0  # for background subtraction
     spectrum_y_center: int = 0  # 0 = auto (frame center)
+    # Rows (top and bottom) used for per-column bias estimate; bias removal is always applied in extract.
+    frame_black_strip_height: int = 8
 
 
 @dataclass

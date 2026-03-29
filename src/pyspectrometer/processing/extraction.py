@@ -56,6 +56,9 @@ class ExtractionResult:
 class SpectrumExtractor:
     """Extracts spectrum intensity from camera frames.
 
+    Per-column sensor bias is removed using mean(top strip) and mean(bottom strip)
+    on the rotated grayscale frame, in raw counts before normalization.
+
     Handles rotated spectrum lines and vertical structure by sampling
     perpendicular to the spectrum axis and applying one of three methods:
     - Median: robust to outliers
@@ -74,6 +77,7 @@ class SpectrumExtractor:
         spectrum_y_center: int | None = None,
         crop_height: int = 80,
         background_percentile: float = 10.0,
+        frame_black_strip_height: int = 8,
     ):
         """Initialize spectrum extractor.
 
@@ -85,7 +89,9 @@ class SpectrumExtractor:
             perpendicular_width: Number of pixels to sample perpendicular to axis
             spectrum_y_center: Y coordinate of spectrum center (None = frame center)
             crop_height: Height of cropped preview region
-            background_percentile: Percentile for background estimation
+            background_percentile: Percentile for background estimation (within spectrum strip)
+            frame_black_strip_height: Row count for top and bottom strips used to estimate
+                per-column black level (subtracted in raw counts before ``/ max_val``; clamped if frame is small).
         """
         self.frame_width = frame_width
         self.frame_height = frame_height
@@ -95,6 +101,7 @@ class SpectrumExtractor:
         self.spectrum_y_center = spectrum_y_center or (frame_height // 2)
         self.crop_height = crop_height
         self.background_percentile = background_percentile
+        self.frame_black_strip_height = frame_black_strip_height
 
         self._perpendicular_width_min = 5
         self._perpendicular_width_max = 100
@@ -119,6 +126,26 @@ class SpectrumExtractor:
         params = self._transform_params()
         return apply_forward_transform(frame, params)
 
+    def _black_strip_height(self, frame_height: int) -> int:
+        """Row count for top and bottom strips; clamped so strips do not overlap."""
+        want = max(1, self.frame_black_strip_height)
+        if 2 * want >= frame_height:
+            return max(1, frame_height // 4)
+        return want
+
+    def _frame_black_level_1d(self, gray: np.ndarray) -> np.ndarray:
+        """Per-column black level from mean(top strip) and mean(bottom strip), averaged.
+
+        Returns length ``gray.shape[1]``, same length as extracted spectrum.
+        """
+        h = gray.shape[0]
+        strip = self._black_strip_height(h)
+        top = gray[0:strip, :]
+        bottom = gray[h - strip : h, :]
+        top_m = np.mean(top, axis=0)
+        bottom_m = np.mean(bottom, axis=0)
+        return ((top_m + bottom_m) * 0.5).astype(np.float32)
+
     def extract(
         self,
         frame: np.ndarray,
@@ -133,6 +160,7 @@ class SpectrumExtractor:
                    - Monochrome 10/16-bit: (height, width) uint16
             max_val: Divisor for 0-1 normalization: raw / max_val. For 10-bit use 1023, for 8-bit use 255.
                      If None, defaults to 1023. Caller must pass value that matches frame bit depth.
+                     Frame black subtraction is applied in raw counts first, then division.
 
         Returns:
             ExtractionResult with intensity in 0-1 range and cropped frame
@@ -143,20 +171,22 @@ class SpectrumExtractor:
         # Convert to grayscale float for processing
         gray = self._frame_to_gray(rotated_frame)
 
-        intensity = self._extract_with_method(gray)
+        intensity = self._extract_with_method(gray).astype(np.float32)
+        bg_1d = self._frame_black_level_1d(gray)
+        intensity = np.clip(intensity - bg_1d, 0.0, np.inf)
 
         # Divisor from bit depth only: raw / max_val → 0-1. Caller must pass max_val that matches
         # the frame's bit depth (255 for 8-bit, 1023 for 10-bit). Never derived from image content.
         max_val_used = max_val if max_val is not None and max_val > 0 else 1023.0
-        intensity = (intensity.astype(np.float32) / max_val_used).astype(np.float32)
 
-        half_perp = self.perpendicular_width // 2
-        y_start = max(0, self.spectrum_y_center - half_perp)
-        y_end = min(gray.shape[0], self.spectrum_y_center + half_perp + 1)
-        roi = gray[y_start:y_end, :]
-        # Max in spectrum strip (AE for spectrum); max in full frame (AE for preview).
-        max_in_roi = np.float32(roi.max() / max_val_used) if roi.size > 0 else np.float32(0)
+        # Max in spectrum strip after bias subtraction (AE for spectrum); max in full frame (AE for preview).
+        max_in_roi = (
+            np.float32(intensity.max() / max_val_used) if intensity.size > 0 else np.float32(0)
+        )
         max_in_frame = np.float32(gray.max() / max_val_used) if gray.size > 0 else np.float32(0)
+
+        intensity = (intensity / max_val_used).astype(np.float32)
+        intensity = np.maximum(intensity, 0.0)
 
         # Use rotated frame for preview so lines appear straight
         cropped = self._create_cropped_preview(rotated_frame)
