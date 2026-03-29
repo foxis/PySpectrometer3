@@ -5,6 +5,11 @@ from abc import ABC, abstractmethod
 import numpy as np
 
 
+def mirror_horizontal(frame: np.ndarray) -> np.ndarray:
+    """Left-right mirror of a 2D image or HWC array (axis 1 reversed)."""
+    return np.fliplr(frame)
+
+
 class CameraInterface(ABC):
     """Abstract base class for camera capture backends.
 

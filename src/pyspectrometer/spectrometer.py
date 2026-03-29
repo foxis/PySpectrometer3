@@ -82,6 +82,7 @@ class Spectrometer:
             fps=self.config.camera.fps,
             monochrome=self.config.camera.monochrome,
             bit_depth=self.config.camera.bit_depth,
+            flip_horizontal=self.config.camera.flip_horizontal,
         )
         self._calibration = Calibration(
             width=self.config.camera.frame_width,

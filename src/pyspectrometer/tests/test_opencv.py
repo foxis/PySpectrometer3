@@ -1,6 +1,16 @@
 """Unit tests for capture.opencv backend."""
 
+import numpy as np
+
+from ..capture.base import mirror_horizontal
 from ..capture.opencv import Capture, _parse_source
+
+
+def test_mirror_horizontal_2d():
+    """mirror_horizontal reverses columns (left-right)."""
+    a = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.uint16)
+    m = mirror_horizontal(a)
+    np.testing.assert_array_equal(m, np.array([[3, 2, 1], [6, 5, 4]]))
 
 
 def test_parse_source_int():

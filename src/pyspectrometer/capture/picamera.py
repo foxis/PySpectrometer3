@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from .base import CameraInterface
+from .base import CameraInterface, mirror_horizontal
 
 
 class Capture(CameraInterface):
@@ -24,6 +24,7 @@ class Capture(CameraInterface):
         fps: int = 30,
         monochrome: bool = False,
         bit_depth: int = 10,
+        flip_horizontal: bool = False,
     ):
         """Initialize Picamera2 capture.
 
@@ -34,6 +35,7 @@ class Capture(CameraInterface):
             fps: Target frames per second
             monochrome: If True, use monochrome format with higher bit depth
             bit_depth: Bit depth for monochrome mode (10 or 16)
+            flip_horizontal: If True, mirror the frame left-right after capture
         """
         self._width = width
         self._height = height
@@ -42,6 +44,7 @@ class Capture(CameraInterface):
         self._fps = fps
         self._monochrome = monochrome
         self._bit_depth = bit_depth if bit_depth in (10, 16) else 10
+        self._flip_horizontal = flip_horizontal
         self._running = False
         self._camera: Picamera2 | None = None
         self._actual_bit_depth: int = 8
@@ -262,29 +265,32 @@ class Capture(CameraInterface):
 
         # If using raw capture, get raw frame for higher bit depth
         if self._use_raw:
-            # capture_array("raw") returns the raw stream directly
             raw_frame = self._camera.capture_array("raw")
-            return self._process_raw_frame(raw_frame)
+            out = self._process_raw_frame(raw_frame)
+        else:
+            frame = self._camera.capture_array()
 
-        frame = self._camera.capture_array()
+            # Handle monochrome high bit-depth formats
+            if self._monochrome and self._actual_bit_depth > 8:
+                # Y10/Y16 data comes as bytes, view as uint16
+                if frame.dtype == np.uint8 and frame.ndim == 2:
+                    # Packed format: reshape and view as uint16
+                    frame = frame.view(np.uint16)
+                elif frame.dtype == np.uint8 and frame.ndim == 3:
+                    # If still 3D, take first channel (Y from YUV)
+                    frame = frame[:, :, 0].astype(np.uint16)
+            elif self._monochrome and frame.ndim == 3:
+                # Monochrome but got color frame, convert to grayscale
+                # Use luminance formula: Y = 0.299*R + 0.587*G + 0.114*B
+                frame = (
+                    0.299 * frame[:, :, 0] + 0.587 * frame[:, :, 1] + 0.114 * frame[:, :, 2]
+                ).astype(np.uint8)
 
-        # Handle monochrome high bit-depth formats
-        if self._monochrome and self._actual_bit_depth > 8:
-            # Y10/Y16 data comes as bytes, view as uint16
-            if frame.dtype == np.uint8 and frame.ndim == 2:
-                # Packed format: reshape and view as uint16
-                frame = frame.view(np.uint16)
-            elif frame.dtype == np.uint8 and frame.ndim == 3:
-                # If still 3D, take first channel (Y from YUV)
-                frame = frame[:, :, 0].astype(np.uint16)
-        elif self._monochrome and frame.ndim == 3:
-            # Monochrome but got color frame, convert to grayscale
-            # Use luminance formula: Y = 0.299*R + 0.587*G + 0.114*B
-            frame = (
-                0.299 * frame[:, :, 0] + 0.587 * frame[:, :, 1] + 0.114 * frame[:, :, 2]
-            ).astype(np.uint8)
+            out = frame
 
-        return frame
+        if self._flip_horizontal:
+            out = mirror_horizontal(out)
+        return out
 
     def _process_raw_frame(self, raw_frame: np.ndarray) -> np.ndarray:
         """Process raw frame from sensor to extract monochrome data.

@@ -157,6 +157,7 @@ def _capture_loop(
         fps=config.camera.fps,
         monochrome=config.camera.monochrome,
         bit_depth=config.camera.bit_depth,
+        flip_horizontal=config.camera.flip_horizontal,
     )
 
     smoothing = config.auto.peak_smoothing_period_sec

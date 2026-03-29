@@ -3,7 +3,7 @@
 import cv2
 import numpy as np
 
-from .base import CameraInterface
+from .base import CameraInterface, mirror_horizontal
 
 
 def _parse_source(source: int | str) -> int | str:
@@ -79,6 +79,7 @@ class Capture(CameraInterface):
         height: int = 600,
         gain: float = 10.0,
         fps: int = 30,
+        flip_horizontal: bool = False,
     ):
         """Initialize OpenCV capture.
 
@@ -89,6 +90,7 @@ class Capture(CameraInterface):
             height: Requested frame height
             gain: Stored but not applied (no-op)
             fps: Requested frames per second (best-effort)
+            flip_horizontal: If True, mirror the frame left-right after capture
         """
         self._source = _parse_source(source)
         self._width = width
@@ -96,6 +98,7 @@ class Capture(CameraInterface):
         self._gain = gain
         self._exposure = 10000
         self._fps = fps
+        self._flip_horizontal = flip_horizontal
         self._running = False
         self._cap: cv2.VideoCapture | None = None
 
@@ -202,4 +205,6 @@ class Capture(CameraInterface):
 
         # Scale 8-bit (0-255) to 10-bit (0-1023) for pipeline contract
         out = (gray.astype(np.float32) * 1023.0 / 255.0).astype(np.uint16)
+        if self._flip_horizontal:
+            out = mirror_horizontal(out)
         return out

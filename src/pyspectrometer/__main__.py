@@ -300,6 +300,7 @@ def main() -> int:
             height=config.camera.frame_height,
             gain=config.camera.gain,
             fps=config.camera.fps,
+            flip_horizontal=config.camera.flip_horizontal,
         )
         print(f"Using camera: {args.camera}")
     else:
@@ -312,6 +313,7 @@ def main() -> int:
             fps=config.camera.fps,
             monochrome=config.camera.monochrome,
             bit_depth=config.camera.bit_depth,
+            flip_horizontal=config.camera.flip_horizontal,
         )
 
     camera.start()

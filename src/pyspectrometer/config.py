@@ -118,6 +118,7 @@ def _config_to_dict(config: "Config") -> dict:
             "fps": config.camera.fps,
             "monochrome": config.camera.monochrome,
             "bit_depth": config.camera.bit_depth,
+            "flip_horizontal": config.camera.flip_horizontal,
         },
         "display": {
             "fullscreen": config.display.fullscreen,
@@ -289,6 +290,9 @@ class CameraConfig:
     # Monochrome camera support (default: True for spectrometer use)
     monochrome: bool = True
     bit_depth: int = 10  # 8, 10, or 16 (for monochrome cameras)
+
+    # Mirror camera image left-right after capture (all backends)
+    flip_horizontal: bool = False
 
 
 @dataclass
