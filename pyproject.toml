@@ -39,6 +39,7 @@ led = "pyspectrometer.cli:led"
 led-on = "pyspectrometer.cli:led_on"
 led-off = "pyspectrometer.cli:led_off"
 led-pwm = "pyspectrometer.cli:led_pwm"
+list-cameras = "pyspectrometer.cli:list_cameras"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

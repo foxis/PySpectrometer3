@@ -1,4 +1,4 @@
-"""CLI entry points for Poetry scripts: calibrate, measure, colors, raman, lint, format, stream, waterfall, led."""
+"""CLI entry points for Poetry scripts: calibrate, measure, colors, raman, lint, format, stream, waterfall, led, list-cameras."""
 
 import subprocess
 import sys
@@ -276,6 +276,23 @@ def stream() -> int:
 def waterfall() -> int:
     """Run waterfall mode (standalone). Usage: poetry run waterfall [camera_source]"""
     return _run("waterfall", _camera_arg())
+
+
+def list_cameras() -> int:
+    """Enumerate OpenCV camera indices (same as ``python -m pyspectrometer --list-cameras``).
+
+    Usage: poetry run list-cameras
+    """
+    from .capture.opencv import list_cameras as enumerate_cameras
+
+    cameras = enumerate_cameras()
+    if not cameras:
+        print("No cameras found.")
+    else:
+        print("Available cameras:")
+        for idx, desc in cameras:
+            print(f"  {idx}: {desc}")
+    return 0
 
 
 def view_csv() -> int:
