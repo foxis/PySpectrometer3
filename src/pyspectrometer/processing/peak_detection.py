@@ -62,6 +62,59 @@ def find_peak_indexes_scipy(
     return np.asarray(idx, dtype=np.intp)
 
 
+def nearest_among_peak_indices(
+    candidate_idx: int,
+    peak_indices: np.ndarray,
+    *,
+    n: int,
+) -> int:
+    """Pick the peak index closest to *candidate_idx* in sample space (same as marker snap).
+
+    Used by calibration assist and any UI that snaps a data index to a precomputed
+    peak list (e.g. from :func:`find_peaks` or :func:`find_peak_indexes_scipy`).
+    """
+    ci = int(np.clip(int(candidate_idx), 0, max(0, n - 1)))
+    pk = np.asarray(peak_indices, dtype=np.intp).ravel()
+    if pk.size == 0:
+        return ci
+    return int(pk[int(np.argmin(np.abs(pk - ci)))])
+
+
+def snap_to_nearest_peak_index(
+    y: np.ndarray,
+    idx: int,
+    *,
+    wavelengths: np.ndarray | None = None,
+    window: int = 48,
+) -> int:
+    """Snap *idx* to the nearest peak on *y*; if none detected, use argmax in a local window.
+
+    When *wavelengths* is provided and matches *y* in length, uses :func:`find_peaks`
+    (same defaults as the processing pipeline). Otherwise uses
+    :func:`find_peak_indexes_scipy`.
+    """
+    arr = np.asarray(y, dtype=np.float64)
+    n = arr.size
+    if n < 1:
+        return 0
+    idx = int(np.clip(idx, 0, n - 1))
+    wl = wavelengths
+    if wl is not None and len(wl) == n:
+        peaks_list = find_peaks(arr, wl)
+        peak_ix = np.array([p.index for p in peaks_list], dtype=np.intp)
+    else:
+        peak_ix = find_peak_indexes_scipy(arr)
+    if peak_ix.size > 0:
+        return nearest_among_peak_indices(idx, peak_ix, n=n)
+    half = max(1, window // 2)
+    lo = max(0, idx - half)
+    hi = min(n, idx + half + 1)
+    seg = arr[lo:hi]
+    if seg.size == 0:
+        return idx
+    return int(lo + int(np.argmax(seg)))
+
+
 def _widths_nm(
     arr: np.ndarray,
     positions: np.ndarray,

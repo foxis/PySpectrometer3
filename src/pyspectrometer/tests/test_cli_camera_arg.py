@@ -19,6 +19,11 @@ def test_camera_arg_after_config_and_path(restore_argv):
     assert _camera_arg() == "1"
 
 
+def test_camera_arg_after_short_config_and_path(restore_argv):
+    sys.argv = ["calibrate", "-c", "garden.toml", "1"]
+    assert _camera_arg() == "1"
+
+
 def test_camera_arg_config_only(restore_argv):
     sys.argv = ["calibrate", "--config", "garden.toml"]
     assert _camera_arg() is None

@@ -247,7 +247,13 @@ def main() -> int:
         description="MJPEG stream from Picamera2 (Pi only). Uses pyspectrometer pipeline."
     )
     parser.add_argument("--port", type=int, default=8000, help="HTTP port (default: 8000)")
-    parser.add_argument("--config", type=str, default=None, help="Config file path (TOML)")
+    parser.add_argument(
+        "-c",
+        "--config",
+        type=str,
+        default=None,
+        help="Config TOML; leading ! = file under app config dir (same as default config.toml)",
+    )
     parser.add_argument("--ag", action="store_true", help="Enable auto gain")
     parser.add_argument("--ae", action="store_true", help="Enable auto exposure")
     parser.add_argument("--camera", type=str, default=None, help="Ignored (Pi only)")

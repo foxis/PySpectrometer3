@@ -96,6 +96,10 @@ class DisplayState:
     peaks_visible: bool = False
     # Vertical marker lines: list of data indices (max 10)
     marker_lines: list[int] = field(default_factory=list)
+    # Calibration assist: second set (reference SPD); same add/drag/tap-delete as marker_lines
+    reference_marker_lines: list[int] = field(default_factory=list)
+    # "none" | "measured" | "reference" — which list receives marker interaction
+    calibration_assist_target: str = "none"
     snap_to_peaks: bool = False
     # Show peak/dip width (FWHM) below wavelength on peaks and markers when on a peak
     peak_delta_visible: bool = False
@@ -286,8 +290,10 @@ class DisplayManager:
         self._dragging_marker_idx: int | None = None
         self._drag_is_existing: bool = False
         self._drag_start_x: int = 0
-        # Last known spectrum peaks for snap-to-peak
+        # Last known spectrum peaks for snap-to-peak (measured)
         self._last_peaks: list = []
+        # Calibration MkrR: peaks on reference SPD for the same snap rules as marker_lines
+        self._calibration_reference_snap_peaks: list = []
 
     def set_frame_dimensions(self, width: int, height: int) -> None:
         """Update dimensions (e.g. after camera reports actual size).
@@ -520,11 +526,28 @@ class DisplayManager:
 
     # ------------------------------------------------------------------ markers
 
+    def _active_marker_lines(self) -> list[int]:
+        """Which marker list is edited (measurement, cal measured, or cal reference)."""
+        if self.mode == "calibration" and self.state.calibration_assist_target == "reference":
+            return self.state.reference_marker_lines
+        return self.state.marker_lines
+
+    def _peaks_for_marker_snap(self) -> list:
+        """Peaks used for snap-to-peak (measured spectrum vs reference SPD in calibration)."""
+        if self.mode == "calibration" and self.state.calibration_assist_target == "reference":
+            return self._calibration_reference_snap_peaks
+        return self._last_peaks
+
+    def set_calibration_reference_snap_peaks(self, peaks: list | None) -> None:
+        """Peaks on reference SPD for MkrR marker snap; None or empty clears."""
+        self._calibration_reference_snap_peaks = list(peaks) if peaks else []
+
     def _find_nearby_marker(self, screen_x: int, width: int) -> int | None:
-        """Return marker_lines list index of the closest marker within grab radius, or None."""
+        """Return active marker list index of the closest marker within grab radius, or None."""
+        lines = self._active_marker_lines()
         best_idx = None
         best_dist = _MARKER_GRAB_RADIUS + 1
-        for i, data_idx in enumerate(self.state.marker_lines):
+        for i, data_idx in enumerate(lines):
             sx = self._viewport.data_x_to_screen(float(data_idx), width)
             dist = abs(sx - screen_x)
             if dist < best_dist:
@@ -536,11 +559,12 @@ class DisplayManager:
         """Convert data x float to marker data index, snapping to nearest peak when enabled."""
         n = max(1, self._last_data_width)
         raw_idx = max(0, min(n - 1, int(round(data_x))))
-        if not self.state.snap_to_peaks or not self._last_peaks:
+        peaks_for_snap = self._peaks_for_marker_snap()
+        if not self.state.snap_to_peaks or not peaks_for_snap:
             return raw_idx
         best_idx = raw_idx
         best_dist = _MARKER_SNAP_RADIUS + 1
-        for peak in self._last_peaks:
+        for peak in peaks_for_snap:
             peak_sx = self._viewport.data_x_to_screen(float(peak.index), width)
             dist = abs(peak_sx - screen_x)
             if dist < best_dist:
@@ -554,11 +578,12 @@ class DisplayManager:
         if existing is not None:
             self._dragging_marker_idx = existing
             self._drag_is_existing = True
-        elif len(self.state.marker_lines) < 10:
+        elif len(self._active_marker_lines()) < 10:
             data_x = self._viewport.screen_x_to_data(screen_x, width)
             idx = self._resolve_marker_position(data_x, screen_x, width)
-            self.state.marker_lines.append(idx)
-            self._dragging_marker_idx = len(self.state.marker_lines) - 1
+            lines = self._active_marker_lines()
+            lines.append(idx)
+            self._dragging_marker_idx = len(lines) - 1
             self._drag_is_existing = False
         self._drag_start_x = screen_x
 
@@ -568,7 +593,8 @@ class DisplayManager:
             return
         data_x = self._viewport.screen_x_to_data(screen_x, width)
         idx = self._resolve_marker_position(data_x, screen_x, width)
-        self.state.marker_lines[self._dragging_marker_idx] = idx
+        lines = self._active_marker_lines()
+        lines[self._dragging_marker_idx] = idx
 
     def _finalize_marker_drag(self, screen_x: int) -> None:
         """On mouse-up: remove existing marker if it was only tapped (not dragged)."""
@@ -576,7 +602,7 @@ class DisplayManager:
             return
         dx = abs(screen_x - self._drag_start_x)
         if self._drag_is_existing and dx < _CLICK_DRAG_THRESHOLD:
-            self.state.marker_lines.pop(self._dragging_marker_idx)
+            self._active_marker_lines().pop(self._dragging_marker_idx)
         self._dragging_marker_idx = None
         self._drag_is_existing = False
 
@@ -789,8 +815,47 @@ class DisplayManager:
                     spectrum_screen_y=spectrum_screen_y,
                     graph_height=graph_height,
                 )
-            if self._graph_post_draw is not None:
-                self._graph_post_draw(graph, data)
+            elif self.mode == "calibration" and (
+                self.state.marker_lines or self.state.reference_marker_lines
+            ):
+                self._markers_renderer.show_width = self.state.peak_delta_visible
+                if self.state.marker_lines:
+                    drag_m = (
+                        self._dragging_marker_idx
+                        if self.state.calibration_assist_target == "measured"
+                        else None
+                    )
+                    self._markers_renderer.render(
+                        graph,
+                        self.state.marker_lines,
+                        data.wavelengths,
+                        self._viewport,
+                        y_offset=0,
+                        dragging_idx=drag_m,
+                        intensity=data.intensity,
+                        spectrum_screen_y=spectrum_screen_y,
+                        graph_height=graph_height,
+                    )
+                if self.state.reference_marker_lines:
+                    drag_r = (
+                        self._dragging_marker_idx
+                        if self.state.calibration_assist_target == "reference"
+                        else None
+                    )
+                    self._markers_renderer.render(
+                        graph,
+                        self.state.reference_marker_lines,
+                        data.wavelengths,
+                        self._viewport,
+                        y_offset=0,
+                        dragging_idx=drag_r,
+                        intensity=data.intensity,
+                        spectrum_screen_y=spectrum_screen_y,
+                        graph_height=graph_height,
+                    )
+
+        if self._graph_post_draw is not None:
+            self._graph_post_draw(graph, data)
 
         if self._graph_info:
             self._render_graph_info(graph)

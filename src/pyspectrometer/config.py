@@ -1,6 +1,7 @@
 """Configuration management for PySpectrometer3."""
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -13,13 +14,38 @@ def app_config_dir() -> Path:
     return Path.home() / ".config" / "itohio" / "spectral"
 
 
+def resolve_explicit_config_path(path: str | Path) -> Path:
+    """Normalize a user-supplied config path (CLI, env, tools).
+
+    If the string form starts with ``!``, the rest is taken as a path relative to
+    :func:`app_config_dir` (the same directory as the default ``config.toml``),
+    e.g. ``!garden.toml`` → ``<app_config_dir>/garden.toml``. A lone ``!`` maps
+    to :func:`default_main_config_path`. Otherwise behaves like
+    ``Path(...).expanduser()``.
+    """
+    s = str(path).strip()
+    if s.startswith("!"):
+        rest = s[1:].lstrip("/\\")
+        if not rest:
+            return default_main_config_path()
+        return (app_config_dir() / rest).expanduser()
+    return Path(s).expanduser()
+
+
 def config_search_paths(explicit: Path | None = None) -> list[Path]:
-    """Return paths to try for config, in order. Primary: user config dir."""
+    """Return paths to try for config, in order.
+
+    If *explicit* is set (CLI ``--config`` / ``-c``), only that path is used (after
+    :func:`resolve_explicit_config_path`, so ``!name`` is under :func:`app_config_dir`);
+    it overrides ``PYSPECTROMETER_CONFIG`` and the usual default search order.
+    Otherwise: env var, then ``~/.config/.../config.toml``, then cwd
+    ``pyspectrometer.toml``.
+    """
     if explicit is not None:
-        return [explicit.expanduser()]
+        return [resolve_explicit_config_path(explicit)]
     paths = []
     if p := os.environ.get("PYSPECTROMETER_CONFIG"):
-        paths.append(Path(p).expanduser())
+        paths.append(resolve_explicit_config_path(p))
     paths.append(app_config_dir() / "config.toml")
     paths.append(Path.cwd() / "pyspectrometer.toml")
     return paths
@@ -30,6 +56,26 @@ def default_config_path(explicit: Path | None = None) -> Path:
     return config_search_paths(explicit)[0]
 
 
+def explicit_config_path_from_argv(argv: list[str] | None = None) -> Path | None:
+    """First ``--config`` or ``-c`` value in *argv* (default: ``sys.argv`` tail).
+
+    Use for Poetry scripts and tools that do not use :mod:`argparse`, so they
+    load/save the same file as ``python -m pyspectrometer --config ...``.
+    """
+    if argv is None:
+        argv = sys.argv[1:]
+    i = 0
+    while i < len(argv):
+        if argv[i] in ("--config", "-c"):
+            if i + 1 < len(argv):
+                nxt = argv[i + 1]
+                if not nxt.startswith("-"):
+                    return resolve_explicit_config_path(nxt)
+            return None
+        i += 1
+    return None
+
+
 def load_config(path: Path | None = None) -> tuple["Config", Path | None]:
     """Load config from file, merging with defaults.
 
@@ -37,7 +83,10 @@ def load_config(path: Path | None = None) -> tuple["Config", Path | None]:
         path: Explicit config file path. If None, searches default locations.
 
     Returns:
-        (Config, loaded_path). loaded_path is None if no file was loaded.
+        (Config, path_for_save). ``path_for_save`` is the file that was read when one
+        exists; if *path* was given but the file is missing, returns that expanded path
+        so callers persist to the same file on first save. If implicit search finds no
+        file, returns None (``save_config`` then uses the default main config path).
     """
     config = Config()
     for p in config_search_paths(path):
@@ -46,6 +95,8 @@ def load_config(path: Path | None = None) -> tuple["Config", Path | None]:
                 data = tomllib.load(f)
             _apply_config(config, data)
             return config, p
+    if path is not None:
+        return config, resolve_explicit_config_path(path)
     return config, None
 
 

@@ -7,11 +7,16 @@ Workflow:
 1. Select reference source (FL, Hg, D65, LED)
 2. Point spectrometer at light source
 3. Use auto-level and auto-shift to fit spectrum in view
-4. Click AutoCal (works on live or frozen spectrum)
-5. Correlation-based optimization finds polynomial that maximizes spectrum
-   correlation with reference, regularized for linearity (prism dispersion)
-6. Verify overlay aligns with measured spectrum
-7. Save calibration manually when satisfied
+4. Optional: MkrM / MkrR — same marker interaction as measurement (add / drag / tap to
+   delete). Measured markers use display.marker_lines; reference markers use
+   reference_marker_lines. Mutually exclusive placement toggles. MkrR after ≥4
+   measured markers. Equal counts (≥4) on CAL dismiss uses manual pairs; else auto.
+5. Click AutoCal (works on live or frozen spectrum)
+6. Correlation-based optimization finds polynomial that maximizes spectrum
+   correlation with reference, regularized for linearity (prism dispersion),
+   unless manual assist rules are satisfied (then marker pairs are used).
+7. Verify overlay aligns with measured spectrum
+8. Save calibration manually when satisfied
 
 Manual calibration (peak matching) via calibrate_from_peaks() for later use.
 """
@@ -32,6 +37,7 @@ from ..data.reference_spectra import (
 )
 from ..display.calibration_preview import render as render_calibration_preview
 from ..processing.auto_calibrator import calibrate as run_calibration
+from ..processing.peak_detection import find_peaks
 from ..utils.graph_scale import scale_intensity_to_graph
 from .base import BaseMode, ButtonDefinition, ModeType
 
@@ -57,6 +63,10 @@ class CalibrationState:
 
     # Frozen spectrum for calibration
     frozen_intensity: np.ndarray | None = None
+
+    # Manual calibration assist toggles (markers: display.marker_lines + reference_marker_lines).
+    assist_measured: bool = False
+    assist_reference: bool = False
 
 
 class CalibrationMode(BaseMode):
@@ -105,6 +115,9 @@ class CalibrationMode(BaseMode):
         self.register_callback("toggle_flip_horizontal", lambda: self._on_toggle_flip_horizontal(ctx))
         self.register_callback("toggle_averaging", lambda: self._on_toggle_averaging(ctx))
         self.register_callback("toggle_accumulation", lambda: self._on_toggle_accumulation(ctx))
+        self.register_callback("toggle_assist_measured", lambda: self._on_toggle_assist_measured(ctx))
+        self.register_callback("toggle_assist_reference", lambda: self._on_toggle_assist_reference(ctx))
+        self.register_callback("reset_assist_markers", lambda: self._on_reset_assist_markers(ctx))
         ctx.display.set_button_active("toggle_overlay", self.cal_state.overlay_visible)
         ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
         ctx.display.set_button_active(
@@ -116,6 +129,10 @@ class CalibrationMode(BaseMode):
         self.select_source(ReferenceSource.FL12)
         for s in self.SOURCES:
             ctx.display.set_button_active(f"source_{s.name.lower()}", s == ReferenceSource.FL12)
+        ctx.display.state.marker_lines.clear()
+        ctx.display.state.reference_marker_lines.clear()
+        ctx.display.state.calibration_assist_target = "none"
+        ctx.display.set_calibration_reference_snap_peaks(None)
 
     def update_display(
         self,
@@ -124,8 +141,33 @@ class CalibrationMode(BaseMode):
         graph_height: int,
     ) -> None:
         """Update calibration overlay and status."""
-        ctx.display.state.graph_click_behavior = "default"
         self._sync_button_status(ctx)
+        xor_assist = self.cal_state.assist_measured ^ self.cal_state.assist_reference
+        if xor_assist:
+            if self.cal_state.assist_measured:
+                ctx.display.state.calibration_assist_target = "measured"
+            else:
+                ctx.display.state.calibration_assist_target = "reference"
+            ctx.display.state.graph_click_behavior = "marker"
+            ctx.display.state.snap_to_peaks = True
+            if (
+                self.cal_state.assist_reference
+                and not self.cal_state.assist_measured
+                and ctx.last_data is not None
+            ):
+                wl = ctx.last_data.wavelengths
+                ref_spd = get_reference_spectrum(self.cal_state.current_source, wl)
+                ctx.display.set_calibration_reference_snap_peaks(
+                    find_peaks(np.asarray(ref_spd, dtype=np.float64), wl)
+                )
+            else:
+                ctx.display.set_calibration_reference_snap_peaks(None)
+        else:
+            ctx.display.state.calibration_assist_target = "none"
+            ctx.display.state.graph_click_behavior = "default"
+            ctx.display.set_calibration_reference_snap_peaks(None)
+        ctx.display.set_graph_click_callback(None)
+        ctx.display.set_graph_post_draw(None)
         overlay = self.get_overlay(processed.wavelengths, graph_height)
         ctx.display.set_mode_overlay(overlay)
         eng = ctx.sensitivity_engine
@@ -170,6 +212,63 @@ class CalibrationMode(BaseMode):
         ctx.display.set_button_active("show_peaks", ctx.display.is_peaks_visible())
         ctx.display.set_button_active("show_spectrum_bars", ctx.display.is_spectrum_bars_visible())
         ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
+        ctx.display.set_button_active("toggle_assist_measured", self.cal_state.assist_measured)
+        ctx.display.set_button_active("toggle_assist_reference", self.cal_state.assist_reference)
+        self._sync_assist_reference_gate(ctx)
+        self._sync_auto_calibrate_assist_gate(ctx)
+
+    def _sync_auto_calibrate_assist_gate(self, ctx: ModeContext) -> None:
+        """With MkrM/MkrR on, CAL stays disabled until measured and reference each have ≥4 markers."""
+        if self.cal_state.assist_measured or self.cal_state.assist_reference:
+            m = len(ctx.display.state.marker_lines)
+            r = len(ctx.display.state.reference_marker_lines)
+            ctx.display.set_button_disabled("auto_calibrate", m < 4 or r < 4)
+        else:
+            ctx.display.set_button_disabled("auto_calibrate", False)
+
+    def _sync_assist_reference_gate(self, ctx: ModeContext) -> None:
+        """MkrR only when there are at least four measured markers; clear ref state if gated."""
+        ref_ok = len(ctx.display.state.marker_lines) >= 4
+        ctx.display.set_button_disabled("toggle_assist_reference", not ref_ok)
+        if not ref_ok and self.cal_state.assist_reference:
+            self.cal_state.assist_reference = False
+            ctx.display.state.reference_marker_lines.clear()
+            ctx.display.set_button_active("toggle_assist_reference", False)
+
+    def _assist_manual_ready(self, ctx: ModeContext) -> bool:
+        """True when manual marker pairs are valid for fitting."""
+        m = ctx.display.state.marker_lines
+        r = ctx.display.state.reference_marker_lines
+        return len(m) == len(r) and len(m) >= 4
+
+    def _on_toggle_assist_measured(self, ctx: ModeContext) -> None:
+        self.cal_state.assist_measured = not self.cal_state.assist_measured
+        if self.cal_state.assist_measured:
+            self.cal_state.assist_reference = False
+        ctx.display.set_button_active("toggle_assist_measured", self.cal_state.assist_measured)
+        ctx.display.set_button_active("toggle_assist_reference", self.cal_state.assist_reference)
+        mode = "ON" if self.cal_state.assist_measured else "OFF"
+        print(f"[CAL assist] Measured markers: {mode} (same add/drag/delete as measurement; turns Ref off)")
+
+    def _on_toggle_assist_reference(self, ctx: ModeContext) -> None:
+        self.cal_state.assist_reference = not self.cal_state.assist_reference
+        if self.cal_state.assist_reference:
+            self.cal_state.assist_measured = False
+        ctx.display.set_button_active("toggle_assist_reference", self.cal_state.assist_reference)
+        ctx.display.set_button_active("toggle_assist_measured", self.cal_state.assist_measured)
+        mode = "ON" if self.cal_state.assist_reference else "OFF"
+        print(f"[CAL assist] Reference markers: {mode} (same add/drag/delete; turns Meas off)")
+
+    def _on_reset_assist_markers(self, ctx: ModeContext) -> None:
+        ctx.display.state.marker_lines.clear()
+        ctx.display.state.reference_marker_lines.clear()
+        self.cal_state.assist_measured = False
+        self.cal_state.assist_reference = False
+        ctx.display.state.calibration_assist_target = "none"
+        ctx.display.set_calibration_reference_snap_peaks(None)
+        ctx.display.set_button_active("toggle_assist_measured", False)
+        ctx.display.set_button_active("toggle_assist_reference", False)
+        print("[CAL assist] All markers cleared; toggles off")
 
     def _on_select_source(self, ctx: ModeContext, source: ReferenceSource) -> None:
         """Handle reference source selection."""
@@ -248,6 +347,12 @@ class CalibrationMode(BaseMode):
         if now - ctx.last_auto_calibrate_time < ctx.auto_calibrate_debounce_sec:
             return
         ctx.last_auto_calibrate_time = now
+        if self.cal_state.assist_measured or self.cal_state.assist_reference:
+            m = len(ctx.display.state.marker_lines)
+            r = len(ctx.display.state.reference_marker_lines)
+            if m < 4 or r < 4:
+                print("[CAL] Assist: need ≥4 measured and ≥4 reference markers before CAL.")
+                return
 
         measured = (
             ctx.last_intensity_pre_sensitivity
@@ -287,19 +392,40 @@ class CalibrationMode(BaseMode):
         eng = ctx.sensitivity_engine
         if self._ctx is not None and self._ctx.sensitivity_correction_enabled and eng is not None:
             measured = eng.apply(measured, wl)
-        ref_wl = np.linspace(380.0, 750.0, 500)
-        ref_int = get_reference_spectrum(self.cal_state.current_source, ref_wl)
-        cal_points = run_calibration(measured, ref_wl, ref_int)
+
+        used_manual = self._assist_manual_ready(ctx)
+        if used_manual:
+            m_lines = ctx.display.state.marker_lines
+            r_lines = ctx.display.state.reference_marker_lines
+            cal_points = sorted(
+                zip(m_lines, (float(wl[p]) for p in r_lines)),
+                key=lambda t: t[0],
+            )
+            cal_points = list(cal_points)
+            print(f"[CAL] Manual assist: {len(cal_points)} marker pairs")
+        else:
+            ap = ctx.display.state.marker_lines
+            ar = ctx.display.state.reference_marker_lines
+            if ap or ar:
+                print(
+                    "[CAL] Assist: need equal measured/reference marker counts (≥4 each); "
+                    "using auto-calibration"
+                )
+            ref_wl = np.linspace(380.0, 750.0, 500)
+            ref_int = get_reference_spectrum(self.cal_state.current_source, ref_wl)
+            cal_points = run_calibration(measured, ref_wl, ref_int)
+
         if len(cal_points) >= 4:
             self.cal_state.calibration_points = cal_points
-            print(f"[CAL] Auto-calibration found {len(cal_points)} points")
-            for pixel, wl in cal_points:
-                print(f"  Pixel {pixel} -> {wl:.1f} nm")
+            src = "Manual assist" if used_manual else "Auto-calibration"
+            print(f"[CAL] {src} — {len(cal_points)} points")
+            for pixel, wln in cal_points:
+                print(f"  Pixel {pixel} -> {wln:.1f} nm")
             pixels = [p for p, w in cal_points]
             wavelengths = [w for p, w in cal_points]
             ctx.calibration.recalibrate(pixels, wavelengths)
         else:
-            print("[CAL] Auto-calibration failed to find enough matches")
+            print("[CAL] Calibration failed to find enough matches (need ≥4 points)")
 
     def _on_reset_calibration(self, ctx: ModeContext) -> None:
         """Reset calibration to linear 1:1 pixels to spectrum."""
@@ -453,7 +579,11 @@ class CalibrationMode(BaseMode):
             ButtonDefinition("CSV", "save_spectrum", shortcut="s", row=2, icon_type="save"),
             ButtonDefinition("Save", "save_cal", shortcut="w", row=2, icon_type="calibrate"),
             ButtonDefinition("Load", "load_cal", row=2, icon_type="load"),
-            ButtonDefinition("__spacer__", "__spacer_right__", row=2),
+            ButtonDefinition("__gap__", "__gap__c5", row=2),
+            ButtonDefinition("MkrM", "toggle_assist_measured", is_toggle=True, row=2, icon_type="peaks"),
+            ButtonDefinition("MkrR", "toggle_assist_reference", is_toggle=True, row=2, icon_type="reference"),
+            ButtonDefinition("ClrM", "reset_assist_markers", row=2, icon_type="clear"),
+            ButtonDefinition("__spacer__", "__spacer_cal_assist2__", row=2),
             ButtonDefinition("Quit", "quit", row=2, icon_type="quit"),
         ]
 

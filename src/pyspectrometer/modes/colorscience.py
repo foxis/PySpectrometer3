@@ -287,6 +287,7 @@ class ColorScienceMode(BaseMode):
         graph_height: int,
     ) -> None:
         """Update graph and preview strip according to current PREV view."""
+        ctx.display.set_button_disabled("auto_calibrate", False)
         ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
         ctx.display.set_button_active("show_raw_overlay", self.color_state.show_raw_overlay)
         refl_trans = self.color_state.measurement_type in (

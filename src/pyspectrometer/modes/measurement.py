@@ -355,6 +355,10 @@ class MeasurementMode(BaseMode):
         graph_height: int,
     ) -> None:
         """Update measurement overlay and status. Control graph click from mode: markers when peaks off, else default (pan/peak_region/spectrum_select)."""
+        ctx.display.state.calibration_assist_target = "none"
+        ctx.display.state.reference_marker_lines.clear()
+        ctx.display.set_calibration_reference_snap_peaks(None)
+        ctx.display.set_button_disabled("auto_calibrate", False)
         ctx.display.set_button_active("capture", not ctx.frozen_spectrum)
         ctx.display.set_button_active("show_raw_overlay", self.meas_state.show_raw_overlay)
         white_set = self.meas_state.white_spectrum is not None

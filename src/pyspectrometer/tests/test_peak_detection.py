@@ -8,6 +8,8 @@ from ..processing.peak_detection import (
     _SCIPY_AVAILABLE,
     PeakDetector,
     find_peak_indexes_scipy,
+    nearest_among_peak_indices,
+    snap_to_nearest_peak_index,
 )
 
 
@@ -34,6 +36,27 @@ def _hg_synthetic_spectrum(
     y += 0.05
     y += np.random.default_rng(42).uniform(0, 0.01, n_pixels)
     return y
+
+
+@pytest.mark.skipif(not _SCIPY_AVAILABLE, reason="scipy required")
+def test_nearest_among_peak_indices_picks_closest():
+    """Shared helper: nearest peak index in sample space."""
+    pk = np.array([10, 50, 90], dtype=np.intp)
+    assert nearest_among_peak_indices(12, pk, n=100) == 10
+    assert nearest_among_peak_indices(88, pk, n=100) == 90
+    assert nearest_among_peak_indices(5, pk, n=100) == 10
+
+
+@pytest.mark.skipif(not _SCIPY_AVAILABLE, reason="scipy required")
+def test_snap_to_nearest_peak_index_moves_click_to_peak():
+    """Clicks near a line snap to a pipeline-consistent peak (wavelengths → find_peaks)."""
+    n = 200
+    wl = np.linspace(380.0, 780.0, n)
+    y = np.zeros(n, dtype=np.float64)
+    y[20] = 1.0
+    y[80] = 0.95
+    assert snap_to_nearest_peak_index(y, 24, wavelengths=wl) == 20
+    assert snap_to_nearest_peak_index(y, 76, wavelengths=wl) == 80
 
 
 @pytest.mark.skipif(not _SCIPY_AVAILABLE, reason="scipy required")

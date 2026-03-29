@@ -7,22 +7,11 @@ from pathlib import Path
 import numpy as np
 
 
-def _led_config_path_from_argv() -> Path | None:
-    """Optional `--config` / `-c` path for led-* commands (same search rules as the app)."""
-    args = sys.argv[1:]
-    for flag in ("--config", "-c"):
-        if flag in args:
-            i = args.index(flag)
-            if i + 1 < len(args):
-                return Path(args[i + 1])
-    return None
-
-
 def _apply_led_runtime_from_config() -> None:
-    from .config import load_config
+    from .config import explicit_config_path_from_argv, load_config
     from .hardware.led import apply_led_config_from_values
 
-    cfg, _ = load_config(_led_config_path_from_argv())
+    cfg, _ = load_config(explicit_config_path_from_argv())
     apply_led_config_from_values(
         cfg.hardware.led_pin,
         cfg.hardware.led_pwm_frequency_hz,
@@ -101,6 +90,7 @@ def _camera_arg() -> str | None:
             "--bit-depth",
             "--camera",
             "--config",
+            "-c",
         }
     )
     while i < len(args):
@@ -141,7 +131,10 @@ def calibrate() -> int:
 
 
 def fit_csv() -> int:
-    """Fit pixels to wavelengths from CSV using FL12. Usage: poetry run fit_csv <csv_path> [--save]"""
+    """Fit pixels to wavelengths from CSV using FL12.
+
+    Usage: poetry run fit_csv <csv_path> [--save] [--config PATH]
+    """
     args = [a for a in sys.argv[1:] if not a.startswith("-")]
     csv_path = args[0] if args else None
     if not csv_path or not Path(csv_path).exists():
@@ -168,9 +161,9 @@ def fit_csv() -> int:
         print(f"  Pixel {pixel} -> {wl:.1f} nm")
 
     if save_to_config:
-        from .config import load_config, save_config
+        from .config import explicit_config_path_from_argv, load_config, save_config
 
-        config, config_path = load_config()
+        config, config_path = load_config(explicit_config_path_from_argv())
         pixels = [p for p, _ in points]
         wavelengths = [w for _, w in points]
         config.calibration.cal_pixels = pixels

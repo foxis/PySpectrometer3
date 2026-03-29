@@ -268,6 +268,7 @@ class RamanMode(BaseMode):
         graph_height: int,
     ) -> None:
         """Update Raman overlay and status."""
+        ctx.display.set_button_disabled("auto_calibrate", False)
         ctx.display.state.graph_click_behavior = "default"
         overlay = self.get_overlay(processed.wavelengths, graph_height)
         ctx.display.set_mode_overlay(overlay)

@@ -142,11 +142,13 @@ Examples:
     )
 
     parser.add_argument(
+        "-c",
         "--config",
         type=str,
         default=None,
         metavar="PATH",
-        help="Path to config file (TOML). Overrides PYSPECTROMETER_CONFIG.",
+        help="Config file (TOML). Leading ! = name under app config dir (same folder as "
+        "default config.toml), e.g. !garden.toml. Overrides PYSPECTROMETER_CONFIG.",
     )
 
     parser.add_argument(
@@ -188,9 +190,9 @@ def main() -> int:
 
     from pathlib import Path
 
-    from .config import load_config
+    from .config import load_config, resolve_explicit_config_path
 
-    config_path = Path(args.config) if args.config else None
+    config_path = resolve_explicit_config_path(args.config) if args.config else None
     if args.show_config:
         from .config import config_search_paths
 
@@ -200,8 +202,12 @@ def main() -> int:
             print(f"  {i}. {p}{exists}")
         config, loaded = load_config(config_path)
         if loaded:
-            print(f"\nLoaded: {loaded}")
-            print(f"  camera: {config.camera.frame_width}x{config.camera.frame_height}")
+            if loaded.exists():
+                print(f"\nLoaded: {loaded}")
+                print(f"  camera: {config.camera.frame_width}x{config.camera.frame_height}")
+            else:
+                print(f"\nExplicit file not found (defaults): {loaded}")
+                print("  First save will create this path.")
         else:
             print("\nNo config file found, using defaults.")
         return 0
@@ -277,7 +283,10 @@ def main() -> int:
 
     config, config_loaded = load_config(config_path)
     if config_loaded:
-        print(f"Config: {config_loaded}")
+        if config_loaded.exists():
+            print(f"Config: {config_loaded}")
+        else:
+            print(f"Config: {config_loaded} (not found — defaults; saves will create this file)")
     # Apply CLI overrides (takes precedence over file)
     config = Config.from_args(
         base=config,
