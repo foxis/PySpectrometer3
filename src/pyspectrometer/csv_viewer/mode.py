@@ -257,7 +257,7 @@ class CsvViewerMode(BaseMode):
             ctx.display.set_graph_post_draw(None)
         else:
             illum = self._build_illuminant_overlays(processed.wavelengths, graph_height)
-            illum.extend(self._build_extra_overlay_polylines(processed.wavelengths))
+            illum.extend(self._build_extra_overlay_polylines(processed.wavelengths, ctx))
             ctx.display.set_raw_overlays(illum)
             overlay = self.get_overlay(processed.wavelengths, graph_height)
             ctx.display.set_mode_overlay(overlay)
@@ -309,7 +309,7 @@ class CsvViewerMode(BaseMode):
         """Set overlays and post-draw hook while calibration sub-mode is active."""
         # Load+ traces (0–1 polylines); reference SPD (orange) via mode_overlay
         ctx.display.set_raw_overlays(
-            self._build_extra_overlay_polylines(processed.wavelengths)
+            self._build_extra_overlay_polylines(processed.wavelengths, ctx)
         )
         overlay = self._cal.reference_overlay(processed.wavelengths, graph_height)
         ctx.display.set_mode_overlay(overlay)
