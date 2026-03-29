@@ -74,10 +74,52 @@ def _led_duty_positional() -> float | None:
 
 
 def _camera_arg() -> str | None:
-    """First non-flag arg is camera source."""
-    for a in sys.argv[1:]:
-        if not a.startswith("-"):
-            return a
+    """First positional token intended as camera source.
+
+    Skips boolean flags and flags that take a value (e.g. ``--config path``) so
+    ``calibrate --config garden.toml 1`` resolves camera ``1``, not ``garden.toml``.
+    """
+    args = sys.argv[1:]
+    i = 0
+    no_value = frozenset(
+        {
+            "--fullscreen",
+            "--waterfall",
+            "--waveshare",
+            "--color",
+            "--list-cameras",
+            "--show-config",
+            "--version",
+        }
+    )
+    one_value = frozenset(
+        {
+            "--gain",
+            "--width",
+            "--mode",
+            "--laser",
+            "--bit-depth",
+            "--camera",
+            "--config",
+        }
+    )
+    while i < len(args):
+        a = args[i]
+        if a in one_value:
+            i += 2
+            continue
+        if a in no_value:
+            i += 1
+            continue
+        if a == "--csv":
+            i += 1
+            if i < len(args) and not args[i].startswith("-"):
+                i += 1
+            continue
+        if a.startswith("-"):
+            i += 1
+            continue
+        return a
     return None
 
 

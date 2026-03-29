@@ -93,6 +93,16 @@ class Calibration:
         )
 
     @property
+    def app_config(self) -> "Config":
+        """Full application config (camera, display, calibration, …)."""
+        return self._config
+
+    @property
+    def config_path(self) -> Path | None:
+        """Path used for load/save of app config (None → default main path on save)."""
+        return self._config_path
+
+    @property
     def sensitivity_settings(self) -> "SensitivityConfig":
         """Sensitivity section of app config (curve + CRR reference name)."""
         return self._config.sensitivity

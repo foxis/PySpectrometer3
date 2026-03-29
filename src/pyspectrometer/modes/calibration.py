@@ -102,10 +102,14 @@ class CalibrationMode(BaseMode):
         self.register_callback("save_spectrum", lambda: self._on_button_save(ctx))
         self.register_callback("load_cal", lambda: self._on_load_calibration(ctx))
         self.register_callback("freeze", lambda: self._on_toggle_freeze(ctx))
+        self.register_callback("toggle_flip_horizontal", lambda: self._on_toggle_flip_horizontal(ctx))
         self.register_callback("toggle_averaging", lambda: self._on_toggle_averaging(ctx))
         self.register_callback("toggle_accumulation", lambda: self._on_toggle_accumulation(ctx))
         ctx.display.set_button_active("toggle_overlay", self.cal_state.overlay_visible)
         ctx.display.set_button_active("freeze", not ctx.frozen_spectrum)
+        ctx.display.set_button_active(
+            "toggle_flip_horizontal", ctx.calibration.app_config.camera.flip_horizontal
+        )
 
     def on_start(self, ctx: ModeContext) -> None:
         """Select FL12 as default source and update source button states."""
@@ -159,6 +163,9 @@ class CalibrationMode(BaseMode):
         ctx.display.set_button_active("auto_gain", ctx.auto_gain_enabled)
         ctx.display.set_button_active("auto_exposure", ctx.auto_exposure_enabled)
         ctx.display.set_button_active("toggle_sensitivity", ctx.sensitivity_correction_enabled)
+        ctx.display.set_button_active(
+            "toggle_flip_horizontal", ctx.calibration.app_config.camera.flip_horizontal
+        )
         ctx.display.set_button_active("toggle_overlay", self.cal_state.overlay_visible)
         ctx.display.set_button_active("show_peaks", ctx.display.is_peaks_visible())
         ctx.display.set_button_active("show_spectrum_bars", ctx.display.is_spectrum_bars_visible())
@@ -357,6 +364,22 @@ class CalibrationMode(BaseMode):
         else:
             print("[CAL] Failed to load calibration")
 
+    def _on_toggle_flip_horizontal(self, ctx: ModeContext) -> None:
+        """Toggle camera horizontal mirror; persist to config."""
+        from ..config import save_config
+
+        app = ctx.calibration.app_config
+        cam_cfg = app.camera
+        cam_cfg.flip_horizontal = not cam_cfg.flip_horizontal
+        live = ctx.camera
+        if hasattr(live, "flip_horizontal"):
+            live.flip_horizontal = cam_cfg.flip_horizontal
+        ctx.display.set_button_active("toggle_flip_horizontal", cam_cfg.flip_horizontal)
+        if save_config(app, ctx.calibration.config_path):
+            print(f"[Flip] Horizontal mirror {'ON' if cam_cfg.flip_horizontal else 'OFF'} (saved)")
+        else:
+            print(f"[Flip] Horizontal mirror {'ON' if cam_cfg.flip_horizontal else 'OFF'} (save failed)")
+
     def _on_toggle_freeze(self, ctx: ModeContext) -> None:
         """Toggle spectrum freeze."""
         frozen = self.toggle_freeze()
@@ -410,8 +433,9 @@ class CalibrationMode(BaseMode):
             ButtonDefinition("R", "reset_calibration", row=1, icon_type="reset"),
             ButtonDefinition("CRR", "correct_sensitivity", row=1, icon_type="sensitivity"),
             ButtonDefinition("CR", "reset_sensitivity_cmos", row=1, icon_type="reset"),
-            # Row 2: Play (freeze + progress) | Max/Avg/Acc | Bars | ZX/ZY | VIEW | Save/CSV/Load | spacer | Quit
+            # Row 2: Play | Mir | S | …
             ButtonDefinition("Play", "freeze", is_toggle=True, row=2, icon_type="playback"),
+            ButtonDefinition("Mir", "toggle_flip_horizontal", is_toggle=True, row=2, icon_type="flip_h"),
             ButtonDefinition("S", "toggle_sensitivity", is_toggle=True, row=2, icon_type="sensitivity"),
             ButtonDefinition("__gap__", "__gap__c1", row=2),
             ButtonDefinition("Avg", "toggle_averaging", is_toggle=True, row=2, icon_type="avg"),

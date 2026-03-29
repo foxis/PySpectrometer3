@@ -382,6 +382,16 @@ def _reset(img: np.ndarray, x1: int, y1: int, w: int, h: int, c: tuple) -> None:
     cv2.circle(img, (ax, ay), 2, c, -1)
 
 
+def _flip_h(img: np.ndarray, x1: int, y1: int, w: int, h: int, c: tuple) -> None:
+    """Horizontal mirror: vertical axis with outward arrows (L/R)."""
+    bx1, by1, bx2, by2 = _inner(x1, y1, w, h)
+    cx = (bx1 + bx2) // 2
+    cv2.line(img, (cx, by1 + 2), (cx, by2 - 2), c, 1, cv2.LINE_AA)
+    cy = (by1 + by2) // 2
+    cv2.arrowedLine(img, (cx - 1, cy), (bx1 + 1, cy), c, 1, cv2.LINE_AA, tipLength=0.35)
+    cv2.arrowedLine(img, (cx + 1, cy), (bx2 - 1, cy), c, 1, cv2.LINE_AA, tipLength=0.35)
+
+
 def _pdf(img: np.ndarray, x1: int, y1: int, w: int, h: int, c: tuple) -> None:
     """Document sheet with folded corner (PDF report)."""
     bx1, by1, bx2, by2 = _inner(x1, y1, w, h, frac=0.18)
@@ -438,6 +448,7 @@ _REGISTRY: dict[str, Callable] = {
     "level": _level,
     "reset": _reset,
     "pdf": _pdf,
+    "flip_h": _flip_h,
 }
 
 

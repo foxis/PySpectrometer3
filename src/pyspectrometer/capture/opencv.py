@@ -137,6 +137,14 @@ class Capture(CameraInterface):
         """Always 10-bit (scaled from 8-bit source)."""
         return 10
 
+    @property
+    def flip_horizontal(self) -> bool:
+        return self._flip_horizontal
+
+    @flip_horizontal.setter
+    def flip_horizontal(self, value: bool) -> None:
+        self._flip_horizontal = bool(value)
+
     def start(self) -> None:
         """Start OpenCV capture and log capabilities."""
         if self._running:

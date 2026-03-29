@@ -93,6 +93,14 @@ class Capture(CameraInterface):
         """Check if camera is in monochrome mode."""
         return self._monochrome
 
+    @property
+    def flip_horizontal(self) -> bool:
+        return self._flip_horizontal
+
+    @flip_horizontal.setter
+    def flip_horizontal(self, value: bool) -> None:
+        self._flip_horizontal = bool(value)
+
     def start(self) -> None:
         """Start Picamera2 capture."""
         if self._running:
