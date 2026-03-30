@@ -143,6 +143,8 @@ def fit_csv() -> int:
         return 1
     save_to_config = "--save" in sys.argv[1:]
 
+    from .bootstrap import build_reference_file_loader
+    from .config import explicit_config_path_from_argv, load_config
     from .data import get_reference_spectrum, load_spectrum_csv
     from .data.reference_spectra import ReferenceSource
     from .processing.auto_calibrator import calibrate
@@ -151,8 +153,10 @@ def fit_csv() -> int:
     if n < 10:
         print(f"[fit_csv] Need at least 10 pixels, got {n}")
         return 1
+    config, _ = load_config(explicit_config_path_from_argv())
+    ref_loader = build_reference_file_loader(config)
     ref_wl = np.linspace(380.0, 750.0, 500)
-    ref_int = get_reference_spectrum(ReferenceSource.FL12, ref_wl)
+    ref_int = get_reference_spectrum(ReferenceSource.FL12, ref_wl, file_loader=ref_loader)
     points = calibrate(measured, ref_wl, ref_int)
     if not points:
         return 1

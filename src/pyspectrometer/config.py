@@ -538,6 +538,34 @@ class ExtractionConfig:
 
 
 @dataclass
+class DisplayRuntimeView:
+    """References UI-facing slices and titles from :class:`Config` for the display layer.
+
+    Holds the same sub-objects as the aggregate config; mutations apply to persisted settings.
+    """
+
+    display: DisplayConfig
+    waterfall: WaterfallConfig
+    measurement: MeasurementConfig
+    color_science: ColorScienceConfig
+    processing: ProcessingConfig
+    spectrograph_title: str
+    waterfall_title: str
+
+    @classmethod
+    def from_config(cls, config: "Config") -> "DisplayRuntimeView":
+        return cls(
+            display=config.display,
+            waterfall=config.waterfall,
+            measurement=config.measurement,
+            color_science=config.color_science,
+            processing=config.processing,
+            spectrograph_title=config.spectrograph_title,
+            waterfall_title=config.waterfall_title,
+        )
+
+
+@dataclass
 class Config:
     """Main configuration container for PySpectrometer3.
 

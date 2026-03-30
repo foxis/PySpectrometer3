@@ -6,6 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from ..bootstrap import build_reference_file_loader
 from ..config import Config
 from ..core.calibration import Calibration
 from ..core.mode_context import ModeContext
@@ -188,6 +189,7 @@ class CsvViewerSpectrometer:
         return cal
 
     def _build_context(self) -> ModeContext:
+        ref_loader = build_reference_file_loader(self.config)
         ctx = ModeContext(
             camera=self._camera,
             calibration=self._calibration,
@@ -196,6 +198,7 @@ class CsvViewerSpectrometer:
             extractor=self._extractor,
             auto_gain=self._auto_gain,
             auto_exposure=self._auto_exposure,
+            reference_file_loader=ref_loader,
         )
         ctx.quit_app = lambda: setattr(ctx, "running", False)
         ctx.save_snapshot = self._save_snapshot

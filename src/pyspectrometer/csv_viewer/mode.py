@@ -29,6 +29,7 @@ from .loader import LoadedCsv
 if TYPE_CHECKING:
     from ..core.mode_context import ModeContext
     from ..core.spectrum import SpectrumData
+    from ..data.reference_loader import ReferenceFileLoader
 
 # Same source list as CalibrationMode — all have data via colour-science or CSV files
 SOURCES: list[ReferenceSource] = [
@@ -164,7 +165,8 @@ class CsvViewerMode(BaseMode):
     ) -> tuple[np.ndarray, tuple[int, int, int]] | None:
         """Return single overlay (cal > white > dark > None) when raw-overlay is off."""
         if self._cal.active:
-            return self._cal.reference_overlay(wavelengths, graph_height)
+            fl = self._ctx.reference_file_loader if self._ctx else None
+            return self._cal.reference_overlay(wavelengths, graph_height, file_loader=fl)
 
         if self._view.show_raw_overlay:
             return None
@@ -256,7 +258,9 @@ class CsvViewerMode(BaseMode):
             ctx.display.set_mode_overlay(None)
             ctx.display.set_graph_post_draw(None)
         else:
-            illum = self._build_illuminant_overlays(processed.wavelengths, graph_height)
+            illum = self._build_illuminant_overlays(
+                processed.wavelengths, graph_height, file_loader=ctx.reference_file_loader
+            )
             illum.extend(self._build_extra_overlay_polylines(processed.wavelengths, ctx))
             ctx.display.set_raw_overlays(illum)
             overlay = self.get_overlay(processed.wavelengths, graph_height)
@@ -315,7 +319,7 @@ class CsvViewerMode(BaseMode):
         ctx.display.set_mode_overlay(overlay)
 
         # Post-draw: reference peak lines, pair connections, pending marker
-        width = ctx.display.config.display.window_width
+        width = ctx.display.runtime.display.window_width
         viewport = ctx.display.viewport
 
         def _post_draw(graph_img: "np.ndarray", data: "SpectrumData") -> None:
@@ -335,7 +339,7 @@ class CsvViewerMode(BaseMode):
             data.peaks,
             data.wavelengths,
             self._ctx.display.viewport,
-            self._ctx.display.config.display.window_width,
+            self._ctx.display.runtime.display.window_width,
         )
         if formed:
             self._apply_calibration(self._ctx)
@@ -583,7 +587,11 @@ class CsvViewerMode(BaseMode):
     def _on_cal_auto(self, ctx: "ModeContext") -> None:
         if not self._cal.active or ctx.last_data is None:
             return
-        self._cal.run_auto_cal(ctx.last_data.intensity, ctx.last_data.wavelengths)
+        self._cal.run_auto_cal(
+            ctx.last_data.intensity,
+            ctx.last_data.wavelengths,
+            file_loader=ctx.reference_file_loader,
+        )
         self._apply_calibration(ctx)
 
     def _on_cal_reset(self, ctx: "ModeContext") -> None:
@@ -768,13 +776,15 @@ class CsvViewerMode(BaseMode):
         self,
         wavelengths: np.ndarray,
         graph_height: int,
+        *,
+        file_loader: "ReferenceFileLoader | None" = None,
     ) -> list[tuple[np.ndarray, tuple[int, int, int]]]:
         """SPD overlays for each active illuminant, each normalised to its own peak."""
         overlays: list[tuple[np.ndarray, tuple[int, int, int]]] = []
         for source in SOURCES:
             if source not in self._view.active_sources:
                 continue
-            spd = get_reference_spectrum(source, wavelengths)
+            spd = get_reference_spectrum(source, wavelengths, file_loader=file_loader)
             if spd is None:
                 continue
             spd = np.asarray(spd, dtype=np.float32)

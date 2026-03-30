@@ -342,8 +342,8 @@ class ColorScienceMode(BaseMode):
             power_ratio=power_ratio,
         )
 
-        width = ctx.display.config.display.window_width
-        p_height = ctx.display.config.display.preview_height
+        width = ctx.display.runtime.display.window_width
+        p_height = ctx.display.runtime.display.preview_height
 
         pm = ctx.display.preview_mode
 
@@ -699,8 +699,8 @@ class ColorScienceMode(BaseMode):
         def _click(x: int, rel_y: int) -> None:
             if ctx.display.preview_mode != "cs_swatches":
                 return
-            w = ctx.display.config.display.window_width
-            h = ctx.display.config.display.graph_height
+            w = ctx.display.runtime.display.window_width
+            h = ctx.display.runtime.display.graph_height
             idx = swatch_index_at(x, rel_y, w, h, len(self.color_state.swatches))
             if idx is None:
                 return

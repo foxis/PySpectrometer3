@@ -15,6 +15,7 @@ from .spectrum import SpectrumData
 
 if TYPE_CHECKING:
     from ..capture.base import CameraInterface
+    from ..data.reference_loader import ReferenceFileLoader
     from ..core.reference_spectrum import ReferenceSpectrumManager
     from ..display.renderer import DisplayManager
     from ..export.csv_exporter import CSVExporter
@@ -59,6 +60,7 @@ class ModeContext:
     auto_gain: "AutoGainController"
     auto_exposure: "AutoExposureController"
     reference_manager: Optional["ReferenceSpectrumManager"] = None
+    reference_file_loader: Optional["ReferenceFileLoader"] = None
     sensitivity_engine: Optional["SensitivityCorrection"] = None
 
     # Quit callback - mode calls to stop the main loop

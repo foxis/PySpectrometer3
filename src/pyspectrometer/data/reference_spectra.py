@@ -6,10 +6,17 @@ Loads from data/reference/*.csv first, then falls back to colour-science.
 - LED1–LED3: from colour-science (no CSV in reference yet)
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum, auto
-
+from pathlib import Path
 import numpy as np
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .reference_loader import ReferenceFileLoader
 
 # colour-science provides CIE-standard spectral distributions
 try:
@@ -113,6 +120,20 @@ LED_LINES = [
     SpectralLine(550.0, 0.9, "Phos"),
     SpectralLine(630.0, 0.4, "Red"),
 ]
+
+_default_reference_file_loader: ReferenceFileLoader | None = None
+
+
+def default_reference_file_loader() -> ReferenceFileLoader:
+    """Process-wide default loader (``data/reference`` + ``output``). For tests and scripts."""
+    global _default_reference_file_loader
+    if _default_reference_file_loader is None:
+        from .reference_loader import ReferenceFileLoader
+        from .reference_paths import ReferenceSearchPaths
+
+        _default_reference_file_loader = ReferenceFileLoader(ReferenceSearchPaths.default())
+    return _default_reference_file_loader
+
 
 REFERENCE_SPECTRA: dict[ReferenceSource, ReferenceSpectrum] = {
     ReferenceSource.HG: ReferenceSpectrum(
@@ -220,7 +241,12 @@ def _generate_hg_spectrum(wavelengths: np.ndarray) -> np.ndarray:
     return intensity
 
 
-def get_reference_spectrum(source: ReferenceSource, wavelengths: np.ndarray) -> np.ndarray:
+def get_reference_spectrum(
+    source: ReferenceSource,
+    wavelengths: np.ndarray,
+    *,
+    file_loader: ReferenceFileLoader | None = None,
+) -> np.ndarray:
     """Get reference spectrum intensity for given wavelengths.
 
     Tries data/reference/*.csv first, then colour-science. Hg uses built-in lines.
@@ -228,13 +254,13 @@ def get_reference_spectrum(source: ReferenceSource, wavelengths: np.ndarray) -> 
     Args:
         source: Reference source type
         wavelengths: Wavelength array (nm)
+        file_loader: CSV search + cache; defaults to :func:`default_reference_file_loader`.
 
     Returns:
         Intensity array, normalized 0–1
     """
-    from .reference_loader import get_reference_spectrum_from_files
-
-    from_file = get_reference_spectrum_from_files(source, wavelengths)
+    loader = file_loader or default_reference_file_loader()
+    from_file = loader.get_interpolated(source, wavelengths)
     if from_file is not None:
         return from_file
 
@@ -267,18 +293,19 @@ def get_all_reference_names() -> list[tuple[ReferenceSource, str]]:
     return [(src, get_reference_name(src)) for src in ReferenceSource]
 
 
-def list_reference_files() -> list[tuple[str, str]]:
-    """List CSV files in data/reference. For UI 'load more' support."""
-    from .reference_loader import list_available_reference_files
+def list_reference_files(
+    *,
+    file_loader: ReferenceFileLoader | None = None,
+) -> list[tuple[str, str]]:
+    """List CSV files in reference dirs. For UI 'load more' support."""
+    loader = file_loader or default_reference_file_loader()
+    return loader.list_csv_files()
 
-    return list_available_reference_files()
 
-
-def reload_reference_files() -> None:
+def reload_reference_files(*, file_loader: ReferenceFileLoader | None = None) -> None:
     """Clear loaded spectrum cache (call after adding new reference files)."""
-    from .reference_loader import clear_spectrum_cache
-
-    clear_spectrum_cache()
+    loader = file_loader or default_reference_file_loader()
+    loader.clear_cache()
 
 
 # XYZ conversion via colour-science (for spectral -> XYZ when needed)

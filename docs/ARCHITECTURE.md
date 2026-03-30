@@ -67,6 +67,22 @@ flowchart LR
 4. **Mode** consumes processed spectrum for overlays, references, and mode-specific logic
 5. **Display** renders spectrum + mode overlays; **Export** saves on user action
 
+### 2.1 Config defaults vs loaded calibration
+
+The aggregate TOML `Config` holds **defaults** used to build the initial pipeline (e.g. `ExtractorBuildParams.from_config`). Some fields overlap conceptually with **calibration** (rotation angle, spectrum strip center, perpendicular width): they appear under `ExtractionConfig` for first-run behavior and are **also** stored in the loaded **calibration** artifact when you save wavelength calibration.
+
+**Rule:** after a calibration is loaded, **`Spectrometer` applies geometry from the `Calibration` object** to `SpectrumExtractor` (not from `config.extraction` alone). Editing overlapping keys in TOML affects **startup before load** and **next extraction build**; the running strip follows the **last loaded calibration** until you reload config or change calibration.
+
+Reference CSV discovery uses **`config.export.reference_dirs`** resolved through `ReferenceSearchPaths` and **`ReferenceFileLoader`** — not global mutable path state.
+
+```mermaid
+flowchart LR
+    TOML[TOML Config]
+    CAL[Loaded calibration]
+    TOML -->|build / first frame| EXT[SpectrumExtractor]
+    CAL -->|overrides geometry| EXT
+```
+
 ---
 
 ## 3. Operating Modes

@@ -80,10 +80,12 @@ class CsvCalibrationHandler:
         self,
         measured: np.ndarray,
         wavelengths: np.ndarray,
+        *,
+        file_loader: "ReferenceFileLoader | None" = None,
     ) -> list[tuple[int, float]]:
         """Run RANSAC peak-matching auto-calibration against current reference source."""
         ref_wl = np.linspace(380.0, 750.0, 500)
-        ref_int = get_reference_spectrum(self._state.current_source, ref_wl)
+        ref_int = get_reference_spectrum(self._state.current_source, ref_wl, file_loader=file_loader)
         points = run_auto_calibration(measured, ref_wl, ref_int)
         self._state.auto_cal_points = points
         print(f"[Cal] Auto-cal found {len(points)} points for {self._state.current_source.name}")
@@ -157,11 +159,13 @@ class CsvCalibrationHandler:
         self,
         wavelengths: np.ndarray,
         graph_height: int,
+        *,
+        file_loader: "ReferenceFileLoader | None" = None,
     ) -> tuple[np.ndarray, tuple[int, int, int]] | None:
         """Return reference SPD as (scaled_intensity, BGR_color) for the mode overlay."""
         if not self._state.overlay_visible:
             return None
-        ref = get_reference_spectrum(self._state.current_source, wavelengths)
+        ref = get_reference_spectrum(self._state.current_source, wavelengths, file_loader=file_loader)
         if ref is None:
             return None
         ref = np.asarray(ref, dtype=np.float32)

@@ -92,6 +92,12 @@ class CalibrationMode(BaseMode):
         self.cal_state = CalibrationState()
         self.state.auto_gain_enabled = True
 
+    def _reference_file_loader(self):
+        """Reference CSV loader from mode context (falls back to default in ``get_reference_spectrum``)."""
+        if self._ctx is None:
+            return None
+        return self._ctx.reference_file_loader
+
     def setup(self, ctx: ModeContext) -> None:
         """Register calibration-specific handlers."""
         super().setup(ctx)
@@ -156,7 +162,9 @@ class CalibrationMode(BaseMode):
                 and ctx.last_data is not None
             ):
                 wl = ctx.last_data.wavelengths
-                ref_spd = get_reference_spectrum(self.cal_state.current_source, wl)
+                ref_spd = get_reference_spectrum(
+                    self.cal_state.current_source, wl, file_loader=ctx.reference_file_loader
+                )
                 ctx.display.set_calibration_reference_snap_peaks(
                     find_peaks(np.asarray(ref_spd, dtype=np.float64), wl)
                 )
@@ -298,7 +306,9 @@ class CalibrationMode(BaseMode):
         if len(meas) != len(wl):
             print("[CRR] Measured length does not match wavelength axis")
             return
-        ref = get_reference_spectrum(self.cal_state.current_source, wl)
+        ref = get_reference_spectrum(
+            self.cal_state.current_source, wl, file_loader=ctx.reference_file_loader
+        )
         pair = eng.recalibrate_from_measurement(meas, wl, ref)
         if pair is None:
             return
@@ -365,7 +375,7 @@ class CalibrationMode(BaseMode):
         )
 
         # Build preview overlay (measured SPD, reference SPD, peaks, connecting lines)
-        cfg = ctx.display.config.display
+        cfg = ctx.display.runtime.display
         width = cfg.window_width
         height = cfg.preview_height + cfg.graph_height
         preview_img = render_calibration_preview(
@@ -465,6 +475,7 @@ class CalibrationMode(BaseMode):
         ref_intensity = get_reference_spectrum(
             self.cal_state.current_source,
             ctx.last_data.wavelengths,
+            file_loader=ctx.reference_file_loader,
         )
         metadata = {
             "Mode": "Calibration",
@@ -618,6 +629,7 @@ class CalibrationMode(BaseMode):
         ref_intensity = get_reference_spectrum(
             self.cal_state.current_source,
             wavelengths,
+            file_loader=self._reference_file_loader(),
         )
 
         # Scale to graph height
@@ -663,7 +675,9 @@ class CalibrationMode(BaseMode):
             if eng is not None:
                 measured_intensity = eng.apply(measured_intensity, wavelengths)
         ref_wl = np.linspace(380.0, 750.0, 500)
-        ref_int = get_reference_spectrum(self.cal_state.current_source, ref_wl)
+        ref_int = get_reference_spectrum(
+            self.cal_state.current_source, ref_wl, file_loader=self._reference_file_loader()
+        )
         return run_calibration(measured_intensity, ref_wl, ref_int)
 
     def calibrate_from_peaks(

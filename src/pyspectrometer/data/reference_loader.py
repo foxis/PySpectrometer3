@@ -1,36 +1,20 @@
 """Load reference spectra from configurable directories.
 
-Searches reference_dirs (default: data/reference, output) for CSV files.
-Falls back to colour-science for sources not found in files.
+Searches ``ReferenceSearchPaths`` for CSV files. Falls back to colour-science for
+sources not found in files. No mutable process-wide search path — use
+:class:`ReferenceFileLoader` per application or test.
 """
+
+from __future__ import annotations
 
 from pathlib import Path
 
 import numpy as np
 
+from .reference_paths import ReferenceSearchPaths
 from .reference_spectra import ReferenceSource
 
-# Configurable search dirs (relative to CWD). Set via set_reference_dirs().
-_reference_dirs: list[Path] = [
-    Path("data") / "reference",
-    Path("output"),
-]
-
-
-def set_reference_dirs(dirs: list[Path | str]) -> None:
-    """Set directories to search for reference CSV files."""
-    global _reference_dirs
-    _reference_dirs = [Path(d).expanduser() for d in dirs]
-
-
-def get_reference_dirs() -> list[Path]:
-    """Return current reference search directories (resolved relative to CWD)."""
-    cwd = Path.cwd()
-    return [(cwd / d) if not d.is_absolute() else d for d in _reference_dirs]
-
-
 # File name patterns and column mapping: (filename_pattern, column_index or None for single-col)
-# Column index 0 = wavelength, 1 = first data column
 _FILE_SOURCE_MAP: list[tuple[str, ReferenceSource, int | None]] = [
     ("CIE_D65", ReferenceSource.D65, None),
     ("CIE_illum_FLs", ReferenceSource.FL1, 1),
@@ -95,7 +79,6 @@ def _load_csv_spectrum(
             except (ValueError, IndexError):
                 if header_cols is None:
                     continue
-                # Skip header row (non-numeric in data columns)
                 continue
 
     if len(wl_list) < 2:
@@ -113,63 +96,60 @@ def _interpolate_to_wavelengths(
     return out.astype(np.float64)
 
 
-# Cache: source -> (wl_src, val_src) for interpolation
-_spectrum_cache: dict[ReferenceSource, tuple[np.ndarray, np.ndarray] | None] = {}
+class ReferenceFileLoader:
+    """Loads reference SPD snippets from CSV under fixed search paths (instance-scoped cache)."""
 
+    def __init__(self, paths: ReferenceSearchPaths) -> None:
+        self._paths = paths
+        self._spectrum_cache: dict[ReferenceSource, tuple[np.ndarray, np.ndarray] | None] = {}
 
-def _load_from_files(source: ReferenceSource) -> tuple[np.ndarray, np.ndarray] | None:
-    """Load spectrum for source from reference folder. Returns (wl, val) or None."""
-    if source in _spectrum_cache:
-        return _spectrum_cache[source]
+    def resolved_dirs(self) -> list[Path]:
+        return self._paths.resolved()
 
-    for ref_dir in get_reference_dirs():
-        if not ref_dir.is_dir():
-            continue
-        for pattern, src, col_idx in _FILE_SOURCE_MAP:
-            if src != source:
+    def clear_cache(self) -> None:
+        """Clear loaded spectrum cache (e.g. after adding new files)."""
+        self._spectrum_cache.clear()
+
+    def _load_from_files(self, source: ReferenceSource) -> tuple[np.ndarray, np.ndarray] | None:
+        if source in self._spectrum_cache:
+            return self._spectrum_cache[source]
+
+        for ref_dir in self.resolved_dirs():
+            if not ref_dir.is_dir():
                 continue
-            for p in ref_dir.glob("*.csv"):
-                if pattern in p.name:
-                    data = _load_csv_spectrum(p, col_idx)
-                    if data is not None:
-                        _spectrum_cache[source] = data
-                        return data
+            for pattern, src, col_idx in _FILE_SOURCE_MAP:
+                if src != source:
+                    continue
+                for p in ref_dir.glob("*.csv"):
+                    if pattern in p.name:
+                        data = _load_csv_spectrum(p, col_idx)
+                        if data is not None:
+                            self._spectrum_cache[source] = data
+                            return data
 
-    _spectrum_cache[source] = None
-    return None
-
-
-def get_reference_spectrum_from_files(
-    source: ReferenceSource, wavelengths: np.ndarray
-) -> np.ndarray | None:
-    """Get reference spectrum from data/reference files, interpolated to wavelengths.
-
-    Returns None if not found in files (caller should fall back to colour-science).
-    """
-    data = _load_from_files(source)
-    if data is None:
+        self._spectrum_cache[source] = None
         return None
-    wl_src, val_src = data
-    return _interpolate_to_wavelengths(wl_src, val_src, wavelengths)
 
+    def get_interpolated(self, source: ReferenceSource, wavelengths: np.ndarray) -> np.ndarray | None:
+        """Return reference spectrum from CSV files, interpolated to *wavelengths*, or None."""
+        data = self._load_from_files(source)
+        if data is None:
+            return None
+        wl_src, val_src = data
+        return _interpolate_to_wavelengths(wl_src, val_src, wavelengths)
 
-def list_available_reference_files() -> list[tuple[str, str]]:
-    """List CSV files in all reference dirs. Returns [(filename, display_name), ...]."""
-    seen: set[str] = set()
-    result: list[tuple[str, str]] = []
-    for ref_dir in get_reference_dirs():
-        if not ref_dir.is_dir():
-            continue
-        for p in sorted(ref_dir.glob("*.csv")):
-            key = str(p.resolve())
-            if key in seen:
+    def list_csv_files(self) -> list[tuple[str, str]]:
+        """List CSV files in all reference dirs. Returns [(filename, display_name), ...]."""
+        seen: set[str] = set()
+        result: list[tuple[str, str]] = []
+        for ref_dir in self.resolved_dirs():
+            if not ref_dir.is_dir():
                 continue
-            seen.add(key)
-            name = p.stem.replace("_", " ").replace("-", " ")
-            result.append((p.name, name))
-    return result
-
-
-def clear_spectrum_cache() -> None:
-    """Clear loaded spectrum cache (e.g. after adding new files)."""
-    _spectrum_cache.clear()
+            for p in sorted(ref_dir.glob("*.csv")):
+                key = str(p.resolve())
+                if key in seen:
+                    continue
+                seen.add(key)
+                name = p.stem.replace("_", " ").replace("-", " ")
+                result.append((p.name, name))
+        return result

@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 from ..capture.base import CAPTURE_UINT16_MAX
-from ..config import Config
+from ..config import Config, DisplayRuntimeView
 from ..core.calibration import Calibration
 from ..core.spectrum import SpectrumData
 from ..gui.control_bar import ControlBar, ControlBarConfig
@@ -137,32 +137,33 @@ class DisplayManager:
             mode_instance: Mode instance for button definitions (single source of truth)
         """
         self.config = config
+        self._ui = DisplayRuntimeView.from_config(config)
         self.calibration = calibration
         self.state = DisplayState()
         self.mode = mode
 
         self._graticule = GraticuleRenderer(
-            font=config.display.graph_label_font,
-            font_scale=config.display.graph_label_font_scale,
+            font=self._ui.display.graph_label_font,
+            font_scale=self._ui.display.graph_label_font_scale,
         )
         self._spectrogram = SpectrogramRenderer()
         self._peaks_renderer = PeaksRenderer(
-            font=config.display.graph_label_font,
-            font_scale=config.display.graph_label_font_scale,
+            font=self._ui.display.graph_label_font,
+            font_scale=self._ui.display.graph_label_font_scale,
         )
         self._markers_renderer = MarkersRenderer(
-            font=config.display.graph_label_font,
-            font_scale=config.display.graph_label_font_scale,
+            font=self._ui.display.graph_label_font,
+            font_scale=self._ui.display.graph_label_font_scale,
         )
         self._waterfall: WaterfallDisplay | None = None
 
-        display_width = config.display.window_width
-        if config.waterfall.enabled or mode == "waterfall":
+        display_width = self._ui.display.window_width
+        if self._ui.waterfall.enabled or mode == "waterfall":
             self._waterfall = WaterfallDisplay(
                 width=display_width,
-                height=config.display.graph_height,
-                contrast=config.waterfall.contrast,
-                brightness=config.waterfall.brightness,
+                height=self._ui.display.graph_height,
+                contrast=self._ui.waterfall.contrast,
+                brightness=self._ui.waterfall.brightness,
             )
 
         self._mode_instance = mode_instance
@@ -170,8 +171,8 @@ class DisplayManager:
         self._control_bar = ControlBar(
             width=display_width,
             config=ControlBarConfig(
-                height=config.display.message_height,
-                font_scale=config.display.font_scale,
+                height=self._ui.display.message_height,
+                font_scale=self._ui.display.font_scale,
             ),
             mode=mode,
             buttons=buttons,
@@ -180,8 +181,8 @@ class DisplayManager:
 
         # Slider panel for gain/exposure/LED (positioned on right side of graph area)
         slider_x = display_width - 170
-        slider_y = config.display.message_height + config.display.preview_height + 10
-        slider_height = config.display.graph_height - 30
+        slider_y = self._ui.display.message_height + self._ui.display.preview_height + 10
+        slider_height = self._ui.display.graph_height - 30
         self._slider_panel = SliderPanel(
             x=slider_x,
             y=slider_y,
@@ -211,8 +212,8 @@ class DisplayManager:
         self._graph_post_draw: Callable[["np.ndarray", "SpectrumData"], None] | None = None
 
         self._font = cv2.FONT_HERSHEY_SIMPLEX
-        self._graph_font = config.display.graph_label_font
-        self._graph_font_scale = config.display.graph_label_font_scale
+        self._graph_font = self._ui.display.graph_label_font
+        self._graph_font_scale = self._ui.display.graph_label_font_scale
         self._windows_created = False
 
         # Preview display mode: "full", "window", "none"
@@ -228,8 +229,8 @@ class DisplayManager:
         style = SliderStyle()
         self._zoom_vertical = VerticalSlider(
             x=0,
-            y=config.display.message_height + config.display.preview_height + 20,
-            height=config.display.graph_height - 50,
+            y=self._ui.display.message_height + self._ui.display.preview_height + 20,
+            height=self._ui.display.graph_height - 50,
             min_val=1.0,
             max_val=20.0,
             value=1.0,
@@ -239,9 +240,9 @@ class DisplayManager:
         )
         self._zoom_horizontal = HorizontalSlider(
             x=20,
-            y=config.display.message_height
-            + config.display.preview_height
-            + config.display.graph_height
+            y=self._ui.display.message_height
+            + self._ui.display.preview_height
+            + self._ui.display.graph_height
             - 25,
             width=display_width - 200,
             min_val=1.0,
@@ -296,15 +297,20 @@ class DisplayManager:
         # Calibration MkrR: peaks on reference SPD for the same snap rules as marker_lines
         self._calibration_reference_snap_peaks: list = []
 
+    @property
+    def runtime(self) -> DisplayRuntimeView:
+        """UI-facing config slice (titles, layout, mode views); same object as internal ``_ui``."""
+        return self._ui
+
     def set_frame_dimensions(self, width: int, height: int) -> None:
         """Update dimensions (e.g. after camera reports actual size).
 
         Display stays at window_width. Only used for waterfall when enabled.
         """
-        display_width = self.config.display.window_width
+        display_width = self._ui.display.window_width
         self._control_bar.set_width(display_width)
         if self._waterfall is not None:
-            self._waterfall.set_dimensions(display_width, self.config.display.graph_height)
+            self._waterfall.set_dimensions(display_width, self._ui.display.graph_height)
         self._slider_panel.x = display_width - 170
 
     def setup_windows(self) -> None:
@@ -317,14 +323,14 @@ class DisplayManager:
         if self._windows_created:
             return
 
-        title1 = self.config.spectrograph_title
-        title2 = self.config.waterfall_title
+        title1 = self._ui.spectrograph_title
+        title2 = self._ui.waterfall_title
         waterfall_mode = self.mode == "waterfall"
 
         # WINDOW_GUI_NORMAL (0x10 = 16) disables the Qt/GTK toolbar and statusbar
         WINDOW_GUI_NORMAL = getattr(cv2, "WINDOW_GUI_NORMAL", 0x00000010)
-        win_w = self.config.display.window_width
-        win_h = self.config.display.stack_height
+        win_w = self._ui.display.window_width
+        win_h = self._ui.display.stack_height
 
         if waterfall_mode:
             # Waterfall mode: single window (waterfall only)
@@ -333,12 +339,12 @@ class DisplayManager:
             cv2.moveWindow(title2, 0, 0)
             cv2.setMouseCallback(title2, self._handle_mouse)
         else:
-            if self.config.waterfall.enabled:
+            if self._ui.waterfall.enabled:
                 cv2.namedWindow(title2, cv2.WINDOW_NORMAL | WINDOW_GUI_NORMAL)
                 cv2.resizeWindow(title2, win_w, win_h)
                 cv2.moveWindow(title2, win_w + 10, 0)
 
-            if self.config.display.fullscreen:
+            if self._ui.display.fullscreen:
                 cv2.namedWindow(title1, cv2.WINDOW_NORMAL | WINDOW_GUI_NORMAL)
                 cv2.setWindowProperty(
                     title1,
@@ -398,10 +404,10 @@ class DisplayManager:
 
     def _handle_mouse(self, event: int, x: int, y: int, flags: int, param) -> None:
         """Handle mouse events on the spectrum window (pixel-perfect, no scaling)."""
-        control_bar_height = self.config.display.message_height
-        preview_height = self.config.display.preview_height
-        graph_height = self.config.display.graph_height
-        width = self.config.display.window_width
+        control_bar_height = self._ui.display.message_height
+        preview_height = self._ui.display.preview_height
+        graph_height = self._ui.display.graph_height
+        width = self._ui.display.window_width
         mouse_y_offset = control_bar_height + preview_height
         graph_rel_y = y - mouse_y_offset
 
@@ -502,7 +508,7 @@ class DisplayManager:
                     data_x = self._viewport.screen_x_to_data(x, width)
                     idx = int(round(data_x))
                     idx = max(0, min(self._last_data_width - 1, idx))
-                    half_width = self.config.processing.peak_include_region_half_width
+                    half_width = self._ui.processing.peak_include_region_half_width
                     self.state.peak_include_region = (idx, half_width)
             self._finalize_marker_drag(x)
             self._click_for_region = False
@@ -648,7 +654,7 @@ class DisplayManager:
             return
 
         if self.mode == "colorscience":
-            cs = self.config.color_science
+            cs = self._ui.color_science
             if not cs.auto_viewport:
                 self._viewport.reset(data_width)
                 self._zoom_horizontal.value = 1.0
@@ -657,11 +663,11 @@ class DisplayManager:
             wl_lo = cs.viewport_wl_min
             wl_hi = cs.viewport_wl_max
         elif self.mode == "waterfall":
-            wf = self.config.waterfall
+            wf = self._ui.waterfall
             wl_lo = wf.viewport_wl_min
             wl_hi = wf.viewport_wl_max
         else:
-            meas = self.config.measurement
+            meas = self._ui.measurement
             if not meas.auto_viewport:
                 self._viewport.reset(data_width)
                 self._zoom_horizontal.value = 1.0
@@ -708,8 +714,8 @@ class DisplayManager:
             frozen_spectrum: When True, waterfall does not scroll (freeze capture).
         """
         self._spectrum_y_center = spectrum_y_center
-        width = self.config.display.window_width
-        graph_height = self.config.display.graph_height
+        width = self._ui.display.window_width
+        graph_height = self._ui.display.graph_height
         data_width = len(data.intensity)
         self._last_data_width = data_width
         self._last_peaks = list(data.peaks)
@@ -861,8 +867,8 @@ class DisplayManager:
         if self._graph_info:
             self._render_graph_info(graph)
 
-        message_height = self.config.display.message_height
-        preview_height = self.config.display.preview_height
+        message_height = self._ui.display.message_height
+        preview_height = self._ui.display.preview_height
 
         # Always use control bar - no legacy banner
         exposure_us = getattr(data, "exposure_us", None)
@@ -981,7 +987,7 @@ class DisplayManager:
         waterfall_mode = self.mode == "waterfall"
 
         if self._waterfall is not None and (
-            self.config.waterfall.enabled or waterfall_mode
+            self._ui.waterfall.enabled or waterfall_mode
         ):
             if not frozen_spectrum:
                 self._waterfall.update(data)
@@ -1018,14 +1024,14 @@ class DisplayManager:
                         graph_height=wfh,
                     )
                 self._render_overlays(waterfall_vertical)
-                cv2.imshow(self.config.waterfall_title, waterfall_vertical)
+                cv2.imshow(self._ui.waterfall_title, waterfall_vertical)
             else:
                 self._render_overlays(spectrum_vertical)
-                cv2.imshow(self.config.spectrograph_title, spectrum_vertical)
-                cv2.imshow(self.config.waterfall_title, waterfall_vertical)
+                cv2.imshow(self._ui.spectrograph_title, spectrum_vertical)
+                cv2.imshow(self._ui.waterfall_title, waterfall_vertical)
         else:
             self._render_overlays(spectrum_vertical)
-            cv2.imshow(self.config.spectrograph_title, spectrum_vertical)
+            cv2.imshow(self._ui.spectrograph_title, spectrum_vertical)
 
     @property
     def preview_mode(self) -> str:
@@ -1227,7 +1233,7 @@ class DisplayManager:
             return
 
         params = params_from_saved(rotation_angle, spectrum_y_center, original_height)
-        crop_height = self.config.display.preview_height
+        crop_height = self._ui.display.preview_height
 
         corners_rotated = get_crop_corners_rotated(original_width, spectrum_y_center, crop_height)
         corners_original = transform_bbox_rotated_to_original(
@@ -1258,7 +1264,7 @@ class DisplayManager:
     ) -> int:
         """Total pixel width of status segment texts."""
         font = self._font
-        font_scale = self.config.display.font_scale
+        font_scale = self._ui.display.font_scale
         thickness = 1
         total = 0
         for text, _ in segments:
@@ -1278,7 +1284,7 @@ class DisplayManager:
     ) -> None:
         """Draw status segments with per-segment colors."""
         font = self._font
-        font_scale = self.config.display.font_scale
+        font_scale = self._ui.display.font_scale
         thickness = 1
         for text, color in segments:
             if not text:
@@ -1304,7 +1310,7 @@ class DisplayManager:
             return
 
         font = self._font
-        font_scale = self.config.display.font_scale
+        font_scale = self._ui.display.font_scale
         thickness = 1
         text_width = self._status_segments_width(segments)
         (_, text_height), baseline = cv2.getTextSize("0", font, font_scale, thickness)
@@ -1583,9 +1589,9 @@ class DisplayManager:
         height difference so they stay in the graph/waterfall area.
         """
         expected_h = (
-            self.config.display.message_height
-            + self.config.display.preview_height
-            + self.config.display.graph_height
+            self._ui.display.message_height
+            + self._ui.display.preview_height
+            + self._ui.display.graph_height
         )
         dy = frame.shape[0] - expected_h  # 0 normally; -preview_height in "none" mode
 

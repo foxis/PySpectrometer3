@@ -13,13 +13,7 @@ from queue import Empty
 import cv2
 import numpy as np
 
-from .bootstrap import (
-    build_auto_controllers,
-    build_extractor_from_config,
-    build_processing_stack,
-    configure_reference_search,
-    normalized_export_output_dir,
-)
+from .bootstrap import build_spectrometer_components
 from .capture.base import CAPTURE_UINT16_MAX, CameraInterface
 from .capture.picamera import Capture
 from .config import Config
@@ -90,13 +84,15 @@ class Spectrometer:
             default_pixels=self.config.calibration.default_pixels,
             default_wavelengths=self.config.calibration.default_wavelengths,
         )
-        self._extractor = build_extractor_from_config(self.config)
-        self._pipeline, self._savgol_filter, self._peak_detector = build_processing_stack(
-            self.config
-        )
-        self._auto_gain, self._auto_exposure = build_auto_controllers(self.config)
-        configure_reference_search(self.config)
-        self._exporter = CSVExporter(output_dir=normalized_export_output_dir(self.config))
+        _c = build_spectrometer_components(self.config)
+        self._extractor = _c.extractor
+        self._pipeline = _c.pipeline
+        self._savgol_filter = _c.savgol
+        self._peak_detector = _c.peak
+        self._auto_gain = _c.auto_gain
+        self._auto_exposure = _c.auto_exposure
+        self._exporter = _c.exporter
+        self._reference_file_loader = _c.reference_file_loader
         self._reference_manager = ReferenceSpectrumManager()
         self._sensitivity = SensitivityCorrection(config=self.config.sensitivity)
 
@@ -140,6 +136,7 @@ class Spectrometer:
             auto_gain=self._auto_gain,
             auto_exposure=self._auto_exposure,
             reference_manager=self._reference_manager,
+            reference_file_loader=self._reference_file_loader,
         )
         ctx.quit_app = lambda: setattr(ctx, "running", False)
         ctx.save_snapshot = self._save_snapshot

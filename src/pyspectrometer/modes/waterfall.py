@@ -40,7 +40,7 @@ class WaterfallMode(MeasurementMode):
     def setup(self, ctx: "ModeContext") -> None:
         """Apply waterfall-specific display defaults and buffer for export."""
         super().setup(ctx)
-        height = ctx.display.config.display.graph_height
+        height = ctx.display.runtime.display.graph_height
         ctx.waterfall_raw_buffer = deque(maxlen=3 * height)
         self.register_callback("save", lambda: self._on_save_waterfall(ctx))
         self.register_callback("export_csv", lambda: self._on_export_csv_waterfall(ctx))
