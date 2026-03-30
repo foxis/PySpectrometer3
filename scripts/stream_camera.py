@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MJPEG HTTP stream from Picamera2 on Raspberry Pi.
 
-Uses pyspectrometer: Config, Capture (picamera), SpectrumExtractor,
+Uses pyspectrometer: Config, Capture (picamera), ExtractorBuildParams,
 AutoGainController, AutoExposureController, Calibration, scale_to_uint8.
 Only this script implements the MJPEG HTTP server; all capture and processing
 comes from the library.
@@ -148,7 +148,11 @@ def _capture_loop(
         run_auto_gain_exposure_frame,
     )
     from pyspectrometer.capture.base import CAPTURE_UINT16_MAX
-    from pyspectrometer.processing.extraction import ExtractionMethod, SpectrumExtractor
+    from pyspectrometer.processing.extraction import ExtractionMethod
+    from pyspectrometer.processing.extractor_params import (
+        ExtractorBuildParams,
+        build_spectrum_extractor,
+    )
     from pyspectrometer.utils.display import scale_to_uint8
 
     config, _ = load_config(config_path)
@@ -171,13 +175,13 @@ def _capture_loop(
         verbose=True,
         bit_depth=bit_depth,
     )
-    extractor = SpectrumExtractor(
-        frame_width=width,
-        frame_height=height,
-        method=ExtractionMethod.MAX,
-        rotation_angle=0.0,
-        perpendicular_width=config.extraction.perpendicular_width,
-        spectrum_y_center=height // 2,
+    extractor = build_spectrum_extractor(
+        ExtractorBuildParams.from_config(
+            config,
+            method=ExtractionMethod.MAX,
+            frame_width=width,
+            frame_height=height,
+        )
     )
 
     camera.start()

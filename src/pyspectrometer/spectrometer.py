@@ -13,6 +13,13 @@ from queue import Empty
 import cv2
 import numpy as np
 
+from .bootstrap import (
+    build_auto_controllers,
+    build_extractor_from_config,
+    build_processing_stack,
+    configure_reference_search,
+    normalized_export_output_dir,
+)
 from .capture.base import CAPTURE_UINT16_MAX, CameraInterface
 from .capture.picamera import Capture
 from .config import Config
@@ -45,9 +52,8 @@ from .modes.measurement import MeasurementMode
 from .modes.raman import RamanMode
 from .modes.waterfall import WaterfallMode
 from .processing.auto_controls import AutoExposureController, AutoGainController
-from .processing.extraction import ExtractionMethod, SpectrumExtractor
-from .processing.filters import SavitzkyGolayFilter
-from .processing.peak_detection import PeakDetector, detect_peaks_in_region
+from .processing.extraction import SpectrumExtractor
+from .processing.peak_detection import detect_peaks_in_region
 from .processing.pipeline import ProcessingPipeline
 from .processing.sensitivity_correction import SensitivityCorrection
 from .utils.dialog import prompt_calibrate, prompt_label, prompt_save_file_path
@@ -84,67 +90,13 @@ class Spectrometer:
             default_pixels=self.config.calibration.default_pixels,
             default_wavelengths=self.config.calibration.default_wavelengths,
         )
-        method_map = {
-            "median": ExtractionMethod.MEDIAN,
-            "weighted_sum": ExtractionMethod.WEIGHTED_SUM,
-            "gaussian": ExtractionMethod.GAUSSIAN,
-            "max": ExtractionMethod.MAX,
-        }
-        extraction_method = method_map.get(
-            self.config.extraction.method,
-            ExtractionMethod.WEIGHTED_SUM,
+        self._extractor = build_extractor_from_config(self.config)
+        self._pipeline, self._savgol_filter, self._peak_detector = build_processing_stack(
+            self.config
         )
-        spectrum_y = (
-            self.config.extraction.spectrum_y_center or self.config.camera.frame_height // 2
-        )
-        self._extractor = SpectrumExtractor(
-            frame_width=self.config.camera.frame_width,
-            frame_height=self.config.camera.frame_height,
-            method=extraction_method,
-            rotation_angle=self.config.extraction.rotation_angle,
-            perpendicular_width=self.config.extraction.perpendicular_width,
-            spectrum_y_center=spectrum_y,
-            crop_height=self.config.display.preview_height,
-            background_percentile=self.config.extraction.background_percentile,
-            frame_black_strip_height=self.config.extraction.frame_black_strip_height,
-        )
-        self._savgol_filter = SavitzkyGolayFilter(
-            window_size=self.config.processing.savgol_window,
-            poly_order=self.config.processing.savgol_poly,
-            poly_order_min=self.config.processing.savgol_poly_min,
-            poly_order_max=self.config.processing.savgol_poly_max,
-        )
-        self._savgol_filter.enabled = False
-        self._peak_detector = PeakDetector(
-            min_distance=self.config.processing.peak_min_distance,
-            threshold=self.config.processing.peak_threshold,
-            max_count=self.config.processing.peak_max_count,
-            min_distance_min=self.config.processing.peak_min_distance_min,
-            min_distance_max=self.config.processing.peak_min_distance_max,
-            threshold_min=self.config.processing.peak_threshold_min,
-            threshold_max=self.config.processing.peak_threshold_max,
-            max_count_min=self.config.processing.peak_max_count_min,
-            max_count_max=self.config.processing.peak_max_count_max,
-        )
-        self._pipeline = ProcessingPipeline([self._savgol_filter, self._peak_detector])
-
-        smoothing = self.config.auto.peak_smoothing_period_sec
-        rate_hz = self.config.auto.max_adjust_rate_hz
-        self._auto_gain = AutoGainController(
-            peak_smoothing_period_sec=smoothing,
-            max_adjust_rate_hz=rate_hz,
-        )
-        self._auto_exposure = AutoExposureController(
-            peak_smoothing_period_sec=smoothing,
-            max_adjust_rate_hz=rate_hz,
-        )
-        from .data.reference_loader import set_reference_dirs
-
-        set_reference_dirs(self.config.export.reference_dirs)
-        output_dir = self.config.export.output_dir
-        if str(output_dir) == ".":
-            output_dir = Path("output")
-        self._exporter = CSVExporter(output_dir=output_dir)
+        self._auto_gain, self._auto_exposure = build_auto_controllers(self.config)
+        configure_reference_search(self.config)
+        self._exporter = CSVExporter(output_dir=normalized_export_output_dir(self.config))
         self._reference_manager = ReferenceSpectrumManager()
         self._sensitivity = SensitivityCorrection(config=self.config.sensitivity)
 
