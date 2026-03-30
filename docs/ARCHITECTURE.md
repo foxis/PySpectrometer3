@@ -1,6 +1,15 @@
 # PySpectrometer3 — Application Architecture
 
-**Status: Single source of truth.** All mode behavior, spectrum extraction, CLI, data files, and implementation status are defined in this document.
+**Status:** This document is the **primary** map of the application: modes, data flow, extraction, configuration, CLI, and module layout. **Authoritative for behavior** are the **source modules** (e.g. `modes/*/get_buttons()`, `spectrometer.py`, `display/renderer.py`). Refactor specs and UI/trace design live in companion docs below—not duplicated here in full.
+
+**Companion documents**
+
+| Document | Contents |
+|----------|----------|
+| [CONFIGURATION_ARCHITECTURE.md](CONFIGURATION_ARCHITECTURE.md) | TOML config, `DisplayRuntimeView`, calibration vs extraction overlap |
+| [DISPLAY_GUI_ARCHITECTURE.md](DISPLAY_GUI_ARCHITECTURE.md) | Display/GUI composition, `DisplayManager`, refactor targets |
+| [SPECTRUM_TRACE_MODEL.md](SPECTRUM_TRACE_MODEL.md) | Unified traces, markers, overlays, metadata, allocation notes |
+| [REFACTORING_GUIDE.md](REFACTORING_GUIDE.md) | SRP tasks, callback wiring, incremental refactors |
 
 ---
 
@@ -8,7 +17,9 @@
 
 PySpectrometer3 is software that runs on a Raspberry Pi. A camera looks through a prism onto a slit. This produces a vertical slit smeared across the camera sensor depending on wavelength. There is slight structure to the vertical stripes due to the way light is coupled to the slit.
 
-The application has **five operating modes** (Calibration, Measurement, Waterfall, Raman, Color Science), a shared **acquisition and processing stack**, and mode-specific **controls and workflows**. All modes use the same camera, spectrum extraction, and core pipeline.
+The application has **five runtime modes** selectable via CLI (`--mode`): **calibration**, **measurement**, **waterfall**, **raman**, **colorscience**. They share an **acquisition and processing stack** and mode-specific **controls and workflows**. All use the same camera, spectrum extraction, and core pipeline.
+
+**Runtime vs `ModeType` enum** (`modes/base.py`): The enum lists **Calibration**, **Measurement**, **Raman**, **Color Science**. **Waterfall** is a separate CLI mode but reuses `ModeType.MEASUREMENT` (class `WaterfallMode` subclasses `MeasurementMode`). Prefer `Spectrometer.VALID_MODES` and `spectrometer.mode` string for dispatch.
 
 ### 1.1 Spectrum Alignment (Auto-level)
 
@@ -89,13 +100,13 @@ flowchart LR
 
 ### 3.1 Summary
 
-| Mode            | Purpose                              | Key differentiators                                              |
-|-----------------|--------------------------------------|-------------------------------------------------------------------|
-| **Calibration** | Wavelength calibration from lines    | Reference sources (FL12, HG, LED, D65), peak matching, 4-point fit |
-| **Measurement** | Spectrum measurement with light control | LED, I2C expander; black/white ref; save/load (overlay, black, white) |
-| **Waterfall**   | Time-resolved spectrum, change detection | Smaller spectrum window; waterfall display; stream to CSV (timestamp column); optional stepper + angle |
-| **Raman**       | Raman scattering spectroscopy          | Laser wavelength; auto-detect zero cm⁻¹; display in cm⁻¹; (future) bond/compound matching |
-| **Color Science** | Colorimetry + spectrum              | XYZ/LAB swatch grid; reflection/transmission/illumination; xy diagram; compare ΔE |
+| Mode            | Implementation | Purpose                              | Key differentiators                                              |
+|-----------------|----------------|--------------------------------------|-------------------------------------------------------------------|
+| **Calibration** | Done           | Wavelength calibration from lines    | Many reference sources, auto-calibration, optional **manual assist** (markers on measured + reference SPD), sensitivity overlay |
+| **Measurement** | Done           | Spectrum measurement with light control | LED, I2C expander; black/white ref; save/load; optional waterfall window alongside spectrograph |
+| **Waterfall**   | Done           | Time-resolved / monitoring           | `--mode waterfall`: waterfall-first UI, REC/stream CSV, snapshot export (`modes/waterfall.py`) |
+| **Raman**       | MVP            | Raman scattering spectroscopy      | Laser nm → cm⁻¹ axis, dark ref, save/load (`modes/raman.py`); bond/compound library = future |
+| **Color Science** | MVP          | Colorimetry + spectrum               | XYZ/LAB, swatches, xy diagram, CRI/CCT paths (`modes/colorscience.py`, `colorscience/`) |
 
 **Common controls (all modes except Calibration):**
 
@@ -112,93 +123,37 @@ flowchart LR
 | Auto Exposure | Automatic exposure control |
 | Lamp On/Off   | GPIO 22 light control |
 
-Mode selection: **startup** via `--mode` (CLI) or **runtime** via GUI/keyboard when implemented. Each mode is a **BaseMode** subclass with: `mode_type`, `name`, `get_buttons()`, `handle_action()`, `render_overlay()`, and optional pipeline customization.
+Mode selection: **startup** via `--mode` (CLI). Each mode is a **BaseMode** subclass with: `mode_type`, `name`, `get_buttons()`, `handle_action()`, `get_overlay()`, `update_display()`, `process_spectrum()`, and optional `transform_spectrum_data()` / `get_graticule()`.
+
+### 3.1.1 Common controls unification target (behavior-preserving)
+
+The following control families are **shared UX** and should be defined once, reused by all applicable modes, and handled by shared callbacks in `BaseMode`/common controllers:
+
+- Record/capture family (`Rec`/`Save`/`Load`)
+- Integration family (`AVG`/`MAX`/`ACC`)
+- Zoom and graph controls (`ZX`, `ZY`, peaks, bars)
+- Reference controls (`Dark`, `White`, clear refs)
+- Lamp/illumination controls (`Lamp`, LED slider, I2C where applicable)
+- Camera controls (`Gain`, `AutoGain`, `Exposure`, `AutoExposure`)
+- App/session controls (`Quit`, preview cycle)
+
+**Constraint:** unify **without behavior change**. Keep mode-specific controls additive (e.g., calibration sources, Raman laser actions, color-science swatches) while common controls come from a shared profile/composer. Avoid per-mode copy/paste button/callback code paths.
 
 ---
 
 ### 3.2 Mode 1: Calibration
 
-**Purpose:** Perform wavelength calibration using known spectral lines from reference light sources.
+**Purpose:** Map pixels to wavelength using reference SPDs (library and/or CSV), polynomial fit, and optional **manual calibration assist** (user-placed markers on measured and reference curves when auto-calibration is unreliable).
 
-**Reference sources:**
+**Authoritative UI:** Button labels, rows, `action_name`s, and icons are defined in **`modes/calibration.py`** → `get_buttons()`. Do not duplicate long button tables in this doc; update the code when the bar changes.
 
-| Name | Description | Key Lines (nm) |
-|------|-------------|----------------|
-| FL12 | Fluorescent (CIE F12 or equivalent) | Characteristic fluorescent lines |
-| HG   | Mercury Low-Pressure Lamp | 404.7, 435.8, 546.1, 579.0 |
-| LED  | White LED | Blue peak ~450nm, broad phosphor ~550nm |
-| D65  | CIE D65 daylight | As in reference data |
+**Reference sources:** Multiple toggles (Hg, D65, A, FL1–FL3, FL12, LED1–LED3, …) select `ReferenceSource` data via `data/reference_spectra.py` and optional CSV loaders (`ReferenceFileLoader`, `reference_dirs` in config).
 
-**Calibration workflow:**  
-1. Select reference source (FL12, HG, LED, D65)  
-2. Auto-detect peaks in spectrum  
-3. Match detected peaks to known reference lines (best-fit algorithm)  
-4. User confirms/adjusts; **4 calibration points minimum**  
-5. Compute polynomial fit (3rd order for 4 points)  
-6. Save calibration  
+**Assist:** `MkrM` / `MkrR`-style placement uses `DisplayState.marker_lines` and `reference_marker_lines` with `calibration_assist_target`; snap peaks can be supplied for the reference SPD when assist-reference is active. **Planned simplification:** unified marker model — see [SPECTRUM_TRACE_MODEL.md](SPECTRUM_TRACE_MODEL.md).
 
-**Calibration points rule:** Use **4 points minimum (not 3)**.  
-- 3 points → 2nd order polynomial (quadratic) — insufficient  
-- 4 points → 3rd order polynomial (cubic) — better accuracy  
-- 5+ points → 3rd order with least squares fit — best  
+**Algorithms (where to look):** Auto-level / auto-calibration / correlation matching live under `processing/auto_calibrator.py`, `processing/peak_detection.py`, and `modes/calibration.py`. **Rule of thumb:** prefer **≥4** matched points for a robust wavelength fit (exact polynomial order follows implementation).
 
-**Algorithms:**
-
-- **Auto-Level:** Adjust gain to bring peak intensity to target range (200–240 out of 255).
-- **Auto-Center Y:** Sum intensity along X for each Y row; find Y with maximum total intensity; set `spectrum_y_center` to that value.
-- **Auto-Calibrate (best-fit matching):**
-
-```python
-def match_peaks_to_reference(
-    detected_peaks: list[float],   # pixel positions
-    reference_lines: list[float],  # known wavelengths (nm)
-    initial_calibration: Calibration,
-) -> list[tuple[float, float]]:   # (pixel, wavelength) pairs
-    # 1. Convert detected pixel positions to approximate wavelengths using initial calibration
-    # 2. For each reference line, find nearest detected peak
-    # 3. Score matches by proximity and consistency
-    # 4. Return best N matches (N >= 4)
-```
-
-This matching is reused for: material identification, reference spectrum alignment, Raman peak identification.
-
-**GUI controls (Calibration):**
-
-| Row | Controls |
-|-----|----------|
-| 1   | [FL12] [HG] [LED] [D65] │ [Overlay] [Auto-Level] [Auto-Calibrate] │ Status |
-| 2   | [Save Cal] [Load Cal] [Clear Pts] │ [Freeze] [Peak] [Avg] │ Points: 0/4 │ Fit Error: -- |
-| 3   | [AutoG] [Gain+] [Gain-] │ Quit |
-
-**Button → action mapping (implemented):**
-
-| Button  | Action           | Description |
-|---------|------------------|-------------|
-| FL12 | source_fl12      | Select Fluorescent reference |
-| HG   | source_hg        | Select Mercury reference |
-| LED  | source_led       | Select White LED reference |
-| D65  | source_d65       | Select CIE D65 daylight reference |
-| Overlay | toggle_overlay   | Toggle reference overlay visibility |
-| AutoLvl | auto_level       | Toggle auto-level (gain adjustment) |
-| AutoCal | auto_calibrate   | Automatic peak matching calibration |
-| SaveCal | save_cal         | Save calibration to file |
-| LoadCal | load_cal         | Load calibration from file |
-| Freeze  | freeze           | Freeze spectrum for calibration |
-| Peak    | capture_peak     | Peak hold mode |
-| Avg     | toggle_averaging | Toggle frame averaging |
-| AutoG   | auto_gain        | Toggle automatic gain control |
-| Gain+/- | gain_up/down     | Manual gain adjustment |
-| Quit    | quit             | Exit application |
-
-**Calibration workflow (steps):**  
-1. Start calibration mode (e.g. `make calibrate`).  
-2. FL12 source is selected by default with overlay visible.  
-3. Point spectrometer at matching light source.  
-4. AutoGain on by default — spectrum auto-scales.  
-5. Click **Freeze** to lock current spectrum.  
-6. Click **AutoCal** to match peaks and compute calibration.  
-7. Verify overlay aligns with measured peaks.  
-8. Click **SaveCal** to save, or retry with AutoCal.
+**Typical workflow:** Select source → align spectrum (LVL, freeze, overlay) → **CAL** (auto) or manual markers → verify → **SaveCal**.
 
 ---
 
@@ -249,22 +204,15 @@ This matching is reused for: material identification, reference spectrum alignme
 
 ---
 
-### 3.4 Mode 3: Waterfall (Planned)
+### 3.4 Mode 3: Waterfall (implemented)
 
-**Purpose:** Similar to Measurement mode but focused on detecting changes in spectrum over time. Smaller spectrum window with a waterfall (time vs wavelength intensity) display.
+**Purpose:** Measurement-class processing with **waterfall-first** UI (`WaterfallMode` in `modes/waterfall.py`). `--mode waterfall` enables `config.waterfall.enabled` and uses a dedicated window layout in `DisplayManager` when `mode == "waterfall"`.
 
-**Features:**
-
-- **Layout:** Smaller window for the spectrum; main area shows the waterfall (rows = time, columns = wavelength or pixel).
-- **Recording:** Record spectrum values straight to CSV. First column is timestamp in seconds since recording started; subsequent columns are intensity (or wavelength-labelled). Useful for monitoring spectrum drift, reactions, or time-dependent effects.
-- **Light control:** LED (GPIO 22) and I2C expander pins, as in Measurement.
-- **Optional:** Control a stepper motor and record stepper position; useful for wavelength dependence on angle (e.g. grating rotation) measurements. Timestamp and stepper position can be logged together with each spectrum row.
-
-**GUI (conceptual):** Control bar (LED, I2C, Black, White, Record, Stop); crop/spectrum preview (reduced); waterfall plot; optional stepper position display and control.
+**Features:** CSV export / REC streaming with timestamps, waterfall snapshot save, shared measurement controls (see `MeasurementMode` superclass). Optional stepper/angle logging remains future work if not wired in code.
 
 ---
 
-### 3.5 Mode 4: Raman (Planned)
+### 3.5 Mode 4: Raman (MVP implemented)
 
 **Purpose:** Measure Raman scattering. The mode must know the laser wavelength; it may detect the laser line in the actual spectrum to establish zero cm⁻¹, then recalculate the spectrum in Raman shift (cm⁻¹). Future: bond detection (C–C, C=C, etc.) and compound matching.
 
@@ -308,7 +256,7 @@ def wavelength_to_wavenumber(
 
 ---
 
-### 3.6 Mode 5: Color Science (Planned)
+### 3.6 Mode 5: Color Science (MVP implemented)
 
 **Purpose:** Colorimetric analysis in addition to spectrum. Calculates light color (XYZ, LAB) for reflection, transmission, or illumination. Allows measuring and comparing colors via a swatch grid.
 
@@ -472,14 +420,13 @@ Used by SpectrumExtractor (geometry), Spectrometer (SpectrumData wavelength axis
 
 ### 5.4 Mode Layer
 
-- **BaseMode:** state (frozen, averaging, refs, auto gain, lamp), buttons, actions, overlay contract.  
-- **CalibrationMode, MeasurementMode:** implemented. **RamanMode, ColorScienceMode:** planned.  
-Shared **ModeState** drives display and export.
+- **BaseMode:** `ModeState`, `get_buttons()`, `handle_action()`, `get_overlay()`, **`update_display(ctx, processed, graph_height)`** (primary hook for overlays and status), `process_spectrum()`, optional `transform_spectrum_data()` / `get_graticule()`.
+- **CalibrationMode, MeasurementMode, WaterfallMode, RamanMode, ColorScienceMode:** implemented in `modes/`. Waterfall subclasses Measurement.
 
 ### 5.5 Display and Export
 
-- **DisplayManager:** spectrum + graticule/waterfall; calls mode `render_overlay()`.  
-- **Export (e.g. CSV):** save spectrum (and metadata) on user Save.
+- **DisplayManager** (`display/renderer.py`): OpenCV windows, graph stack, control bar, sliders, markers, waterfall branch; modes update it via **`update_display`** on `ModeContext`.
+- **Export:** `export/csv_exporter.py`, `export/graph_export.py` (matplotlib PDF paths); metadata builders in CSV exporter for markers, sensitivity, waterfall bundles.
 
 ---
 
@@ -487,9 +434,9 @@ Shared **ModeState** drives display and export.
 
 - **Calibration:** Frame → SpectrumExtractor → intensity → Calibration (poly) → wavelength → (optional) pipeline → Display (spectrum + reference overlay). User: Freeze → AutoCal → SaveCal.
 - **Measurement:** Frame → SpectrumExtractor → intensity → Calibration → SpectrumData → pipeline (dark/white, filter) → Display. User: Capture, Norm, Save/Load, LED, I2C.
-- **Waterfall:** Same as Measurement but smaller spectrum window; waterfall display; stream to CSV (timestamp in s, then spectrum); optional stepper position logging.
-- **Raman:** Same chain + wavelength_to_wavenumber(laser_nm); optional Find Laser for zero cm⁻¹; display in cm⁻¹; Save/Load. (Future: bond peaks, compound matching.)
-- **Color Science:** Same chain + sub-mode normalization; tristimulus/CRI/CCT from CIE data; Display (XYZ, CRI, CCT, swatches, xy diagram); sub-mode, overlays, Save.
+- **Waterfall:** Measurement pipeline + `WaterfallMode` UI; waterfall buffer + optional second window; CSV REC / snapshot export; stepper logging TBD.
+- **Raman:** `transform_spectrum_data` / wavenumber graticule; dark ref; Save/Load. Future: bond peaks, compound matching.
+- **Color Science:** XYZ/LAB, swatches, xy diagram, CRI/CCT paths; multi-view preview (`cycle_preview`). Ongoing: fuller CRI/TCS.
 
 ---
 
@@ -536,55 +483,70 @@ Use `OV9281_spectral_sensitivity.csv` for sensitivity correction; the extracted 
 
 ```
 src/pyspectrometer/
-├── __main__.py              # CLI, --mode, --waveshare, etc.
-├── config.py                # Config, ExtractionConfig
-├── spectrometer.py         # Orchestrator: capture, extraction, calibration, pipeline, mode, display, export, input
+├── __main__.py              # CLI: --mode, --camera, --window, --waterfall, etc.
+├── cli.py                   # argparse helpers used by __main__
+├── config.py                # Config, DisplayConfig, DisplayRuntimeView, ExtractionConfig
+├── bootstrap.py             # build_spectrometer_components, ReferenceFileLoader wiring
+├── spectrometer.py          # Orchestrator: camera, extractor, pipeline, mode, display, export, keyboard
 ├── capture/
 │   ├── base.py              # CameraInterface
-│   ├── picamera.py          # Capture (Pi cameras)
-│   └── opencv.py    # Capture (webcam, v4l, rtsp, http)
+│   ├── picamera.py          # Picamera2 backend
+│   └── opencv.py            # Webcam / V4L / RTSP / HTTP MJPEG
 ├── processing/
 │   ├── base.py              # ProcessorInterface
-│   ├── extraction.py        # SpectrumExtractor, ExtractionMethod
-│   ├── pipeline.py           # ProcessingPipeline
+│   ├── extraction.py        # SpectrumExtractor
+│   ├── extractor_params.py  # ExtractorBuildParams, build_spectrum_extractor
+│   ├── pipeline.py          # ProcessingPipeline
 │   ├── reference_correction.py
 │   ├── filters.py           # SavitzkyGolay, etc.
 │   ├── auto_controls.py     # AutoGainController, AutoExposureController
-│   ├── peak_detection.py    # PeakDetector, calibration matching
-│   └── spectrum_transform.py  # e.g. wavelength→wavenumber
+│   ├── auto_calibrator.py   # Wavelength calibration optimization
+│   ├── peak_detection.py
+│   ├── spectrum_transform.py
+│   ├── raman.py             # wavelength → wavenumber helpers
+│   ├── sensitivity_correction.py
+│   ├── sensitivity_curve_fit.py
+│   ├── sensor_units.py
+│   └── calibration/         # hough_matching, cauchy_fit, detect_peaks, extremum
 ├── core/
-│   ├── calibration.py       # Calibration (pixel↔λ, load/save, recalibrate)
-│   ├── spectrum.py          # SpectrumData
-│   └── reference_spectrum.py
+│   ├── calibration.py       # Calibration, load/save
+│   ├── calibration_io.py
+│   ├── spectrum.py          # SpectrumData, Peak
+│   ├── spectrum_overlay.py
+│   ├── reference_spectrum.py
+│   └── mode_context.py      # ModeContext (display, camera, ctx hooks)
 ├── modes/
-│   ├── base.py              # BaseMode, ModeType, ModeState, ButtonDefinition
-│   ├── calibration.py       # CalibrationMode
-│   ├── measurement.py       # MeasurementMode
-│   ├── waterfall.py         # WaterfallMode (planned)
-│   ├── raman.py             # RamanMode (planned)
-│   └── colorscience.py      # ColorScienceMode (planned)
-├── data/
-│   └── reference_spectra.py # FL12, HG, LED, D65
-├── display/
-│   ├── renderer.py          # DisplayManager, mode overlay
-│   ├── graticule.py
-│   ├── waterfall.py
-│   └── overlay_utils.py
-├── gui/
-│   ├── control_bar.py       # Mode-specific button layouts
-│   ├── buttons.py
-│   └── sliders.py
-├── input/
-│   └── keyboard.py          # KeyboardHandler, Action
-├── export/
 │   ├── base.py
-│   └── csv_exporter.py
-├── colorscience/            # (Planned) CIE data, XYZ, CRI, CCT
+│   ├── calibration.py
+│   ├── measurement.py
+│   ├── waterfall.py
+│   ├── raman.py
+│   └── colorscience.py
+├── data/
+│   ├── reference_spectra.py
+│   ├── reference_loader.py
+│   └── reference_paths.py
+├── display/
+│   ├── renderer.py          # DisplayManager
+│   ├── graticule.py, spectrum.py, peaks.py, markers.py, viewport.py
+│   ├── waterfall.py, overlay_utils.py, calibration_preview.py
+│   └── ...
+├── gui/
+│   ├── control_bar.py, buttons.py, sliders.py, icons.py
+├── input/
+│   └── keyboard.py
+├── export/
+│   ├── csv_exporter.py
+│   └── graph_export.py      # matplotlib PDF
+├── colorscience/            # xyz, chromaticity, swatches, illumination_metrics, ...
+├── hardware/
+│   └── led.py
+├── csv_viewer/              # Optional CSV viewer mode (separate entry)
 └── utils/
-    └── color.py
+    ├── display.py, graph_scale.py, dialog.py, ...
 ```
 
-Features (dark, white, averaging, auto gain, GPIO, peak matching) may live in processing/, core/, or dedicated feature modules; behavior is as described in the mode and pipeline sections above.
+Feature logic is spread across `modes/`, `processing/`, and `display/` as above; prefer **one** reference-correction path (`reference_correction.py`) for dark/white.
 
 ---
 
@@ -651,39 +613,45 @@ cd /home/pi/PySpectrometer3
 
 ---
 
-## 11. Implementation Phases
+## 11. Implementation Phases (historical roadmap)
 
-1. **Mode framework:** BaseMode, Spectrometer mode system, CLI `--mode`.
-2. **Common features:** Dark/white ref, averaging, auto gain, GPIO (lamp).
-3. **Calibration mode:** calibration.py, reference data, peak matching, 4-point min, auto-level/center/calibrate.
-4. **Measurement mode:** measurement.py, ref normalization, overlay, LED, I2C.
-5. **OpenCV capture:** capture/opencv.py, CLI `--camera` and `--list-cameras`, 10-bit grayscale, gain/exposure no-op, log capabilities on start, substitutable via Spectrometer(camera=...).
-6. **Waterfall mode:** waterfall.py, waterfall display, CSV stream (timestamp + spectrum), optional stepper.
-7. **Raman mode:** raman.py, wavenumber conversion, laser detection, zero cm⁻¹; (future) bond/compound matching.
-8. **Color Science mode:** colorscience/ (CIE data, XYZ, CRI, CCT), modes/colorscience.py, swatches, xy diagram.
-9. **Desktop:** Makefile `install-link`, desktop files, shell scripts.
+Phases 1–5 and **OpenCV capture** are **done** in tree. **Waterfall**, **Raman**, and **Color Science** exist as **implemented MVPs** (ongoing feature work, not empty stubs). Remaining product work: optional stepper logging, Raman library matching, fuller CRI/TCS paths, runtime mode switching without restart, and refactors in [REFACTORING_GUIDE.md](REFACTORING_GUIDE.md).
 
 ---
 
-## 12. Implementation Status
+## 12. Implementation Status (snapshot)
 
-- **Calibration mode:** Implemented (modes/calibration.py, reference_spectra, control_bar, renderer, core/calibration recalibrate, spectrometer integration).
-- **Measurement mode:** Implemented (modes/measurement.py, control_bar, spectrometer).
-- **Waterfall mode:** Pending.
-- **Raman mode:** Pending.
-- **Color Science mode:** Pending.
-- **Spectrum extraction:** Implemented (processing/extraction.py, ExtractionConfig, calibration file extension, keyboard e/E/[/]).
-- **OpenCV capture:** Pending (capture/opencv.py; --camera, --list-cameras; 10-bit grayscale; gain/exposure no-op; log capabilities on start).
+| Area | Status |
+|------|--------|
+| Calibration | Done — assist markers, many sources, auto-cal, sensitivity UI |
+| Measurement | Done |
+| Waterfall | Done — `WaterfallMode`, CSV/REC, dedicated display branch |
+| Raman | MVP — `modes/raman.py`, wavenumber axis, dark ref |
+| Color Science | MVP — `modes/colorscience.py`, `colorscience/*`, swatches, xy |
+| Spectrum extraction | Done — `processing/extraction.py`, keyboard e/E/[/] |
+| OpenCV capture | Done — `capture/opencv.py`, `--camera`, `--list-cameras` |
+| Matplotlib PDF export | Done — `export/graph_export.py` |
 
 ---
 
 ## 13. Open Questions
 
-1. **Exposure:** Does Picamera2 support separate exposure control or only gain? Verify camera API.  
-2. **CRI:** Full R1–R14 or R1–R8 first — recommend R1–R8.  
-3. **Raman baseline:** Polynomial vs airPLS — recommend polynomial first, airPLS later.  
-4. **Mode switch at runtime:** Allow switching mode without restart via GUI/keyboard — recommend yes.
+1. **Exposure:** Picamera2 vs OpenCV backends — feature parity for shutter control.  
+2. **CRI:** Scope of TCS set (R1–R8 vs R1–R14) for MVP vs full.  
+3. **Raman baseline:** Polynomial vs airPLS for fluorescence background.  
+4. **Mode switch at runtime:** GUI/keyboard to change mode without process restart.  
+5. **Unified trace model:** Reduce duplicate marker/overlay/metadata paths — see [SPECTRUM_TRACE_MODEL.md](SPECTRUM_TRACE_MODEL.md).
 
 ---
 
-This document is the **single source of truth** for PySpectrometer3 architecture, modes, spectrum extraction, configuration, data files, CLI, desktop integration, and implementation status. Remove or archive MODES_SPEC.md and SPEC_SPECTRUM_EXTRACTION.md once this is adopted.
+## 14. Desired architecture evolution (summary)
+
+**Current:** `Spectrometer` orchestrates camera → extractor → pipeline → `BaseMode`; `DisplayManager` centralizes OpenCV UI, markers, and overlays; reference data appears as `SpectrumData` plus ad-hoc `DisplayState` fields for overlays.
+
+**Desired:** Thinner display composition (`DisplayPort`, frame composer), **unified spectrum trace** + metadata for export ([SPECTRUM_TRACE_MODEL.md](SPECTRUM_TRACE_MODEL.md)), **marker controller** for assist, fewer per-frame allocations ([DISPLAY_GUI_ARCHITECTURE.md](DISPLAY_GUI_ARCHITECTURE.md)), optional **callback registry** ([REFACTORING_GUIDE.md](REFACTORING_GUIDE.md)).
+
+**Migration:** Incremental, behavior-preserving phases in those docs; update this file when major boundaries move.
+
+---
+
+This document remains the **primary** architecture map for PySpectrometer3. Deprecated per-mode specs (e.g. MODES_SPEC.md) should point here or be removed if obsolete.

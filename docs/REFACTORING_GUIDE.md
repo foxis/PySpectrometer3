@@ -21,7 +21,7 @@ This document is a **task list** for refactoring the codebase to improve **expan
 
 - **`spectrometer.py`** — Orchestrator; also owns callback registration, auto-gain wiring, mode branching, freeze/peak hold, status updates. *Target: slim orchestrator + central controllers (Controller in a Controller/Viewer/Data split).*
 - **`display/renderer.py`** — Window lifecycle, graph, overlays, status, control bar, sliders, mouse routing. *Target: delegate rendering and status to focused components (Viewer).*
-- **`gui/control_bar.py`** — Button layout from **hardcoded** `CALIBRATION_BUTTONS` / `MEASUREMENT_BUTTONS`; modes define `get_buttons()` but control bar does **not** use it. *Target: one source of truth (mode `get_buttons()`), aligned with ARCHITECTURE §3 button tables.*
+- **Common mode controls** (`Rec/Save/Load`, `AVG/MAX/ACC`, `ZX/ZY`, `Dark/White`, `Lamp`, `Gain/Exposure`, `Quit`) are repeated across mode button definitions and mode-level callback wiring. *Target: shared control profile + shared action binder with no behavioral change.*
 - **Modes** — Five modes per ARCHITECTURE: Calibration, Measurement, **Waterfall**, Raman, Color Science. `process_spectrum` output range inconsistent (0–1 vs 0–255); dark/white logic centralized in `processing/reference_correction.py` — keep single path. *Target: standardize mode output contract; no duplicate reference logic; new modes (Waterfall, Raman, Color Science) additive via BaseMode.*
 
 ---
@@ -50,6 +50,13 @@ This document is a **task list** for refactoring the codebase to improve **expan
 ### 1.4 Intensity scaling to graph
 
 - [x] **1.4.1** Add `scale_intensity_to_graph(intensity, graph_height, margin=10)` in `display/overlay_utils.py`; use it in calibration (overlay, sensitivity), measurement (overlay), and renderer (reference spectrum, spectrum line, peaks).
+
+### 1.5 Common control profile (no behavior change)
+
+- [ ] **1.5.1** Define a reusable **CommonControlProfile** (or equivalent) that declares shared buttons and action names once (Rec/Save/Load, AVG/MAX/ACC, ZX/ZY, Dark/White, Lamp, Gain/AutoGain, Exposure/AutoExposure, Quit, preview cycle).
+- [ ] **1.5.2** Keep mode-specific `get_buttons()` additive: each mode composes **common profile + mode-specific controls** (calibration sources, Raman laser actions, color-science swatches, etc.).
+- [ ] **1.5.3** Route shared actions through one binder/registry (`BaseMode` common handlers or dedicated binder), so no per-mode duplicated callback wiring for the common set.
+- [ ] **1.5.4** Behavior-parity requirement: labels/shortcuts/toggle semantics and side effects remain unchanged during unification.
 
 ---
 
