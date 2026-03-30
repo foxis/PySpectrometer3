@@ -137,6 +137,8 @@ def _capture_loop(
 
     import numpy as np
 
+    from dataclasses import replace
+
     from pyspectrometer.capture.picamera import Capture
     from pyspectrometer.config import load_config
     from pyspectrometer.core.spectrum import SpectrumData
@@ -150,15 +152,8 @@ def _capture_loop(
 
     config, _ = load_config(config_path)
     height = 400 if width == 640 else 720
-    camera = Capture(
-        width=width,
-        height=height,
-        gain=config.camera.gain,
-        fps=config.camera.fps,
-        monochrome=config.camera.monochrome,
-        bit_depth=config.camera.bit_depth,
-        flip_horizontal=config.camera.flip_horizontal,
-    )
+    camera_cfg = replace(config.camera, frame_width=width, frame_height=height)
+    camera = Capture(camera_cfg)
 
     smoothing = config.auto.peak_smoothing_period_sec
     rate_hz = getattr(config.auto, "max_adjust_rate_hz", 20.0)

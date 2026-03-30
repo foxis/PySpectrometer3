@@ -75,15 +75,7 @@ class Spectrometer:
         self.mode = mode if mode in self.VALID_MODES else "measurement"
         self.laser_nm = laser_nm
 
-        self._camera = camera or Capture(
-            width=self.config.camera.frame_width,
-            height=self.config.camera.frame_height,
-            gain=self.config.camera.gain,
-            fps=self.config.camera.fps,
-            monochrome=self.config.camera.monochrome,
-            bit_depth=self.config.camera.bit_depth,
-            flip_horizontal=self.config.camera.flip_horizontal,
-        )
+        self._camera = camera or Capture(self.config.camera)
         self._calibration = Calibration(
             width=self.config.camera.frame_width,
             config=self.config,

@@ -302,28 +302,13 @@ def main() -> int:
     if args.camera is not None:
         from .capture.opencv import Capture
 
-        source = _parse_source(args.camera)
-        camera = Capture(
-            source=source,
-            width=config.camera.frame_width,
-            height=config.camera.frame_height,
-            gain=config.camera.gain,
-            fps=config.camera.fps,
-            flip_horizontal=config.camera.flip_horizontal,
-        )
+        config.camera.opencv_source = _parse_source(args.camera)
+        camera = Capture(config.camera)
         print(f"Using camera: {args.camera}")
     else:
         from .capture.picamera import Capture
 
-        camera = Capture(
-            width=config.camera.frame_width,
-            height=config.camera.frame_height,
-            gain=config.camera.gain,
-            fps=config.camera.fps,
-            monochrome=config.camera.monochrome,
-            bit_depth=config.camera.bit_depth,
-            flip_horizontal=config.camera.flip_horizontal,
-        )
+        camera = Capture(config.camera)
 
     camera.start()
     config_width_before = config.camera.frame_width

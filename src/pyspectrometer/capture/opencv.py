@@ -3,6 +3,7 @@
 import cv2
 import numpy as np
 
+from ..config import CameraConfig
 from .base import CameraInterface, mirror_horizontal
 
 
@@ -72,33 +73,16 @@ class Capture(CameraInterface):
     Gain and exposure are no-ops; many sources do not support them.
     """
 
-    def __init__(
-        self,
-        source: int | str,
-        width: int = 800,
-        height: int = 600,
-        gain: float = 10.0,
-        fps: int = 30,
-        flip_horizontal: bool = False,
-    ):
-        """Initialize OpenCV capture.
-
-        Args:
-            source: Device index (int), v4l path (v4l:/dev/video0),
-                    or URL (rtsp://..., http://...)
-            width: Requested frame width
-            height: Requested frame height
-            gain: Stored but not applied (no-op)
-            fps: Requested frames per second (best-effort)
-            flip_horizontal: If True, mirror the frame left-right after capture
-        """
-        self._source = _parse_source(source)
-        self._width = width
-        self._height = height
-        self._gain = gain
+    def __init__(self, camera: CameraConfig) -> None:
+        """Initialize OpenCV capture from :class:`CameraConfig` (uses ``opencv_source``)."""
+        self._config = camera
+        self._source = _parse_source(camera.opencv_source)
+        self._width = camera.frame_width
+        self._height = camera.frame_height
+        self._gain = camera.gain
         self._exposure = 10000
-        self._fps = fps
-        self._flip_horizontal = flip_horizontal
+        self._fps = camera.fps
+        self._flip_horizontal = camera.flip_horizontal
         self._running = False
         self._cap: cv2.VideoCapture | None = None
 
@@ -116,7 +100,8 @@ class Capture(CameraInterface):
 
     @gain.setter
     def gain(self, value: float) -> None:
-        self._gain = max(0.0, min(50.0, value))
+        lo, hi = self._config.gain_min, self._config.gain_max
+        self._gain = max(lo, min(hi, value))
 
     @property
     def exposure(self) -> int:

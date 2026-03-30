@@ -4,6 +4,7 @@ import numpy as np
 
 from ..capture.base import mirror_horizontal
 from ..capture.opencv import Capture, _parse_source
+from ..config import CameraConfig
 
 
 def test_mirror_horizontal_2d():
@@ -38,8 +39,13 @@ def test_parse_source_url():
 
 
 def test_capture_instantiation():
-    """capture.opencv.Capture can be instantiated with valid source."""
-    cap = Capture(0, width=800, height=600)
+    """capture.opencv.Capture can be instantiated with CameraConfig."""
+    cfg = CameraConfig(
+        frame_width=800,
+        frame_height=600,
+        opencv_source=0,
+    )
+    cap = Capture(cfg)
     assert cap.width == 800
     assert cap.height == 600
     assert cap.gain == 10.0
@@ -49,13 +55,13 @@ def test_capture_instantiation():
 
 def test_capture_gain_setter_noop():
     """Gain setter accepts value (no-op for opencv source)."""
-    cap = Capture(0)
+    cap = Capture(CameraConfig(opencv_source=0))
     cap.gain = 25.0
     assert cap.gain == 25.0
 
 
 def test_capture_exposure_setter_noop():
     """Exposure setter accepts value (no-op for opencv source)."""
-    cap = Capture(0)
+    cap = Capture(CameraConfig(opencv_source=0))
     cap.exposure = 5000
     assert cap.exposure == 5000

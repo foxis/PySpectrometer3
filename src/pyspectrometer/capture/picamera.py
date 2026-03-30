@@ -2,6 +2,7 @@
 
 import numpy as np
 
+from ..config import CameraConfig
 from .base import CameraInterface, mirror_horizontal
 
 
@@ -16,35 +17,18 @@ class Capture(CameraInterface):
     for better dynamic range.
     """
 
-    def __init__(
-        self,
-        width: int = 800,
-        height: int = 600,
-        gain: float = 10.0,
-        fps: int = 30,
-        monochrome: bool = False,
-        bit_depth: int = 10,
-        flip_horizontal: bool = False,
-    ):
-        """Initialize Picamera2 capture.
-
-        Args:
-            width: Frame width in pixels
-            height: Frame height in pixels
-            gain: Initial camera gain
-            fps: Target frames per second
-            monochrome: If True, use monochrome format with higher bit depth
-            bit_depth: Bit depth for monochrome mode (10 or 16)
-            flip_horizontal: If True, mirror the frame left-right after capture
-        """
-        self._width = width
-        self._height = height
-        self._gain = gain
+    def __init__(self, camera: CameraConfig) -> None:
+        """Initialize Picamera2 capture from :class:`CameraConfig`."""
+        self._config = camera
+        self._width = camera.frame_width
+        self._height = camera.frame_height
+        self._gain = camera.gain
         self._exposure = 10000  # Default exposure in microseconds
-        self._fps = fps
-        self._monochrome = monochrome
-        self._bit_depth = bit_depth if bit_depth in (10, 16) else 10
-        self._flip_horizontal = flip_horizontal
+        self._fps = camera.fps
+        self._monochrome = camera.monochrome
+        bd = camera.bit_depth
+        self._bit_depth = bd if bd in (10, 16) else 10
+        self._flip_horizontal = camera.flip_horizontal
         self._running = False
         self._camera: Picamera2 | None = None
         self._actual_bit_depth: int = 8
@@ -63,7 +47,8 @@ class Capture(CameraInterface):
 
     @gain.setter
     def gain(self, value: float) -> None:
-        self._gain = max(0.0, min(50.0, value))
+        lo, hi = self._config.gain_min, self._config.gain_max
+        self._gain = max(lo, min(hi, value))
         if self._camera is not None and self._running:
             self._camera.set_controls({"AnalogueGain": self._gain})
 

@@ -2,7 +2,7 @@
 
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import tomli_w
@@ -162,15 +162,8 @@ def save_config(config: "Config", config_path: Path | None) -> bool:
 def _config_to_dict(config: "Config") -> dict:
     """Build TOML-serializable dict from Config."""
     return {
-        "camera": {
-            "frame_width": config.camera.frame_width,
-            "frame_height": config.camera.frame_height,
-            "gain": config.camera.gain,
-            "fps": config.camera.fps,
-            "monochrome": config.camera.monochrome,
-            "bit_depth": config.camera.bit_depth,
-            "flip_horizontal": config.camera.flip_horizontal,
-        },
+        # Single source of truth: fields come from CameraConfig (asdict); add fields on the dataclass only.
+        "camera": asdict(config.camera),
         "display": {
             "fullscreen": config.display.fullscreen,
             "graph_height": config.display.graph_height,
@@ -345,6 +338,9 @@ class CameraConfig:
 
     # Mirror camera image left-right after capture (all backends)
     flip_horizontal: bool = False
+
+    # OpenCV backend only: device index, URL, or v4l:/dev/videoN (ignored by Picamera2)
+    opencv_source: int | str = 0
 
 
 @dataclass
