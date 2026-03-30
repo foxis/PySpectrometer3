@@ -147,6 +147,7 @@ def _capture_loop(
         AutoGainController,
         run_auto_gain_exposure_frame,
     )
+    from pyspectrometer.capture.base import CAPTURE_UINT16_MAX
     from pyspectrometer.processing.extraction import ExtractionMethod, SpectrumExtractor
     from pyspectrometer.utils.display import scale_to_uint8
 
@@ -193,11 +194,7 @@ def _capture_loop(
         while True:
             frame = camera.capture()
 
-            # max_val from buffer bit depth (dtype), not from image content. uint8 → 255, uint16 → 1023/65535.
-            if frame.dtype == np.uint8:
-                max_val = 255.0
-            else:
-                max_val = float((1 << camera.bit_depth) - 1)
+            max_val = float(CAPTURE_UINT16_MAX)
 
             if auto_gain or auto_exposure:
                 extraction = extractor.extract(frame, max_val=max_val)
@@ -227,10 +224,7 @@ def _capture_loop(
                 )
 
             display = scale_to_uint8(frame, max_val)
-            if display.ndim == 2:
-                display = cv2.cvtColor(display, cv2.COLOR_GRAY2BGR)
-            else:
-                display = cv2.cvtColor(display, cv2.COLOR_RGB2BGR)
+            display = cv2.cvtColor(display, cv2.COLOR_GRAY2BGR)
             _, jpeg = cv2.imencode(".jpg", display)
             output.write(jpeg.tobytes())
     finally:

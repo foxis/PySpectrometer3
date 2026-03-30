@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 
 from ..config import CameraConfig
-from .base import CameraInterface, mirror_horizontal
+from .base import CameraInterface, mirror_horizontal, scale_to_uint16_full_scale
 
 
 def _parse_source(source: int | str) -> int | str:
@@ -68,7 +68,7 @@ class Capture(CameraInterface):
     """Camera capture using OpenCV VideoCapture.
 
     Supports webcam (device index), V4L path (v4l:/dev/video0), RTSP,
-    and HTTP MJPEG streams. Outputs 10-bit grayscale for pipeline compatibility.
+    and HTTP MJPEG streams. Decoded frames are 8-bit; capture() returns int16 grayscale.
 
     Gain and exposure are no-ops; many sources do not support them.
     """
@@ -119,8 +119,8 @@ class Capture(CameraInterface):
 
     @property
     def bit_depth(self) -> int:
-        """Always 10-bit (scaled from 8-bit source)."""
-        return 10
+        """Native decode depth (8-bit); capture scales to uint16 full scale."""
+        return 8
 
     @property
     def flip_horizontal(self) -> bool:
@@ -174,13 +174,13 @@ class Capture(CameraInterface):
         self._running = False
 
     def capture(self) -> np.ndarray:
-        """Capture one valid frame as 10-bit grayscale.
+        """Capture one valid frame as uint16 grayscale.
 
         Skips corrupt/empty frames (MJPG boundary errors, zero-size decodes)
         until a real frame arrives. Never returns an invalid frame.
 
         Returns:
-            2D uint16 array (height, width), values 0-1023.
+            2D uint16 array (height, width), values 0..65535 from 8-bit decode.
         """
         if not self._running or self._cap is None:
             raise RuntimeError("Camera is not running. Call start() first.")
@@ -190,14 +190,12 @@ class Capture(CameraInterface):
             if ret and frame is not None and frame.size > 0:
                 break
 
-        # Convert to grayscale if color
         if frame.ndim == 3:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         else:
             gray = frame
 
-        # Scale 8-bit (0-255) to 10-bit (0-1023) for pipeline contract
-        out = (gray.astype(np.float32) * 1023.0 / 255.0).astype(np.uint16)
+        out = scale_to_uint16_full_scale(gray, 255)
         if self._flip_horizontal:
             out = mirror_horizontal(out)
         return out

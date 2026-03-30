@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from ..capture.base import mirror_horizontal
+from ..capture.base import CAPTURE_UINT16_MAX, mirror_horizontal, scale_to_uint16_full_scale
 from ..capture.opencv import Capture, _parse_source
 from ..config import CameraConfig
 
@@ -49,7 +49,7 @@ def test_capture_instantiation():
     assert cap.width == 800
     assert cap.height == 600
     assert cap.gain == 10.0
-    assert cap.bit_depth == 10
+    assert cap.bit_depth == 8
     assert not cap.is_running
 
 
@@ -58,6 +58,16 @@ def test_capture_gain_setter_noop():
     cap = Capture(CameraConfig(opencv_source=0))
     cap.gain = 25.0
     assert cap.gain == 25.0
+
+
+def test_scale_to_uint16_full_scale_8bit():
+    """8-bit samples map linearly to 0..CAPTURE_UINT16_MAX."""
+    a = np.array([[0, 255], [128, 127]], dtype=np.uint8)
+    out = scale_to_uint16_full_scale(a, 255)
+    assert out.dtype == np.uint16
+    assert out[0, 0] == 0
+    assert out[0, 1] == CAPTURE_UINT16_MAX
+    assert out.max() <= CAPTURE_UINT16_MAX
 
 
 def test_capture_exposure_setter_noop():

@@ -8,6 +8,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from ..capture.base import CAPTURE_UINT16_MAX
 from ..config import Config
 from ..core.calibration import Calibration
 from ..core.spectrum import SpectrumData
@@ -923,9 +924,9 @@ class DisplayManager:
                 if raw_frame is not None:
                     # Convert raw frame to displayable BGR
                     if raw_frame.ndim == 2:
-                        # Monochrome - scale to 8-bit for display only (preserve 10/16-bit in data)
+                        # Monochrome - scale to 8-bit for display only
                         if raw_frame.dtype == np.uint16:
-                            display = scale_to_uint8(raw_frame)
+                            display = scale_to_uint8(raw_frame, float(CAPTURE_UINT16_MAX))
                         else:
                             display = raw_frame.astype(np.uint8)
                         display = cv2.cvtColor(display, cv2.COLOR_GRAY2BGR)

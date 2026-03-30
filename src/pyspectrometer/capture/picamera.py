@@ -1,9 +1,10 @@
 """Picamera2 capture backend for Raspberry Pi cameras."""
 
+import cv2
 import numpy as np
 
 from ..config import CameraConfig
-from .base import CameraInterface, mirror_horizontal
+from .base import CameraInterface, mirror_horizontal, scale_to_uint16_full_scale
 
 
 class Capture(CameraInterface):
@@ -246,9 +247,7 @@ class Capture(CameraInterface):
         """Capture a single frame from Picamera2.
 
         Returns:
-            Image as numpy array:
-            - Monochrome: 2D array (H, W) with dtype uint16 for 10/16-bit
-            - Color: 3D array (H, W, 3) with dtype uint8 (RGB)
+            2D uint16 grayscale (H, W), values 0..65535 scaled from native sensor range.
 
         Raises:
             RuntimeError: If camera is not running
@@ -256,31 +255,29 @@ class Capture(CameraInterface):
         if not self._running or self._camera is None:
             raise RuntimeError("Camera is not running. Call start() first.")
 
-        # If using raw capture, get raw frame for higher bit depth
         if self._use_raw:
             raw_frame = self._camera.capture_array("raw")
             out = self._process_raw_frame(raw_frame)
         else:
             frame = self._camera.capture_array()
 
-            # Handle monochrome high bit-depth formats
             if self._monochrome and self._actual_bit_depth > 8:
-                # Y10/Y16 data comes as bytes, view as uint16
                 if frame.dtype == np.uint8 and frame.ndim == 2:
-                    # Packed format: reshape and view as uint16
                     frame = frame.view(np.uint16)
                 elif frame.dtype == np.uint8 and frame.ndim == 3:
-                    # If still 3D, take first channel (Y from YUV)
                     frame = frame[:, :, 0].astype(np.uint16)
             elif self._monochrome and frame.ndim == 3:
-                # Monochrome but got color frame, convert to grayscale
-                # Use luminance formula: Y = 0.299*R + 0.587*G + 0.114*B
                 frame = (
                     0.299 * frame[:, :, 0] + 0.587 * frame[:, :, 1] + 0.114 * frame[:, :, 2]
                 ).astype(np.uint8)
 
             out = frame
 
+            if out.ndim == 3:
+                out = cv2.cvtColor(out, cv2.COLOR_RGB2GRAY)
+
+        in_max = max(1, (1 << self._actual_bit_depth) - 1)
+        out = scale_to_uint16_full_scale(out, in_max)
         if self._flip_horizontal:
             out = mirror_horizontal(out)
         return out

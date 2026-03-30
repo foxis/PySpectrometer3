@@ -4,6 +4,20 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
+# All camera backends return uint16 grayscale scaled linearly to 0..CAPTURE_UINT16_MAX.
+CAPTURE_UINT16_MAX = 65535
+
+
+def scale_to_uint16_full_scale(arr: np.ndarray, in_max: int) -> np.ndarray:
+    """Map native integer samples [0..in_max] linearly to uint16 [0..CAPTURE_UINT16_MAX].
+
+    Preserves linearity so downstream can normalize with max_val=CAPTURE_UINT16_MAX.
+    """
+    if in_max <= 0:
+        return np.zeros(arr.shape, dtype=np.uint16)
+    x = arr.astype(np.float32) * (float(CAPTURE_UINT16_MAX) / float(in_max))
+    return np.clip(np.rint(x), 0, CAPTURE_UINT16_MAX).astype(np.uint16)
+
 
 def mirror_horizontal(frame: np.ndarray) -> np.ndarray:
     """Left-right mirror of a 2D image or HWC array (axis 1 reversed)."""
@@ -63,7 +77,8 @@ class CameraInterface(ABC):
         """Capture a single frame.
 
         Returns:
-            2D uint16 (monochrome) or 3D uint8 (RGB) array.
+            2D uint16 grayscale (height, width), values 0..CAPTURE_UINT16_MAX (65535),
+            linearly scaled from the sensor or source native range.
         """
         ...
 

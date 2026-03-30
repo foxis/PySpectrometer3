@@ -13,7 +13,7 @@ from queue import Empty
 import cv2
 import numpy as np
 
-from .capture.base import CameraInterface
+from .capture.base import CAPTURE_UINT16_MAX, CameraInterface
 from .capture.picamera import Capture
 from .config import Config
 from .hardware.led import apply_led_config_from_values
@@ -230,8 +230,7 @@ class Spectrometer:
 
     def _process_intensity(self, frame: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Extract intensity, apply freeze/hold, mode processing, sensitivity correction. Returns (intensity, cropped)."""
-        bit_depth = getattr(self._camera, "bit_depth", self.config.camera.bit_depth)
-        max_val = float((1 << bit_depth) - 1)
+        max_val = float(CAPTURE_UINT16_MAX)
         extraction_result = self._extractor.extract(frame, max_val=max_val)
         cropped = extraction_result.cropped_frame
         intensity = extraction_result.intensity.astype(np.float32)

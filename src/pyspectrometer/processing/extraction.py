@@ -6,6 +6,7 @@ from enum import Enum, auto
 import cv2
 import numpy as np
 
+from ..capture.base import CAPTURE_UINT16_MAX
 from ..utils.display import scale_to_uint8
 from .spectrum_transform import (
     SpectrumTransformParams,
@@ -158,8 +159,9 @@ class SpectrumExtractor:
                    - BGR color: (height, width, 3) uint8
                    - Monochrome 8-bit: (height, width) uint8
                    - Monochrome 10/16-bit: (height, width) uint16
-            max_val: Divisor for 0-1 normalization: raw / max_val. For 10-bit use 1023, for 8-bit use 255.
-                     If None, defaults to 1023. Caller must pass value that matches frame bit depth.
+                   - Camera capture: (height, width) uint16 scaled to 0..CAPTURE_UINT16_MAX
+            max_val: Divisor for 0-1 normalization: raw / max_val. For camera uint16 use
+                     CAPTURE_UINT16_MAX (65535). If None, defaults to CAPTURE_UINT16_MAX.
                      Frame black subtraction is applied in raw counts first, then division.
 
         Returns:
@@ -177,7 +179,9 @@ class SpectrumExtractor:
 
         # Divisor from bit depth only: raw / max_val → 0-1. Caller must pass max_val that matches
         # the frame's bit depth (255 for 8-bit, 1023 for 10-bit). Never derived from image content.
-        max_val_used = max_val if max_val is not None and max_val > 0 else 1023.0
+        max_val_used = (
+            max_val if max_val is not None and max_val > 0 else float(CAPTURE_UINT16_MAX)
+        )
 
         # Max in spectrum strip after bias subtraction (AE for spectrum); max in full frame (AE for preview).
         max_in_roi = (
@@ -221,7 +225,7 @@ class SpectrumExtractor:
             # Color frame: convert BGR to grayscale
             return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY).astype(np.float32)
 
-        # Monochrome frame - preserve original bit depth
+        # Monochrome frame - preserve original range (float32)
         return frame.astype(np.float32)
 
     def _extract_with_method(self, gray: np.ndarray) -> np.ndarray:
@@ -313,8 +317,8 @@ class SpectrumExtractor:
         y_fit = np.arange(n_samples, dtype=np.float32) - n_samples // 2
 
         # Detect intensity range for proper bounds
-        max_possible = float(np.max(gray)) if gray.size > 0 else 255.0
-        max_possible = max(max_possible, 255.0)  # At least 8-bit
+        max_possible = float(np.max(gray)) if gray.size > 0 else float(CAPTURE_UINT16_MAX)
+        max_possible = max(max_possible, float(CAPTURE_UINT16_MAX))
 
         for x in range(self.frame_width):
             samples = roi[:, x]
@@ -377,11 +381,8 @@ class SpectrumExtractor:
 
         # Convert monochrome to 3-channel for display
         if cropped.ndim == 2:
-            # Scale to 8-bit if high bit-depth (use bit-depth-based max for consistency)
             if cropped.dtype == np.uint16:
-                m = cropped.max()
-                max_val = 65535.0 if m > 4095 else (4095.0 if m > 1023 else 1023.0)
-                cropped = scale_to_uint8(cropped, max_val)
+                cropped = scale_to_uint8(cropped, float(CAPTURE_UINT16_MAX))
             # Convert grayscale to BGR for display
             cropped = cv2.cvtColor(cropped, cv2.COLOR_GRAY2BGR)
 
@@ -452,7 +453,7 @@ class SpectrumExtractor:
             # Right panel: ORIGINAL frame with ellipses (same coords - no transform)
             vis_orig = frame.copy()
             if vis_orig.dtype == np.uint16:
-                vis_orig = scale_to_uint8(vis_orig)
+                vis_orig = scale_to_uint8(vis_orig, float(CAPTURE_UINT16_MAX))
             if vis_orig.ndim == 2:
                 vis_orig = cv2.cvtColor(vis_orig, cv2.COLOR_GRAY2BGR)
 
@@ -467,7 +468,7 @@ class SpectrumExtractor:
             rotated_frame = apply_forward_transform(frame, params)
             vis_rot = rotated_frame.copy()
             if vis_rot.dtype == np.uint16:
-                vis_rot = scale_to_uint8(vis_rot)
+                vis_rot = scale_to_uint8(vis_rot, float(CAPTURE_UINT16_MAX))
             if vis_rot.ndim == 2:
                 vis_rot = cv2.cvtColor(vis_rot, cv2.COLOR_GRAY2BGR)
 
