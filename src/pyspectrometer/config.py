@@ -1,6 +1,7 @@
 """Configuration management for PySpectrometer3."""
 
 import os
+import re
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -98,6 +99,25 @@ def load_config(path: Path | None = None) -> tuple["Config", Path | None]:
     if path is not None:
         return config, resolve_explicit_config_path(path)
     return config, None
+
+
+def parse_window_geometry(s: str) -> tuple[int, int]:
+    """Parse a display size string: ``WxH`` with ``x``, ``X``, ``*``, comma, or Unicode ``×``.
+
+    Raises:
+        ValueError: If the string does not match two positive integers.
+
+    Returns:
+        ``(width, height)`` in pixels.
+    """
+    raw = s.strip().lower().replace("*", "x")
+    m = re.fullmatch(r"(\d+)\s*[x×,]\s*(\d+)", raw)
+    if not m:
+        raise ValueError(f"expected WxH (e.g. 1280x720), got {s!r}")
+    w, h = int(m.group(1)), int(m.group(2))
+    if w < 1 or h < 1:
+        raise ValueError(f"width and height must be positive, got {w}x{h}")
+    return w, h
 
 
 def default_main_config_path() -> Path:
@@ -622,6 +642,52 @@ class Config:
         self.display.graph_label_font_scale = 1.0
         self.display.status_col1_x = 490
         self.display.status_col2_x = 800
+
+    def apply_window_geometry(self, width: int, height: int) -> None:
+        """Set display canvas to ``width`` × ``height`` with a consistent stacked layout.
+
+        Splits *height* into message bar, preview strip, and graph. Interpolates
+        status column X positions and font scales between Waveshare (640px) and
+        desktop (1280px); for wider windows uses proportional column placement.
+        Does not change camera or processing settings.
+        """
+        w = max(320, min(width, 7680))
+        h = max(180, min(height, 4320))
+        self.display.window_width = w
+
+        min_bar = 36
+        max_bar = min(120, h // 3)
+        bar = max(min_bar, min(max_bar, max(h // 6, min_bar)))
+        graph_h = h - 2 * bar
+        if graph_h < 100:
+            bar = max(36, (h - 100) // 2)
+            graph_h = h - 2 * bar
+
+        self.display.message_height = bar
+        self.display.preview_height = bar
+        self.display.graph_height = graph_h
+
+        self.display.text_thickness = 1
+        if w <= 640:
+            self.display.font_scale = 0.35
+            self.display.graph_label_font_scale = 0.9
+            c1, c2 = 340, 500
+        elif w < 1280:
+            t = (w - 640) / (1280 - 640)
+            self.display.font_scale = 0.35 + t * (0.4 - 0.35)
+            self.display.graph_label_font_scale = 0.9 + t * (1.0 - 0.9)
+            c1 = int(340 + t * (490 - 340))
+            c2 = int(500 + t * (800 - 500))
+        else:
+            self.display.font_scale = min(0.5, 0.4 + (w - 1280) / 8000.0)
+            self.display.graph_label_font_scale = min(1.15, 1.0 + (w - 1280) / 8000.0)
+            c1 = int(w * 0.383)
+            c2 = int(w * 0.625)
+
+        c1 = max(10, min(c1, w - 80))
+        c2 = max(c1 + 40, min(c2, w - 10))
+        self.display.status_col1_x = c1
+        self.display.status_col2_x = c2
 
     @classmethod
     def waveshare_35(cls) -> "Config":

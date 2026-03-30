@@ -21,6 +21,8 @@ Features:
 import argparse
 import sys
 
+from .config import parse_window_geometry
+
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
@@ -58,7 +60,18 @@ Examples:
   pyspectrometer --list-cameras             # List available cameras
   pyspectrometer --camera 0                 # Use webcam
   pyspectrometer --camera http://pi:8000/stream.mjpg  # Remote Pi stream
+  pyspectrometer --window 1280x720                 # Display layout (camera from config/--width)
 """,
+    )
+
+    parser.add_argument(
+        "--window",
+        type=parse_window_geometry,
+        default=None,
+        metavar="WxH",
+        help="Display window size in pixels (e.g. 1280x720 or 1280×720). Sets graph, preview, "
+        "and message band heights, font scales, and status column positions. Does not change "
+        "camera resolution (use config or --width).",
     )
 
     parser.add_argument(
@@ -298,6 +311,15 @@ def main() -> int:
         monochrome=monochrome,
         bit_depth=args.bit_depth,
     )
+
+    if args.window is not None:
+        ww, wh = args.window
+        config.apply_window_geometry(ww, wh)
+        d = config.display
+        print(
+            f"Display window: {d.window_width}x{d.stack_height} "
+            f"(graph {d.graph_height} + preview {d.preview_height} + message {d.message_height})"
+        )
 
     if args.camera is not None:
         from .capture.opencv import Capture
