@@ -448,7 +448,7 @@ class CalibrationConfig:
 
     # Loaded/saved calibration data
     cal_pixels: list[int] = field(default_factory=lambda: [0, 640, 1280])
-    cal_wavelengths: list[float] = field(default_factory=lambda: [380.0, 560.0, 750.0])
+    cal_wavelengths: list[float] = field(default_factory=lambda: [300.0, 540.0, 780.0])
     rotation_angle: float = 0.0
     spectrum_y_center: int = 0
     perpendicular_width: int = 20
@@ -460,7 +460,7 @@ class CalibrationConfig:
 
     # Defaults when no calibration in config
     default_pixels: tuple[int, ...] = (0, 640, 1280)
-    default_wavelengths: tuple[float, ...] = (380.0, 560.0, 750.0)
+    default_wavelengths: tuple[float, ...] = (300.0, 540.0, 780.0)
 
 
 @dataclass

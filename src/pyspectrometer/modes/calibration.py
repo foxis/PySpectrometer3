@@ -31,6 +31,9 @@ import numpy as np
 
 from ..core.mode_context import ModeContext
 from ..data.reference_spectra import (
+    REFERENCE_WL_MAX,
+    REFERENCE_WL_MIN,
+    REFERENCE_WL_SAMPLES,
     ReferenceSource,
     get_reference_name,
     get_reference_spectrum,
@@ -77,6 +80,7 @@ class CalibrationMode(BaseMode):
         ReferenceSource.HG,
         ReferenceSource.D65,
         ReferenceSource.A,
+        ReferenceSource.XE_HID,
         ReferenceSource.FL1,
         ReferenceSource.FL2,
         ReferenceSource.FL3,
@@ -421,7 +425,7 @@ class CalibrationMode(BaseMode):
                     "[CAL] Assist: need equal measured/reference marker counts (≥4 each); "
                     "using auto-calibration"
                 )
-            ref_wl = np.linspace(380.0, 750.0, 500)
+            ref_wl = np.linspace(REFERENCE_WL_MIN, REFERENCE_WL_MAX, REFERENCE_WL_SAMPLES)
             ref_int = get_reference_spectrum(self.cal_state.current_source, ref_wl)
             cal_points = run_calibration(measured, ref_wl, ref_int)
 
@@ -440,7 +444,7 @@ class CalibrationMode(BaseMode):
     def _on_reset_calibration(self, ctx: ModeContext) -> None:
         """Reset calibration to linear 1:1 pixels to spectrum."""
         n = ctx.calibration.width
-        wl_min, wl_max = 380.0, 750.0
+        wl_min, wl_max = REFERENCE_WL_MIN, REFERENCE_WL_MAX
         pixels = [0, n // 4, n // 2, 3 * n // 4, n - 1]
         wavelengths = [wl_min + (wl_max - wl_min) * p / max(n - 1, 1) for p in pixels]
         ctx.calibration.recalibrate(pixels, wavelengths)
@@ -557,13 +561,19 @@ class CalibrationMode(BaseMode):
             ButtonDefinition("Hg", "source_hg", is_toggle=True, row=1),
             ButtonDefinition("D65", "source_d65", is_toggle=True, row=1),
             ButtonDefinition("A", "source_a", is_toggle=True, row=1),
-            ButtonDefinition("FL1", "source_fl1", is_toggle=True, row=1),
-            ButtonDefinition("FL2", "source_fl2", is_toggle=True, row=1),
-            ButtonDefinition("FL3", "source_fl3", is_toggle=True, row=1),
-            ButtonDefinition("FL12", "source_fl12", is_toggle=True, row=1),
-            ButtonDefinition("LED1", "source_led", is_toggle=True, row=1),
-            ButtonDefinition("LED2", "source_led2", is_toggle=True, row=1),
-            ButtonDefinition("LED3", "source_led3", is_toggle=True, row=1),
+            ButtonDefinition("Xe", "source_xe_hid", is_toggle=True, row=1),
+            ButtonDefinition("F1", "source_fl1", is_toggle=True, row=1),
+            ButtonDefinition("F2", "source_fl2", is_toggle=True, row=1),
+            ButtonDefinition("F3", "source_fl3", is_toggle=True, row=1),
+            ButtonDefinition("F12", "source_fl12", is_toggle=True, row=1),
+            ButtonDefinition("L1", "source_led", is_toggle=True, row=1),
+            ButtonDefinition("L2", "source_led2", is_toggle=True, row=1),
+            ButtonDefinition("L3", "source_led3", is_toggle=True, row=1),
+            ButtonDefinition("__gap__", "__gap__c3", row=1),
+            ButtonDefinition("G", "show_gain_slider", is_toggle=True, row=1, icon_type="gain"),
+            ButtonDefinition("E", "show_exposure_slider", is_toggle=True, row=1, icon_type="exposure"),
+            ButtonDefinition("AG", "auto_gain", is_toggle=True, row=1, icon_type="auto_gain"),
+            ButtonDefinition("AE", "auto_exposure", is_toggle=True, row=1, icon_type="auto_exposure"),
             ButtonDefinition("__spacer__", "__spacer_left__", row=1),
             ButtonDefinition("LVL", "auto_level", is_toggle=True, row=1, icon_type="level"),
             ButtonDefinition("CAL", "auto_calibrate", row=1, icon_type="calibrate"),
@@ -584,7 +594,7 @@ class CalibrationMode(BaseMode):
             ButtonDefinition("Brs", "show_spectrum_bars", is_toggle=True, row=2, icon_type="bars"),
             ButtonDefinition("ZX", "show_zoom_x_slider", is_toggle=True, row=2, icon_type="zoom_x"),
             ButtonDefinition("ZY", "show_zoom_y_slider", is_toggle=True, row=2, icon_type="zoom_y"),
-            ButtonDefinition("__gap__", "__gap__c3", row=2),
+            ButtonDefinition("__gap__", "__gap__c2", row=2),
             ButtonDefinition("VIEW", "cycle_preview", shortcut="v", row=2, icon_type="eye"),
             ButtonDefinition("__gap__", "__gap__c4", row=2),
             ButtonDefinition("CSV", "save_spectrum", shortcut="s", row=2, icon_type="save"),
@@ -640,6 +650,7 @@ class CalibrationMode(BaseMode):
             ReferenceSource.HG: (255, 0, 255),  # Magenta
             ReferenceSource.D65: (100, 200, 255),  # Daylight blue
             ReferenceSource.A: (255, 200, 140),  # Tungsten warm
+            ReferenceSource.XE_HID: (200, 220, 255),  # Cool white-blue
             ReferenceSource.FL1: (255, 200, 0),  # Yellow
             ReferenceSource.FL2: (200, 255, 100),  # Light green
             ReferenceSource.FL3: (255, 220, 150),  # Light orange
@@ -674,7 +685,7 @@ class CalibrationMode(BaseMode):
             eng = self._ctx.sensitivity_engine
             if eng is not None:
                 measured_intensity = eng.apply(measured_intensity, wavelengths)
-        ref_wl = np.linspace(380.0, 750.0, 500)
+        ref_wl = np.linspace(REFERENCE_WL_MIN, REFERENCE_WL_MAX, REFERENCE_WL_SAMPLES)
         ref_int = get_reference_spectrum(
             self.cal_state.current_source, ref_wl, file_loader=self._reference_file_loader()
         )

@@ -18,7 +18,13 @@ import pytest
 
 from ..core.calibration import Calibration
 from ..core.spectrum import Peak
-from ..data.reference_spectra import ReferenceSource, get_reference_spectrum
+from ..data.reference_spectra import (
+    REFERENCE_WL_MAX,
+    REFERENCE_WL_MIN,
+    REFERENCE_WL_SAMPLES,
+    ReferenceSource,
+    get_reference_spectrum,
+)
 from ..modes.calibration import CalibrationMode
 from ..processing.auto_calibrator import _correlation_fallback
 
@@ -28,7 +34,7 @@ def _correlation_calibration_points(
     source: ReferenceSource,
 ) -> list[tuple[int, float]]:
     """Correlation-only calibration points (see module docstring)."""
-    ref_wl = np.linspace(380.0, 750.0, 500)
+    ref_wl = np.linspace(REFERENCE_WL_MIN, REFERENCE_WL_MAX, REFERENCE_WL_SAMPLES)
     ref_int = get_reference_spectrum(source, ref_wl)
     return _correlation_fallback(measured, ref_wl, ref_int)
 
@@ -248,7 +254,7 @@ def test_fl12_merged_close_peaks_calibration():
 
 
 def test_correlation_wavelength_range_sensible():
-    """Correlation result must map pixels to 360-780 nm (visible within range)."""
+    """Correlation result must map pixels to plausible range (near-UV through red)."""
     rng = np.random.default_rng(46)
     n_pixels = 640
     wl_true = _ground_truth_calibration(n_pixels, rng)
@@ -263,8 +269,8 @@ def test_correlation_wavelength_range_sensible():
     poly = np.poly1d(coeffs)
     wl_start = poly(0)
     wl_end = poly(n_pixels - 1)
-    assert 360 <= wl_start <= 440, f"Pixel 0 -> {wl_start:.1f} nm, should be 360-440"
-    assert 660 <= wl_end <= 780, f"Pixel {n_pixels - 1} -> {wl_end:.1f} nm, should be 660-780"
+    assert 300 <= wl_start <= 440, f"Pixel 0 -> {wl_start:.1f} nm, should be 300-440"
+    assert 660 <= wl_end <= 820, f"Pixel {n_pixels - 1} -> {wl_end:.1f} nm, should be 660-820"
     assert wl_start < wl_end - 50, "Wavelength must increase with pixel"
 
 
@@ -309,7 +315,7 @@ def test_real_spectrum_hg_and_fl12_calibration():
             pytest.skip(f"{filename} not found")
 
         measured, n, _ = load_spectrum_csv(csv_path)
-        ref_wl = np.linspace(380.0, 750.0, 100)
+        ref_wl = np.linspace(REFERENCE_WL_MIN, REFERENCE_WL_MAX, 100)
         ref_int = get_reference_spectrum(source, ref_wl)
         points = calibrate(measured, ref_wl, ref_int)
         assert len(points) >= 4, f"{filename} + {source.name}: need 4+ points, got {len(points)}"
@@ -350,7 +356,7 @@ def test_hg_csv_calibration_monotonic_no_explosion():
     width = int(pixels_arr[-1]) + 1
 
     # Placeholder wavelengths for PeakDetector (not used for matching)
-    wl_dummy = np.linspace(380.0, 750.0, width, dtype=np.float64)
+    wl_dummy = np.linspace(REFERENCE_WL_MIN, REFERENCE_WL_MAX, width, dtype=np.float64)
 
     # Same peak detection as calibration procedure (PeakDetector / find_peak_indexes_scipy)
     peak_idx = find_peak_indexes_scipy(

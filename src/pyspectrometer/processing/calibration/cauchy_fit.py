@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from ...data.reference_spectra import REFERENCE_WL_MAX, REFERENCE_WL_MIN
+
 try:
     from scipy.interpolate import PchipInterpolator
     _PCHIP_AVAILABLE = True
@@ -94,7 +96,7 @@ def fit_cal_points(
 ) -> np.ndarray:
     """Convert (pixel, wavelength) cal points to full wavelength array."""
     if not cal_points:
-        return np.linspace(380, 750, n_pixels)
+        return np.linspace(REFERENCE_WL_MIN, REFERENCE_WL_MAX, n_pixels)
     px = np.array([p[0] for p in cal_points], dtype=np.float64)
     wl = np.array([p[1] for p in cal_points], dtype=np.float64)
     return inverse_cauchy(px, wl, n_pixels)

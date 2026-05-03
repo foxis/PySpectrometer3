@@ -1,8 +1,10 @@
 __pycache__
 .cache/
 .config/
+.cursor/
 .venv/
 output/
+experiments/
 .ruff_cache
 .pytest_cache
 tmp

@@ -71,7 +71,7 @@ class Calibration:
         config_path: Path | None = None,
         height: int = 480,
         default_pixels: tuple[int, ...] = (0, 400, 800),
-        default_wavelengths: tuple[float, ...] = (380.0, 560.0, 750.0),
+        default_wavelengths: tuple[float, ...] = (300.0, 540.0, 780.0),
     ):
         self.width = width
         self.height = height
@@ -151,6 +151,7 @@ class Calibration:
         self._rotation_angle = cal.rotation_angle
         self._spectrum_y_center = cal.spectrum_y_center or self.height // 2
         self._perpendicular_width = cal.perpendicular_width
+        print(f"[DEBUG] calibration config: y={cal.spectrum_y_center}, width={cal.perpendicular_width}")
 
         has_errors = len(self._cal_pixels) < 4 or len(self._cal_pixels) != len(self._cal_wavelengths)
         if has_errors:
@@ -433,8 +434,8 @@ class Calibration:
             wl_b = float(full_wl[idx + 1])
             diff_val = float(d[idx])
             print(
-                f"Cauchy fit monotonicity failed at pixel {idx}→{idx + 1}: "
-                f"wl={wl_a:.3f} nm → {wl_b:.3f} nm, diff={diff_val:.4f} nm "
+                f"Cauchy fit monotonicity failed at pixel {idx}->{idx + 1}: "
+                f"wl={wl_a:.3f} nm -> {wl_b:.3f} nm, diff={diff_val:.4f} nm "
                 f"(limit {limit} nm for {direction}); falling back to linear."
             )
             return np.zeros(self.width), "pchip" if _SCIPY_AVAILABLE else "linear"

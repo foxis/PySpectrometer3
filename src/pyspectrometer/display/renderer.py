@@ -275,6 +275,9 @@ class DisplayManager:
         self._zoom_vertical.on_change = _on_zoom_vertical
         self._zoom_horizontal.on_change = _on_zoom_horizontal
 
+        # Slider Y offset when preview is hidden (rendering shifts sliders up)
+        self._slider_dy = 0
+
         # Pan state
         self._panning = False
         self._pan_last_x = 0
@@ -422,11 +425,13 @@ class DisplayManager:
                 self._control_bar.handle_mouse_move(x, y)
 
             if self._mouse_down:
-                self._slider_panel.handle_mouse_move(x, y)
+                # Adjust for slider rendering offset (e.g. no preview strip)
+                sy = y - self._slider_dy
+                self._slider_panel.handle_mouse_move(x, sy)
                 if self._zoom_vertical.visible:
-                    self._zoom_vertical.handle_mouse_move(x, y)
+                    self._zoom_vertical.handle_mouse_move(x, sy)
                 if self._zoom_horizontal.visible:
-                    self._zoom_horizontal.handle_mouse_move(x, y)
+                    self._zoom_horizontal.handle_mouse_move(x, sy)
                 if self._dragging_marker_idx is not None:
                     self._update_marker_drag(x, width)
                 if self._panning:
@@ -456,11 +461,11 @@ class DisplayManager:
 
             if y < control_bar_height:
                 self._control_bar.handle_click(x, y)
-            elif self._slider_panel.handle_mouse_down(x, y):
+            elif self._slider_panel.handle_mouse_down(x, y - self._slider_dy):
                 pass
-            elif self._zoom_vertical.visible and self._zoom_vertical.handle_mouse_down(x, y):
+            elif self._zoom_vertical.visible and self._zoom_vertical.handle_mouse_down(x, y - self._slider_dy):
                 pass
-            elif self._zoom_horizontal.visible and self._zoom_horizontal.handle_mouse_down(x, y):
+            elif self._zoom_horizontal.visible and self._zoom_horizontal.handle_mouse_down(x, y - self._slider_dy):
                 pass
             elif self._on_autolevel_click is not None:
                 self._on_autolevel_click()
@@ -1594,6 +1599,7 @@ class DisplayManager:
             + self._ui.display.graph_height
         )
         dy = frame.shape[0] - expected_h  # 0 normally; -preview_height in "none" mode
+        self._slider_dy = dy
 
         if self._slider_panel.any_visible():
             sliders = self._slider_panel._sliders

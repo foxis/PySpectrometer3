@@ -237,21 +237,29 @@ class VerticalSlider:
         was_hovered = self.hovered
         self.hovered = self.contains(px, py)
 
-        if self.dragging and self._ref_py is not None:
+        if self.dragging and self._ref_py is not None and self._ref_value is not None:
             track_height = self.height - self.style.thumb_height
             if track_height > 0:
                 delta_py = self._ref_py - py  # Up = positive
-                value_range = self.max_val - self.min_val
-                # 10px drag on 100px track = 10% of range (e.g. 5 for 0-50, 0.1 for 0-1)
-                delta_val = (delta_py / track_height) * value_range
-                new_val = max(
-                    self.min_val,
-                    min(self.max_val, (self._ref_value or self._value) + delta_val),
-                )
-                if new_val != self._value:
+                # Ratio of track moved (0 to 1 for full track)
+                ratio = delta_py / track_height
+
+                if self.log_scale and self.min_val > 0:
+                    # Log scale: multiply by a factor based on drag distance
+                    # Full track drag = multiply by max/min ratio
+                    import math
+                    log_range = math.log(self.max_val / self.min_val)
+                    factor = math.exp(ratio * log_range)
+                    new_val = self._ref_value * factor
+                else:
+                    # Linear scale: add proportional to range
+                    value_range = self.max_val - self.min_val
+                    delta_val = ratio * value_range
+                    new_val = self._ref_value + delta_val
+
+                new_val = max(self.min_val, min(self.max_val, new_val))
+                if abs(new_val - self._value) > 1e-9:
                     self._value = new_val
-                    self._ref_py = py
-                    self._ref_value = new_val
                     if self.on_change:
                         self.on_change(self._value)
                     return True

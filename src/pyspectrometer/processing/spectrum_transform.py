@@ -16,6 +16,43 @@ import cv2
 import numpy as np
 
 
+def _compute_gradient_mask(
+    magnitude: np.ndarray,
+    height: int,
+    min_points: int = 50,
+) -> np.ndarray:
+    """Compute binary mask of strong gradient points with adaptive thresholding.
+
+    Strategy:
+    1. Try noise-based threshold (5x noise from top/bottom rows)
+    2. If too few points, fall back to top percentile of gradient magnitude
+    3. Final fallback: top 1% of pixels by gradient
+
+    Returns:
+        Boolean mask where True = strong gradient point.
+    """
+    n_rows = min(20, height // 10)
+    noise_top = float(magnitude[:n_rows].max()) if magnitude.size > 0 else 0.0
+    noise_bottom = float(magnitude[-n_rows:].max()) if magnitude.size > 0 else 0.0
+    noise_max = max(noise_top, noise_bottom, 1.0)
+
+    # Try noise-based threshold (5x noise, much gentler than old 50x)
+    mag_thresh = noise_max * 5.0
+    strong_mask = magnitude > mag_thresh
+    if np.sum(strong_mask) >= min_points:
+        return strong_mask
+
+    # Fall back to 95th percentile threshold
+    p95 = np.percentile(magnitude, 95)
+    strong_mask = magnitude > p95
+    if np.sum(strong_mask) >= min_points:
+        return strong_mask
+
+    # Final fallback: top 1% of pixels
+    p99 = np.percentile(magnitude, 99)
+    return magnitude > p99
+
+
 @dataclass
 class SpectrumTransformParams:
     """Saved correction parameters (inverse of detected orientation/offset).
@@ -70,13 +107,9 @@ def detect_orientation_and_offset(
     grad_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=ksize)
     magnitude = np.sqrt(grad_x**2 + grad_y**2)
 
-    # Threshold based on noise (top/bottom rows, no spectrum) and max value
-    n_rows = min(20, height)
-    noise_top = float(magnitude[:n_rows].max()) if magnitude.size > 0 else 0.0
-    noise_bottom = float(magnitude[-n_rows:].max()) if magnitude.size > 0 else 0.0
-    noise_max = max(noise_top, noise_bottom)
-    mag_thresh = max(noise_max * 50, 50.0)
-    strong_mask = magnitude > mag_thresh
+    # Adaptive threshold: try noise-based first, fall back to percentile
+    min_strong_points = 50
+    strong_mask = _compute_gradient_mask(magnitude, height, min_strong_points)
 
     y_coords, x_coords = np.where(strong_mask)
     if len(x_coords) < 10:

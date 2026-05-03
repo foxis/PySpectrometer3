@@ -11,6 +11,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.optimize import minimize
 
+from ..data.reference_spectra import REFERENCE_WL_MAX, REFERENCE_WL_MIN
 from .calibration import calibrate_spectrum_anchors, extract
 from .calibration.extremum import valid_positions
 
@@ -46,7 +47,7 @@ def calibrate(
     if ref_wl.size != ref_int.size or ref_wl.size < 4:
         return []
 
-    wl_ref = np.linspace(380, 750, 500)
+    wl_ref = np.linspace(REFERENCE_WL_MIN, REFERENCE_WL_MAX, 500)
     ref_spd = np.interp(wl_ref, ref_wl, ref_int)
     pos = valid_positions(None, n)
 

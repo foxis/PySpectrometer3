@@ -36,6 +36,7 @@ SOURCES: list[ReferenceSource] = [
     ReferenceSource.HG,
     ReferenceSource.D65,
     ReferenceSource.A,
+    ReferenceSource.XE_HID,
     ReferenceSource.FL1,
     ReferenceSource.FL2,
     ReferenceSource.FL3,
@@ -50,6 +51,7 @@ _ILLUM_COLOR: dict[ReferenceSource, tuple[int, int, int]] = {
     ReferenceSource.HG:   (220,  60,  60),   # blue  — mercury blue lines
     ReferenceSource.D65:  ( 50, 210, 255),   # yellow — daylight
     ReferenceSource.A:    (  0, 120, 255),   # orange — tungsten warmth
+    ReferenceSource.XE_HID: (255, 220, 200), # cool white-blue — xenon daylight
     ReferenceSource.FL1:  (255, 200,  80),   # sky blue
     ReferenceSource.FL2:  ( 80, 220, 100),   # green
     ReferenceSource.FL3:  ( 40, 160,  80),   # dark green

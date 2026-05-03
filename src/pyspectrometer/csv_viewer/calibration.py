@@ -12,7 +12,13 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
-from ..data.reference_spectra import ReferenceSource, get_reference_spectrum
+from ..data.reference_spectra import (
+    REFERENCE_WL_MAX,
+    REFERENCE_WL_MIN,
+    REFERENCE_WL_SAMPLES,
+    ReferenceSource,
+    get_reference_spectrum,
+)
 from ..processing.auto_calibrator import calibrate as run_auto_calibration
 from ..processing.calibration import get_reference_peaks
 from ..utils.graph_scale import scale_intensity_to_graph
@@ -84,7 +90,7 @@ class CsvCalibrationHandler:
         file_loader: "ReferenceFileLoader | None" = None,
     ) -> list[tuple[int, float]]:
         """Run RANSAC peak-matching auto-calibration against current reference source."""
-        ref_wl = np.linspace(380.0, 750.0, 500)
+        ref_wl = np.linspace(REFERENCE_WL_MIN, REFERENCE_WL_MAX, REFERENCE_WL_SAMPLES)
         ref_int = get_reference_spectrum(self._state.current_source, ref_wl, file_loader=file_loader)
         points = run_auto_calibration(measured, ref_wl, ref_int)
         self._state.auto_cal_points = points
@@ -146,9 +152,9 @@ class CsvCalibrationHandler:
         self._state.pending_pixel = None
 
     def reset_linear(self, n: int) -> list[tuple[int, float]]:
-        """Reset to a linear 380–750 nm mapping across n pixels."""
+        """Reset to a linear mapping across n pixels."""
         pixels = [0, n // 4, n // 2, 3 * n // 4, n - 1]
-        wl_min, wl_max = 380.0, 750.0
+        wl_min, wl_max = REFERENCE_WL_MIN, REFERENCE_WL_MAX
         wls = [wl_min + (wl_max - wl_min) * p / max(n - 1, 1) for p in pixels]
         self._state.auto_cal_points = list(zip(pixels, wls))
         self._state.manual_pairs.clear()

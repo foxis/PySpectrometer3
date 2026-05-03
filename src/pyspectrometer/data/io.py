@@ -6,6 +6,8 @@ from pathlib import Path
 
 import numpy as np
 
+from .reference_spectra import REFERENCE_WL_MAX, REFERENCE_WL_MIN
+
 
 def load_spectrum_csv(csv_path: str | Path) -> tuple[np.ndarray, int, np.ndarray]:
     """Load intensity and wavelengths from spectrum CSV.
@@ -60,5 +62,5 @@ def load_spectrum_csv(csv_path: str | Path) -> tuple[np.ndarray, int, np.ndarray
         measured[px] = intensity
         wavelengths[px] = wl
     if not np.any(wavelengths > 0):
-        wavelengths = np.linspace(380, 750, n)
+        wavelengths = np.linspace(REFERENCE_WL_MIN, REFERENCE_WL_MAX, n)
     return measured, n, wavelengths
