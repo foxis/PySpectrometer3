@@ -3,7 +3,7 @@
 import numpy as np
 
 from ..capture.base import CAPTURE_UINT16_MAX, mirror_horizontal, scale_to_uint16_full_scale
-from ..capture.opencv import Capture, _parse_source
+from ..capture.opencv import Capture, _parse_source, _us_to_log2
 from ..config import CameraConfig
 
 
@@ -38,6 +38,15 @@ def test_parse_source_url():
     assert _parse_source("rtsp://host/path") == "rtsp://host/path"
 
 
+def test_us_to_log2():
+    """Microseconds to log2(seconds) conversion covers expected range."""
+    assert _us_to_log2(100) == -13  # 0.1ms → clamped
+    assert _us_to_log2(1000) == -10  # 1ms
+    assert _us_to_log2(31250) == -5  # 31.25ms
+    assert _us_to_log2(62500) == -4  # 62.5ms
+    assert _us_to_log2(500000) == -1  # 500ms → clamped
+
+
 def test_capture_instantiation():
     """capture.opencv.Capture can be instantiated with CameraConfig."""
     cfg = CameraConfig(
@@ -51,6 +60,14 @@ def test_capture_instantiation():
     assert cap.gain == 10.0
     assert cap.bit_depth == 8
     assert not cap.is_running
+
+
+def test_capture_stream_source_detected():
+    """URL sources are detected as streams (no exposure control)."""
+    cap = Capture(CameraConfig(opencv_source="http://host/stream.mjpg"))
+    assert cap._is_stream
+    cap2 = Capture(CameraConfig(opencv_source=0))
+    assert not cap2._is_stream
 
 
 def test_capture_gain_setter_noop():
@@ -71,7 +88,7 @@ def test_scale_to_uint16_full_scale_8bit():
 
 
 def test_capture_exposure_setter_noop():
-    """Exposure setter accepts value (no-op for opencv source)."""
+    """Exposure setter stores value even without a live camera."""
     cap = Capture(CameraConfig(opencv_source=0))
     cap.exposure = 5000
     assert cap.exposure == 5000

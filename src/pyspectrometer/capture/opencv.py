@@ -1,11 +1,34 @@
 """OpenCV capture backend for webcam, V4L, RTSP, and HTTP MJPEG streams."""
 
+import math
+import platform
+import time
+
 import cv2
 import numpy as np
-import time
 
 from ..config import CameraConfig
 from .base import CameraInterface, mirror_horizontal, scale_to_uint16_full_scale
+
+_IS_WINDOWS = platform.system() == "Windows"
+
+# Exposure log2(seconds) range accepted by DSHOW/MSMF on Windows.
+_EXP_LOG2_MIN = -13
+_EXP_LOG2_MAX = -1
+_EXP_LOG2_DEFAULT = -5  # ~31 ms — reasonable starting point
+
+# MSMF drops frames after exposure changes; retry before giving up.
+_READ_RETRIES = 5
+_READ_RETRY_DELAY = 0.05  # seconds
+
+_BACKEND_NAMES: dict[int, str] = {
+    cv2.CAP_ANY: "ANY",
+    cv2.CAP_V4L2: "V4L2",
+    cv2.CAP_FFMPEG: "FFMPEG",
+    cv2.CAP_MSMF: "MSMF",
+    cv2.CAP_DSHOW: "DSHOW",
+    cv2.CAP_GSTREAMER: "GSTREAMER",
+}
 
 
 def _parse_source(source: int | str) -> int | str:
@@ -29,15 +52,12 @@ def _fourcc_str(code: int) -> str:
 
 def _backend_name(backend: int) -> str:
     """Map OpenCV backend constant to name."""
-    names = {
-        cv2.CAP_ANY: "ANY",
-        cv2.CAP_V4L2: "V4L2",
-        cv2.CAP_FFMPEG: "FFMPEG",
-        cv2.CAP_MSMF: "MSMF",
-        cv2.CAP_DSHOW: "DSHOW",
-        cv2.CAP_GSTREAMER: "GSTREAMER",
-    }
-    return names.get(backend, f"backend_{backend}")
+    return _BACKEND_NAMES.get(backend, f"backend_{backend}")
+
+
+def _us_to_log2(us: int) -> int:
+    """Convert microseconds to log2(seconds) clamped to OpenCV range."""
+    return max(_EXP_LOG2_MIN, min(_EXP_LOG2_MAX, round(math.log2(us / 1_000_000.0))))
 
 
 def list_cameras(max_index: int = 10) -> list[tuple[int, str]]:
@@ -48,10 +68,10 @@ def list_cameras(max_index: int = 10) -> list[tuple[int, str]]:
         if cap.isOpened():
             try:
                 backend = int(cap.get(cv2.CAP_PROP_BACKEND))
-                backend_name = _backend_name(backend)
+                name = _backend_name(backend)
             except (TypeError, ValueError):
-                backend_name = "unknown"
-            result.append((i, f"Index {i} ({backend_name})"))
+                name = "unknown"
+            result.append((i, f"Index {i} ({name})"))
             cap.release()
     return result
 
@@ -59,12 +79,13 @@ def list_cameras(max_index: int = 10) -> list[tuple[int, str]]:
 class Capture(CameraInterface):
     """Camera capture using OpenCV VideoCapture.
 
-    Uses MSMF on Windows for stable uncompressed capture.
-    OpenCV handles YUV->BGR conversion internally; we convert BGR->Gray.
+    On Windows local cameras: MSMF backend (raw YUY2 buffer, monotonic exposure
+    control, no GUI dialogs).  Falls back to DSHOW if MSMF fails to open.
+    On Linux: default backend (V4L2 preferred, supports GREY/Y16 natively).
+    For URL/RTSP/MJPEG streams: default backend, no exposure control.
     """
 
     def __init__(self, camera: CameraConfig) -> None:
-        """Initialize OpenCV capture from :class:`CameraConfig`."""
         self._config = camera
         self._source = _parse_source(camera.opencv_source)
         self._width = camera.frame_width
@@ -75,9 +96,13 @@ class Capture(CameraInterface):
         self._flip_horizontal = camera.flip_horizontal
         self._running = False
         self._cap: cv2.VideoCapture | None = None
-        self._exposure_supported = False
+        self._backend = cv2.CAP_ANY
+        self._is_stream = not isinstance(self._source, int)
+        self._manual_exposure_active = False
         self._gain_supported = False
         self._frame_count = 0
+
+    # ── Properties ──────────────────────────────────────────────────
 
     @property
     def width(self) -> int:
@@ -105,13 +130,10 @@ class Capture(CameraInterface):
     @exposure.setter
     def exposure(self, value: int) -> None:
         self._exposure = max(100, value)
-        if self._cap is not None and self._exposure_supported:
-            import math
-            exp_sec = self._exposure / 1_000_000.0
-            log2_val = max(-13, min(-1, round(math.log2(exp_sec))))
-            # Ensure manual mode before setting
-            self._cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
-            self._cap.set(cv2.CAP_PROP_EXPOSURE, log2_val)
+        if self._cap is None or self._is_stream:
+            return
+        self._activate_manual_exposure()
+        self._cap.set(cv2.CAP_PROP_EXPOSURE, _us_to_log2(self._exposure))
 
     @property
     def is_running(self) -> bool:
@@ -129,6 +151,8 @@ class Capture(CameraInterface):
     def flip_horizontal(self, value: bool) -> None:
         self._flip_horizontal = bool(value)
 
+    # ── Lifecycle ───────────────────────────────────────────────────
+
     def start(self) -> None:
         """Start OpenCV capture."""
         if self._running:
@@ -136,143 +160,12 @@ class Capture(CameraInterface):
 
         self._open_camera()
         self._configure_format()
-        self._wait_for_init()
+        self._set_initial_exposure()
+        self._drain_buffers()
         self._detect_dimensions()
         self._log_camera_info()
-        self._probe_controls()
+        self._probe_gain()
         self._running = True
-
-    def _open_camera(self) -> None:
-        """Open camera with best available backend."""
-        import platform
-        is_local = isinstance(self._source, int)
-
-        if platform.system() == "Windows" and is_local:
-            # DSHOW first: matches AMCap, better FPS and exposure control
-            self._cap = cv2.VideoCapture(self._source, cv2.CAP_DSHOW)
-            if not self._cap.isOpened():
-                print("  DSHOW failed, trying MSMF...")
-                self._cap = cv2.VideoCapture(self._source, cv2.CAP_MSMF)
-        else:
-            self._cap = cv2.VideoCapture(self._source)
-
-        if not self._cap.isOpened():
-            raise RuntimeError(f"Failed to open camera source: {self._source}")
-
-    def _configure_format(self) -> None:
-        """Set resolution and request uncompressed format."""
-        assert self._cap is not None
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
-        self._cap.set(cv2.CAP_PROP_FPS, max(self._fps, 30))
-
-        # Request grayscale/uncompressed format (NO MJPEG!)
-        # Prefer native grayscale, then 16-bit, then YUV as last resort
-        for fourcc in ['GREY', 'Y800', 'Y16 ', 'YUY2', 'YUYV', 'NV12']:
-            self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
-            actual = int(self._cap.get(cv2.CAP_PROP_FOURCC))
-            if actual == cv2.VideoWriter_fourcc(*fourcc):
-                print(f"  Format: {fourcc.strip()}")
-                break
-        else:
-            print(f"  Format: camera default ({_fourcc_str(int(self._cap.get(cv2.CAP_PROP_FOURCC)))})")
-
-        # Disable auto RGB conversion - we want raw sensor data
-        self._cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
-
-    def _wait_for_init(self) -> None:
-        """Give camera time to initialize and drain stale buffers."""
-        assert self._cap is not None
-
-        # On Windows local cameras, open native settings dialog for exposure/gain
-        import platform
-        if platform.system() == "Windows" and isinstance(self._source, int):
-            self._cap.set(cv2.CAP_PROP_SETTINGS, 1)
-
-        time.sleep(0.3)
-        for _ in range(5):
-            self._cap.read()
-
-    def _detect_dimensions(self) -> None:
-        """Get actual frame dimensions from camera properties."""
-        assert self._cap is not None
-        w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        if w > 0 and h > 0:
-            self._width = w
-            self._height = h
-
-    def _log_camera_info(self) -> None:
-        assert self._cap is not None
-        try:
-            backend = int(self._cap.get(cv2.CAP_PROP_BACKEND))
-        except (TypeError, ValueError):
-            backend = cv2.CAP_ANY
-
-        fourcc = int(self._cap.get(cv2.CAP_PROP_FOURCC))
-        fps = self._cap.get(cv2.CAP_PROP_FPS)
-        exp = self._cap.get(cv2.CAP_PROP_EXPOSURE)
-        gain = self._cap.get(cv2.CAP_PROP_GAIN)
-        auto_exp = self._cap.get(cv2.CAP_PROP_AUTO_EXPOSURE)
-
-        print(f"OpenCV camera: source={self._source}")
-        print(f"  Backend: {_backend_name(backend)}")
-        print(f"  Size: {self._width}x{self._height} @ {fps:.1f} FPS")
-        print(f"  Format: {_fourcc_str(fourcc)}")
-        print(f"  Exposure: {exp}, Auto: {auto_exp}, Gain: {gain}")
-
-    def _probe_controls(self) -> None:
-        """Disable auto-exposure and test if exposure/gain can be changed."""
-        assert self._cap is not None
-
-        # Step 1: Force manual exposure mode
-        # DirectShow: 1=manual, 3=auto. MSMF: 0.25=manual, 0.75=auto
-        auto_exp = self._cap.get(cv2.CAP_PROP_AUTO_EXPOSURE)
-        print(f"  Auto-exposure initial: {auto_exp}")
-        for val in [1, 0.25, 0]:
-            self._cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, val)
-            readback = self._cap.get(cv2.CAP_PROP_AUTO_EXPOSURE)
-            if readback != auto_exp:
-                print(f"  Auto-exposure -> manual (set {val}, got {readback})")
-                break
-        else:
-            print(f"  Auto-exposure: could not switch to manual")
-
-        # Step 2: Test exposure by checking if frame brightness actually changes
-        exp = self._cap.get(cv2.CAP_PROP_EXPOSURE)
-        
-        # Try setting two different exposures and compare frame brightness
-        self._cap.set(cv2.CAP_PROP_EXPOSURE, -10)  # very short ~1ms
-        time.sleep(0.1)
-        ret1, f1 = self._cap.read()
-        bright_short = f1.mean() if ret1 and f1 is not None else -1
-
-        self._cap.set(cv2.CAP_PROP_EXPOSURE, -4)   # longer ~62ms
-        time.sleep(0.1)
-        ret2, f2 = self._cap.read()
-        bright_long = f2.mean() if ret2 and f2 is not None else -1
-
-        # If brightness changed significantly, exposure control works
-        if bright_short >= 0 and bright_long >= 0:
-            ratio = bright_long / max(bright_short, 0.01)
-            self._exposure_supported = ratio > 1.5 or ratio < 0.67
-            print(f"  Exposure test: short={bright_short:.1f}, long={bright_long:.1f}, "
-                  f"ratio={ratio:.2f} -> {'WORKS' if self._exposure_supported else 'NO EFFECT'}")
-        else:
-            self._exposure_supported = False
-            print(f"  Exposure test: could not read frames")
-
-        # Restore a reasonable exposure
-        self._cap.set(cv2.CAP_PROP_EXPOSURE, -5)
-
-        # Test gain
-        gain = self._cap.get(cv2.CAP_PROP_GAIN)
-        if gain >= 0:
-            test_val = gain + 5
-            self._cap.set(cv2.CAP_PROP_GAIN, test_val)
-            readback = self._cap.get(cv2.CAP_PROP_GAIN)
-            self._gain_supported = abs(readback - test_val) < 2
-            print(f"  Gain control: {'OK' if self._gain_supported else 'NO'}")
 
     def stop(self) -> None:
         """Stop capture."""
@@ -283,40 +176,168 @@ class Capture(CameraInterface):
             self._cap = None
         self._running = False
 
+    # ── Startup helpers ─────────────────────────────────────────────
+
+    def _open_camera(self) -> None:
+        """Open camera with the best backend for the platform."""
+        if _IS_WINDOWS and not self._is_stream:
+            self._open_windows_local()
+        else:
+            self._cap = cv2.VideoCapture(self._source)
+            if self._cap.isOpened():
+                try:
+                    self._backend = int(self._cap.get(cv2.CAP_PROP_BACKEND))
+                except (TypeError, ValueError):
+                    pass
+
+        if self._cap is None or not self._cap.isOpened():
+            raise RuntimeError(f"Failed to open camera source: {self._source}")
+
+    def _open_windows_local(self) -> None:
+        """MSMF first (raw buffer, monotonic exposure), DSHOW fallback."""
+        self._cap = cv2.VideoCapture(self._source, cv2.CAP_MSMF)
+        if self._cap.isOpened():
+            self._backend = cv2.CAP_MSMF
+            return
+
+        print("  MSMF failed, trying DSHOW...")
+        self._cap = cv2.VideoCapture(self._source, cv2.CAP_DSHOW)
+        if self._cap.isOpened():
+            self._backend = cv2.CAP_DSHOW
+
+    def _configure_format(self) -> None:
+        """Set resolution and negotiate best uncompressed pixel format."""
+        assert self._cap is not None
+        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._width)
+        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._height)
+        self._cap.set(cv2.CAP_PROP_FPS, max(self._fps, 30))
+
+        for fourcc in ['GREY', 'Y800', 'Y16 ', 'YUY2', 'YUYV', 'NV12']:
+            self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
+            actual = int(self._cap.get(cv2.CAP_PROP_FOURCC))
+            if actual == cv2.VideoWriter_fourcc(*fourcc):
+                print(f"  Format: {fourcc.strip()}")
+                break
+        else:
+            print(f"  Format: camera default "
+                  f"({_fourcc_str(int(self._cap.get(cv2.CAP_PROP_FOURCC)))})")
+
+        self._cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
+
+    def _set_initial_exposure(self) -> None:
+        """Set a reasonable exposure before draining so first frames are not black."""
+        if self._is_stream:
+            return
+        self._cap.set(cv2.CAP_PROP_EXPOSURE, _EXP_LOG2_DEFAULT)
+
+    def _drain_buffers(self) -> None:
+        """Give camera time to initialise and flush stale frames."""
+        assert self._cap is not None
+        time.sleep(0.3)
+        for _ in range(5):
+            self._cap.read()
+
+    def _detect_dimensions(self) -> None:
+        """Update stored dimensions from actual camera properties."""
+        assert self._cap is not None
+        w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if w > 0 and h > 0:
+            self._width = w
+            self._height = h
+
+    def _log_camera_info(self) -> None:
+        assert self._cap is not None
+        fourcc = int(self._cap.get(cv2.CAP_PROP_FOURCC))
+        fps = self._cap.get(cv2.CAP_PROP_FPS)
+        exp = self._cap.get(cv2.CAP_PROP_EXPOSURE)
+        gain = self._cap.get(cv2.CAP_PROP_GAIN)
+        auto_exp = self._cap.get(cv2.CAP_PROP_AUTO_EXPOSURE)
+
+        print(f"OpenCV camera: source={self._source}")
+        print(f"  Backend: {_backend_name(self._backend)}")
+        print(f"  Size: {self._width}x{self._height} @ {fps:.1f} FPS")
+        print(f"  Format: {_fourcc_str(fourcc)}")
+        print(f"  Exposure: {exp}, Auto: {auto_exp}, Gain: {gain}")
+
+    def _probe_gain(self) -> None:
+        """Test whether gain control is responsive."""
+        if self._is_stream:
+            return
+        assert self._cap is not None
+        gain = self._cap.get(cv2.CAP_PROP_GAIN)
+        if gain < 0:
+            return
+        test_val = gain + 5
+        self._cap.set(cv2.CAP_PROP_GAIN, test_val)
+        readback = self._cap.get(cv2.CAP_PROP_GAIN)
+        self._gain_supported = abs(readback - test_val) < 2
+        if self._gain_supported:
+            self._cap.set(cv2.CAP_PROP_GAIN, gain)
+        print(f"  Gain control: {'OK' if self._gain_supported else 'NO'}")
+
+    # ── Exposure helpers ────────────────────────────────────────────
+
+    def _activate_manual_exposure(self) -> None:
+        """Switch hardware auto-exposure to manual mode (once)."""
+        if self._manual_exposure_active or self._cap is None:
+            return
+        # DSHOW uses 1=manual / 3=auto.  MSMF uses 0.25=manual / 0.75=auto.
+        # Try all known manual-mode values; the first one that changes readback wins.
+        initial = self._cap.get(cv2.CAP_PROP_AUTO_EXPOSURE)
+        for val in [1, 0.25, 0]:
+            self._cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, val)
+            if self._cap.get(cv2.CAP_PROP_AUTO_EXPOSURE) != initial:
+                break
+        self._manual_exposure_active = True
+
+    # ── Read helpers ──────────────────────────────────────────────────
+
+    def _retry_read(self) -> np.ndarray | None:
+        """Retry after a failed read (MSMF drops frames on exposure change)."""
+        for attempt in range(_READ_RETRIES):
+            time.sleep(_READ_RETRY_DELAY)
+            ret, frame = self._cap.read()
+            if ret and frame is not None and frame.size > 0:
+                return frame
+        return None
+
+    # ── Frame conversion ────────────────────────────────────────────
+
     def _frame_to_gray(self, frame: np.ndarray) -> np.ndarray:
         """Extract grayscale from raw frame based on format.
 
         With CONVERT_RGB=0, OpenCV gives us raw sensor data:
-        - YUY2: flat (1, W*H*2) or (H, W*2) uint8 - Y at even bytes
+        - YUY2: flat (1, W*H*2) or (H, W*2) uint8 — Y at even bytes
         - Y16:  (H, W) uint16
         - GREY: (H, W) uint8
-        - BGR:  (H, W, 3) uint8 - when CONVERT_RGB=0 fails
+        - BGR:  (H, W, 3) uint8 — when CONVERT_RGB=0 is ignored by backend
         """
-        # Already proper 2D grayscale
         if frame.ndim == 2 and frame.shape == (self._height, self._width):
             return frame
 
-        # uint16 2D - Y16 format
         if frame.ndim == 2 and frame.dtype == np.uint16:
             return frame[:self._height, :self._width]
 
-        # Flat or near-flat buffer from raw YUY2
-        # YUY2 = 2 bytes/pixel: Y0 U0 Y1 V0 ...
+        # Flat or near-flat YUY2 buffer (e.g. MSMF raw)
         expected_yuy2_bytes = self._width * self._height * 2
         if frame.size == expected_yuy2_bytes and frame.dtype == np.uint8:
             data = frame.reshape(self._height, self._width * 2)
             return data[:, 0::2].copy()
 
-        # 3-channel BGR (CONVERT_RGB=0 was ignored by backend)
         if frame.ndim == 3 and frame.shape[2] == 3:
             return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        # 2-channel (H, W, 2) - Y is channel 0
         if frame.ndim == 3 and frame.shape[2] == 2:
             return frame[:, :, 0]
 
-        # Unknown - best effort
-        return frame.reshape(self._height, self._width) if frame.size == self._width * self._height else frame.flatten()[:self._width * self._height].reshape(self._height, self._width)
+        if frame.size == self._width * self._height:
+            return frame.reshape(self._height, self._width)
+        return frame.flatten()[:self._width * self._height].reshape(
+            self._height, self._width
+        )
+
+    # ── Capture ─────────────────────────────────────────────────────
 
     def capture(self) -> np.ndarray:
         """Capture one frame as uint16 grayscale."""
@@ -325,6 +346,9 @@ class Capture(CameraInterface):
 
         ret, frame = self._cap.read()
         if not ret or frame is None or frame.size == 0:
+            frame = self._retry_read()
+
+        if frame is None:
             raise RuntimeError("Failed to capture frame")
 
         self._frame_count += 1
@@ -335,7 +359,8 @@ class Capture(CameraInterface):
         gray = self._frame_to_gray(frame)
 
         if self._frame_count <= 5:
-            print(f"[Frame {self._frame_count}] {gray.shape} min={gray.min()} max={gray.max()} mean={gray.mean():.1f}")
+            print(f"[Frame {self._frame_count}] {gray.shape} "
+                  f"min={gray.min()} max={gray.max()} mean={gray.mean():.1f}")
 
         in_max = 65535 if gray.dtype == np.uint16 else 255
         out = scale_to_uint16_full_scale(gray, in_max)
